@@ -30,3 +30,20 @@ impl Offers {
         self.0.retain(|(_, expires_at)| *expires_at > now);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use octopus_proto::device::DeviceKey;
+
+    #[test]
+    fn a_code_pairs_until_ten_minutes_after_its_offer() {
+        let (server, client) = (DeviceKey::generate().public(), DeviceKey::generate().public());
+        let mut offers = Offers::default();
+        let (early, late) = (offers.offer(0), offers.offer(0));
+        assert_eq!(early.expires_at, 10 * 60 * 1000);
+        let proof = |offer: &Offer| offer.code.prove(Side::Client, &server, &client);
+        assert!(offers.redeem(early.expires_at - 1, &proof(&early), &server, &client).is_some());
+        assert!(offers.redeem(late.expires_at, &proof(&late), &server, &client).is_none());
+    }
+}

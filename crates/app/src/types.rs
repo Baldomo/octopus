@@ -1,9 +1,9 @@
 //! The TypeScript the UI compiles against, rendered from the Rust types and constants that cross the IPC boundary.
 
-use octopus_proto::ops::{Entry, EntryKind, Match};
+use octopus_proto::ops::{Entry, EntryKind, Match, Offer, PairedClient};
 use octopus_proto::types::{
-    AGENT_PANEL, Agent, AgentStatus, BrowserId, BrowserPanel, Checkout, NEW_BROWSER_PANEL, Panel, PtyId, Task, TaskId,
-    TaskState, WorkspaceId,
+    AGENT_PANEL, Agent, AgentStatus, BrowserId, BrowserPanel, Checkout, NEW_BROWSER_PANEL, Panel, PtyId, SessionId,
+    Task, TaskId, TaskState, WorkspaceId,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -38,6 +38,7 @@ pub fn render() -> String {
         WorkspaceId,
         PtyId,
         BrowserId,
+        SessionId,
         TaskState,
         Checkout,
         AgentStatus,
@@ -48,6 +49,8 @@ pub fn render() -> String {
         EntryKind,
         Entry,
         Match,
+        Offer,
+        PairedClient,
         TaskRef,
         Glyph,
         Row,

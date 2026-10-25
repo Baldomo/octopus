@@ -8,6 +8,8 @@ export type PtyId = string;
 
 export type BrowserId = string;
 
+export type SessionId = string;
+
 export type TaskState = "pinned" | "temporary" | "completed" | "cancelled";
 
 export type Checkout = "root" | "worktree";
@@ -20,13 +22,29 @@ export type Panel = { id: PtyId, name: string, running: boolean, lock_holder: st
 
 export type BrowserPanel = { panel: BrowserId, url: string, };
 
-export type Task = { id: TaskId, workspace: WorkspaceId, parent: TaskId | null, title: string, state: TaskState, checkout: Checkout, harness: string, directory: string, branch: string | null, focused_at: number | null, ended_at: number | null, rev: number, agent: Agent, panels: Array<Panel>, browsers: Array<BrowserPanel>, };
+export type Task = { id: TaskId, workspace: WorkspaceId, parent: TaskId | null, title: string, state: TaskState, checkout: Checkout, harness: string, session: SessionId | null, directory: string, branch: string | null, focused_at: number | null, ended_at: number | null, archived_at: number | null, rev: number, agent: Agent, panels: Array<Panel>, browsers: Array<BrowserPanel>, };
 
 export type EntryKind = "file" | "directory";
 
 export type Entry = { name: string, kind: EntryKind, };
 
 export type Match = { path: string, line: number, text: string, };
+
+export type Offer = { code: string, 
+/**
+ * When the code stops pairing, in milliseconds since 1970.
+ */
+expires_at: number, };
+
+export type PairedClient = { 
+/**
+ * The client's name, as it paired.
+ */
+name: string, connected: boolean, 
+/**
+ * When one of its connections last opened or closed, in milliseconds since 1970; null if it never connected.
+ */
+seen_at: number | null, };
 
 export type TaskRef = { server: string, task: TaskId, };
 
@@ -50,7 +68,11 @@ export type Section = { name: string, live: number,
  */
 columns: Array<Column>, };
 
-export type WorkspaceRef = { server: string, workspace: WorkspaceId, name: string, };
+export type WorkspaceRef = { server: string, workspace: WorkspaceId, name: string, 
+/**
+ * The directory on the server's machine.
+ */
+root: string, };
 
 export type Lists = { sections: Array<Section>, workspaces: Array<WorkspaceRef>, };
 
@@ -64,7 +86,15 @@ crumbs: Array<string>,
  */
 next: TaskState, live: boolean, glyph: Glyph, task: Task, };
 
-export type ServerView = { name: string, reachable: boolean, 
+export type ServerView = { name: string, 
+/**
+ * The QUIC endpoint as host:port; none for a server on the local socket.
+ */
+endpoint: string | null, reachable: boolean, 
+/**
+ * When `reachable` last changed, in milliseconds since 1970.
+ */
+since: number, 
 /**
  * The round trip of the connection's newest heartbeat.
  */

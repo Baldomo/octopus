@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use common::{connect, create, start, workspace};
 use octopus_client::cache::{Cache, PushEffect};
-use octopus_proto::ops::{SessionSync, TaskMove};
+use octopus_proto::ops::{SessionSync, TaskMove, WorkspaceRemove};
 use octopus_proto::types::{Checkout, TaskState};
 use octopus_proto::{Event, Push};
 
@@ -40,4 +40,15 @@ async fn clients_moving_tasks_at_once_converge_on_one_server_state() {
 
     let stale = Push { rev: 1, event: Event::HarnessUpdated { harness: "h".into() } };
     assert_eq!(cache.apply(&stale), PushEffect::Stale);
+
+    laptop.call(&TaskMove { task, state: TaskState::Completed }).await.expect("end the task");
+    let removed = laptop.call(&WorkspaceRemove { workspace }).await.expect("workspace.remove").rev;
+    let emptied = tokio::time::timeout(Duration::from_secs(5), async {
+        while cache.rev < removed {
+            cache.apply(&pushes.recv().await.expect("push"));
+        }
+    })
+    .await;
+    assert!(emptied.is_ok(), "laptop's cache stalled at rev {}", cache.rev);
+    assert!(cache.workspaces.is_empty() && cache.tasks.is_empty(), "{cache:?}");
 }

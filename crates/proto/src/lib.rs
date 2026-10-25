@@ -20,10 +20,8 @@ mod tests {
     #[test]
     fn a_request_missing_fields_names_every_absent_field() {
         let error = parse_args::<ops::TaskCreate>(&json!({"workspace": "wsp_8f2", "title": "x"})).unwrap_err();
-        assert_eq!(
-            error,
-            Error::MissingField { fields: vec!["parent".into(), "state".into(), "checkout".into(), "harness".into()] }
-        );
+        let missing = ["parent", "state", "checkout", "harness", "session"].map(String::from).to_vec();
+        assert_eq!(error, Error::MissingField { fields: missing });
     }
 
     schema::record!(Page { url: String, panel: String });
@@ -49,7 +47,7 @@ mod tests {
 
     #[test]
     fn a_null_parent_is_present_not_missing() {
-        let args = json!({"workspace": "wsp_8f2", "title": "x", "parent": null, "state": "pinned", "checkout": "root", "harness": "claude-code"});
+        let args = json!({"workspace": "wsp_8f2", "title": "x", "parent": null, "state": "pinned", "checkout": "root", "harness": "claude-code", "session": null});
         assert_eq!(parse_args::<ops::TaskCreate>(&args).unwrap().parent, None);
     }
 

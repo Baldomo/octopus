@@ -4,13 +4,13 @@ use common::{
     SERVER, ServerProcess, connect, create, echo_agent, eventually, read_until, shell_var, start, task, workspace,
 };
 use octopus_client::{CallError, Connection};
-use octopus_proto::ops::{AgentReport, HarnessSet, TaskCreate, TaskFocus, TaskMove, TermSend};
-use octopus_proto::types::{Agent, AgentStatus, Checkout, ENV_SERVER, ENV_TASK, Stream, TaskId, TaskState};
+use octopus_proto::ops::{AgentReport, HarnessSet, TaskCreate, TaskFocus, TaskMove, TaskSetSession, TermSend};
+use octopus_proto::types::{Agent, AgentStatus, Checkout, ENV_SERVER, ENV_TASK, SessionId, Stream, TaskId, TaskState};
 use octopus_proto::{Error, Op, Outcome};
 use serde_json::json;
 
 async fn set_harness(connection: &Connection, id: &str, argv: Vec<String>, hooks: bool) {
-    let harness = HarnessSet { id: id.into(), argv, install: "true".into(), hooks };
+    let harness = HarnessSet { id: id.into(), argv, install: "true".into(), start: vec![], resume: vec![], hooks };
     connection.call(&harness).await.expect("harness.set");
 }
 
@@ -51,7 +51,7 @@ async fn a_focused_task_runs_its_agent_terminal_end_to_end() {
     }
 
     let partial = desk.call_raw(TaskCreate::NAME, json!({ "workspace": workspace, "title": "x" })).await.expect("call");
-    let missing = ["parent", "state", "checkout", "harness"].map(String::from).to_vec();
+    let missing = ["parent", "state", "checkout", "harness", "session"].map(String::from).to_vec();
     assert_eq!(partial, Outcome::Err(Error::MissingField { fields: missing }));
 
     laptop.call(&TaskMove { task: id.clone(), state: TaskState::Completed }).await.expect("task.move");
@@ -68,13 +68,20 @@ async fn a_missing_harness_runs_nothing_and_reports_its_install_command() {
     let workspace = workspace(&laptop, dir.path()).await;
     let install = "npm install -g @anthropic-ai/claude-code".to_string();
     let argv = vec!["octopus-test-no-such-binary".into()];
-    let harness = HarnessSet { id: "claude-code".into(), argv, install: install.clone(), hooks: false };
+    let harness = HarnessSet {
+        id: "claude-code".into(),
+        argv,
+        install: install.clone(),
+        start: vec![],
+        resume: vec![],
+        hooks: false,
+    };
     laptop.call(&harness).await.expect("harness.set");
 
     let missing = create(&laptop, &workspace, Checkout::Root, "claude-code").await;
     laptop.call(&TaskFocus { task: missing.clone() }).await.expect("focus");
     let view = task(&laptop, &missing).await;
-    assert_eq!(view.agent, Agent::HarnessNotInstalled { install });
+    assert_eq!((view.agent, view.focused_at), (Agent::HarnessNotInstalled { install }, None));
     assert!(view.panels.is_empty());
 
     let unknown = create(&laptop, &workspace, Checkout::Root, "aider").await;
@@ -155,6 +162,68 @@ async fn after_a_machine_restart_the_next_focus_starts_the_agent_again() {
     assert_eq!(task(&laptop, &id).await.agent, Agent::Running { status: AgentStatus::Idle });
 }
 
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code, reason = "libSystem's responsibility call has no safe binding")]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_owns_its_terminal_and_answers_for_its_own_privacy_permissions() {
+    use octopus_proto::ops::TermResize;
+
+    unsafe extern "C" {
+        fn responsibility_get_pid_responsible_for_pid(pid: i32) -> i32;
+    }
+    // Perl rather than a shell: bash takes its terminal as its controlling terminal on its own, which would hide a
+    // spawn that leaves the PTY nobody's. tcgetpgrp answers only on the caller's controlling terminal.
+    const PROBE: &str = r#"use POSIX; $| = 1;
+        $SIG{WINCH} = sub { print "resized\n" };
+        $SIG{INT} = sub { print "interrupted\n" };
+        print "probe:$$:", (tcgetpgrp(0) == $$ ? 'foreground' : 'not foreground'), ":end\n";
+        sleep 1 while 1;"#;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock");
+    let laptop = connect(&running, "laptop").await;
+    let workspace = workspace(&laptop, dir.path()).await;
+    set_harness(&laptop, "probe", vec!["perl".into(), "-e".into(), PROBE.into()], false).await;
+    let id = create(&laptop, &workspace, Checkout::Root, "probe").await;
+    laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+    let agent = Stream::Pty(task(&laptop, &id).await.panels[0].id.clone());
+    let mut live = laptop.open_data_stream(&agent).await.expect("attach");
+    let seen = read_until(&mut live, ":end").await;
+    let line = seen.split("probe:").nth(1).and_then(|rest| rest.split(":end").next()).expect("the probe's line");
+    let pid: i32 = line.split(':').next().and_then(|pid| pid.parse().ok()).expect("a pid");
+    assert_eq!(line, format!("{pid}:foreground"), "the agent's controlling terminal is its PTY, which it leads");
+
+    let interrupt =
+        TermSend { task: id.clone(), panel: "agent".into(), text: "\u{3}".into(), enter: false, take_lock: true };
+    laptop.call(&interrupt).await.expect("ctrl-c");
+    read_until(&mut live, "interrupted").await;
+    laptop.call(&TermResize { task: id, panel: "agent".into(), cols: 120, rows: 40 }).await.expect("resize");
+    read_until(&mut live, "resized").await;
+    // SAFETY: the call reads only the kernel's record of a pid.
+    assert_eq!(unsafe { responsibility_get_pid_responsible_for_pid(pid) }, pid);
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_that_cannot_start_fails_the_focus_with_the_reason() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let garbage = dir.path().join("garbage");
+    std::fs::write(&garbage, [0u8, 1, 2]).expect("write");
+    std::fs::set_permissions(&garbage, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let running = start(dir.path(), "server.sock", "host.sock");
+    let laptop = connect(&running, "laptop").await;
+    let workspace = workspace(&laptop, dir.path()).await;
+    set_harness(&laptop, "garbage", vec![garbage.to_string_lossy().into()], false).await;
+    let id = create(&laptop, &workspace, Checkout::Root, "garbage").await;
+    match laptop.call(&TaskFocus { task: id }).await {
+        Err(CallError::Server(Error::Internal { message })) => {
+            assert_eq!(message, format!("start {}: Exec format error (os error 8)", garbage.display()));
+        }
+        other => panic!("a focus whose agent cannot start fails, got {other:?}"),
+    }
+}
+
 /// Unix only: Windows has no SIGTERM for an agent to ignore.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
@@ -172,4 +241,91 @@ async fn an_agent_that_ignores_sigterm_and_sighup_is_killed_after_the_grace() {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     assert_eq!(task(&laptop, &id).await.agent, Agent::Running { status: AgentStatus::Idle }, "SIGTERM is ignored");
     eventually("the agent killed after the grace", async || task(&laptop, &id).await.agent == Agent::Exited).await;
+}
+
+/// Prints the agent's arguments after `args:`, then stays open.
+fn args_agent() -> Vec<String> {
+    if cfg!(windows) {
+        ["cmd", "/q", "/k", "echo args:"].map(String::from).to_vec()
+    } else {
+        ["sh", "-c", "echo args: \"$@\"; exec cat", "sh"].map(String::from).to_vec()
+    }
+}
+
+async fn focus_prints(connection: &Connection, id: &TaskId, line: &str) {
+    connection.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+    let agent = Stream::Pty(task(connection, id).await.panels[0].id.clone());
+    read_until(&mut connection.open_data_stream(&agent).await.expect("attach"), line).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_start_after_a_session_s_first_resumes_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock");
+    let laptop = connect(&running, "laptop").await;
+    let workspace = workspace(&laptop, dir.path()).await;
+    let [start, resume] =
+        [["--session-id", "{session}"], ["--resume", "{session}"]].map(|args| args.map(String::from).to_vec());
+    let harness =
+        HarnessSet { id: "sessions".into(), argv: args_agent(), start, resume, install: "true".into(), hooks: false };
+    laptop.call(&harness).await.expect("harness.set");
+
+    let id = create(&laptop, &workspace, Checkout::Root, "sessions").await;
+    laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+    let session = task(&laptop, &id).await.session.expect("the first start names a session");
+    focus_prints(&laptop, &id, &format!("args: --session-id {}", session.0)).await;
+
+    laptop.call(&TaskMove { task: id.clone(), state: TaskState::Completed }).await.expect("complete");
+    laptop.call(&TaskMove { task: id.clone(), state: TaskState::Pinned }).await.expect("reopen");
+    assert_eq!(task(&laptop, &id).await.panels, vec![], "a reopened task's exited agent goes");
+    focus_prints(&laptop, &id, &format!("args: --resume {}", session.0)).await;
+
+    let empty = TaskSetSession { task: id.clone(), session: SessionId(String::new()) };
+    assert!(matches!(laptop.call(&empty).await, Err(CallError::Server(Error::InvalidArgs { .. }))));
+    let set = TaskSetSession { task: id.clone(), session: SessionId("elsewhere".into()) };
+    laptop.call(&set).await.expect("task.set_session");
+    let pointed = task(&laptop, &id).await;
+    assert_eq!((pointed.focused_at, pointed.panels), (None, vec![]));
+    focus_prints(&laptop, &id, "args: --resume elsewhere").await;
+
+    let imported = TaskCreate {
+        workspace,
+        title: "imported".into(),
+        parent: None,
+        state: TaskState::Pinned,
+        checkout: Checkout::Root,
+        harness: "sessions".into(),
+        session: Some(SessionId("demo-session".into())),
+    };
+    let imported = laptop.call(&imported).await.expect("task.create").task;
+    focus_prints(&laptop, &imported, "args: --resume demo-session").await;
+}
+
+/// Unix only: a Windows logon task starts the server in the account's whole environment.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_launched_server_finds_and_runs_agents_in_the_login_environment() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = dir.path().join("home");
+    let bin = home.join("bin");
+    std::fs::create_dir_all(&bin).expect("bin");
+    let agent = bin.join("octopus-test-agent");
+    std::fs::write(&agent, "#!/bin/sh\necho \"login:$OCTOPUS_TEST_LOGIN\"\nexec cat\n").expect("agent");
+    std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let server = ServerProcess::launched(dir.path(), &home).await;
+    let laptop = server.connect("laptop").await;
+    let workspace = workspace(&laptop, dir.path()).await;
+    set_harness(&laptop, "login", vec!["octopus-test-agent".into()], false).await;
+    let id = create(&laptop, &workspace, Checkout::Root, "login").await;
+
+    laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+    assert_eq!(task(&laptop, &id).await.agent, Agent::HarnessNotInstalled { install: "true".into() });
+
+    let profile = format!("export PATH=\"{}:$PATH\"\nexport OCTOPUS_TEST_LOGIN=profile\n", bin.display());
+    for file in [".profile", ".zprofile"] {
+        std::fs::write(home.join(file), &profile).expect("profile");
+    }
+    focus_prints(&laptop, &id, "login:profile").await;
 }

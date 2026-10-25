@@ -154,6 +154,25 @@ impl Servers {
         Ok(servers)
     }
 
+    /// Lists the server named `from` as `to`, which no other listed server may be called.
+    pub fn rename(&mut self, from: &str, to: &str) -> anyhow::Result<Server> {
+        if from != to && self.servers.iter().any(|known| known.name == to) {
+            bail!("a server named {to} is already listed");
+        }
+        let renamed = Server { name: to.to_string(), address: self.get(from)?.address.clone() };
+        renamed.validate()?;
+        let index = self.servers.iter().position(|known| known.name == from).expect("get found it");
+        self.servers[index] = renamed.clone();
+        Ok(renamed)
+    }
+
+    /// Drops the server and its pin from this client's list.
+    pub fn forget(&mut self, name: &str) -> anyhow::Result<()> {
+        self.get(name)?;
+        self.servers.retain(|known| known.name != name);
+        Ok(())
+    }
+
     pub fn get(&self, name: &str) -> anyhow::Result<&Server> {
         self.servers.iter().find(|server| server.name == name).ok_or_else(|| {
             anyhow!("no server named {name}; pair it with `octopus pairing accept`, or add a local one with `octopus server add`")

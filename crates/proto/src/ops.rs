@@ -4,7 +4,9 @@ use ts_rs::TS;
 use crate::frames::Op;
 use crate::pairing::{Code, Proof};
 use crate::schema::{Field, record};
-use crate::types::{AgentStatus, BrowserId, BrowserTarget, Checkout, Task, TaskId, TaskState, Workspace, WorkspaceId};
+use crate::types::{
+    AgentStatus, BrowserId, BrowserTarget, Checkout, SessionId, Task, TaskId, TaskState, Workspace, WorkspaceId,
+};
 
 /// Declares an op: its args as a `record!`, its wire name, and the type of its result.
 macro_rules! op {
@@ -83,12 +85,30 @@ op!(
     SessionPing = "session.ping" -> Done {}
 );
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Offer {
+    #[ts(type = "string")]
     pub code: Code,
     /// When the code stops pairing, in milliseconds since 1970.
     pub expires_at: i64,
+}
+
+/// A client the server has pinned.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct PairedClient {
+    /// The client's name, as it paired.
+    pub name: String,
+    pub connected: bool,
+    /// When one of its connections last opened or closed, in milliseconds since 1970; null if it never connected.
+    pub seen_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Clients {
+    pub clients: Vec<PairedClient>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -102,6 +122,10 @@ pub struct Paired {
 op!(
     /// Show a one-time code that pairs one client with this server.
     PairingOffer = "pairing.offer" -> Offer {}
+);
+op!(
+    /// List the clients this server has paired with.
+    PairingList = "pairing.list" -> Clients {}
 );
 op!(
     /// Forget a paired client, which must pair with a code again; its open connections stay until they close.
@@ -125,7 +149,7 @@ op!(
     WorkspaceAdd = "workspace.add" -> WorkspaceCreated {
         /// The workspace's name, unique on its server.
         name: String,
-        /// The directory on the server's machine.
+        /// The directory on the server's machine, as an absolute path.
         root: String,
     }
 );
@@ -134,12 +158,34 @@ op!(
     WorkspaceList = "workspace.list" -> Workspaces {}
 );
 op!(
+    /// Rename a workspace; it keeps its root and its tasks.
+    WorkspaceRename = "workspace.rename" -> Revised {
+        /// The workspace.
+        workspace: WorkspaceId,
+        /// Its new name, unique on its server.
+        name: String,
+    }
+);
+op!(
+    /// Remove a workspace with no live task, with every task in it; their worktrees go and their branches stay.
+    WorkspaceRemove = "workspace.remove" -> Revised {
+        /// The workspace.
+        workspace: WorkspaceId,
+    }
+);
+op!(
     /// Declare how a harness starts its agent.
     HarnessSet = "harness.set" -> Revised {
         /// The harness's id, which tasks name.
         id: String,
         /// The agent's argv as a JSON array of strings, e.g. ["claude"].
         argv: Vec<String>,
+        /// The args appended to argv on a session's first start, with {session} for the session id, e.g.
+        /// ["--session-id","{session}"].
+        start: Vec<String>,
+        /// The args appended to argv on every later start, with {session} for the session id, e.g.
+        /// ["--resume","{session}"].
+        resume: Vec<String>,
         /// The command that installs the agent, shown when it is missing.
         install: String,
         /// Whether the agent reports its status with `agent report`.
@@ -170,6 +216,17 @@ op!(
         checkout: Checkout,
         /// The harness that runs the task's agent.
         harness: String,
+        /// An existing session for the agent to resume.
+        session: Option<SessionId>,
+    }
+);
+op!(
+    /// Point a task's agent at an existing session, ending the agent running now; the next focus resumes it.
+    TaskSetSession = "task.set_session" -> Revised {
+        /// The task's id.
+        task: TaskId,
+        /// The session to resume.
+        session: SessionId,
     }
 );
 op!(
@@ -179,6 +236,22 @@ op!(
         task: TaskId,
         /// The state to move it to.
         state: TaskState,
+    }
+);
+op!(
+    /// Rename a task; a worktree task's branch keeps its name.
+    TaskRename = "task.rename" -> Revised {
+        /// The task's id.
+        task: TaskId,
+        /// The task's new title.
+        title: String,
+    }
+);
+op!(
+    /// Archive an ended task, which takes it off the Tasks board until it moves again.
+    TaskArchive = "task.archive" -> Revised {
+        /// The task's id.
+        task: TaskId,
     }
 );
 op!(
@@ -339,10 +412,15 @@ pub fn commands() -> Vec<Command> {
     vec![
         command::<WorkspaceAdd>(),
         command::<WorkspaceList>(),
+        command::<WorkspaceRename>(),
+        command::<WorkspaceRemove>(),
         command::<HarnessSet>(),
         command::<AgentReport>(),
         command::<TaskCreate>(),
         command::<TaskMove>(),
+        command::<TaskRename>(),
+        command::<TaskSetSession>(),
+        command::<TaskArchive>(),
         command::<TaskFocus>(),
         command::<TaskGet>(),
         command::<TermSend>(),
@@ -353,6 +431,7 @@ pub fn commands() -> Vec<Command> {
         command::<FileSearch>(),
         command::<BrowserOpen>(),
         command::<PairingOffer>(),
+        command::<PairingList>(),
         command::<PairingForget>(),
     ]
 }

@@ -8,7 +8,7 @@ use octopus_client::servers::{self, Address};
 use octopus_client::tunnel::Tunnel;
 use octopus_client::{CallError, Connection, Identity};
 use octopus_proto::device::DeviceKey;
-use octopus_proto::ops::{BrowserOpen, HarnessSet, PairingForget, PairingOffer, TaskFocus, TermSend};
+use octopus_proto::ops::{BrowserOpen, HarnessSet, PairingForget, PairingList, PairingOffer, TaskFocus, TermSend};
 use octopus_proto::pairing::Code;
 use octopus_proto::types::{BrowserId, BrowserPanel, BrowserTarget, Checkout, Stream, TaskId};
 use octopus_proto::{Error, Event};
@@ -55,6 +55,11 @@ async fn only_a_client_that_spent_a_code_reaches_a_remote_server() {
 
     let connection = Connection::connect(&remote(&running), &laptop).await.expect("a paired client is accepted");
     eventually("a heartbeat round trip", async || connection.rtt().is_some()).await;
+    let listed = connection.call(&PairingList {}).await.expect("pairing.list").clients;
+    let [client] = listed.as_slice() else { panic!("one paired client, got {listed:?}") };
+    assert!(client.name == "laptop" && client.connected && client.seen_at.is_some(), "{client:?}");
+    let unknown = connection.call(&PairingForget { client: "desk".into() }).await;
+    assert!(matches!(unknown, Err(CallError::Server(Error::NotFound { .. }))), "{unknown:?}");
     let impostor = Connection::connect(&remote(&running), &twin(&laptop, "desk")).await.err().expect("impostor");
     assert!(format!("{impostor:#}").contains("paired as laptop"), "{impostor:#}");
 
@@ -69,7 +74,14 @@ async fn a_task_runs_over_quic_and_a_stalled_file_transfer_never_blocks_its_term
     let running = start(dir.path(), "server.sock", "host.sock");
     let laptop = paired(&running, &identity("laptop")).await;
     let workspace = workspace(&laptop, dir.path()).await;
-    let harness = HarnessSet { id: "echo".into(), argv: echo_agent("agent:up"), install: "true".into(), hooks: false };
+    let harness = HarnessSet {
+        id: "echo".into(),
+        argv: echo_agent("agent:up"),
+        install: "true".into(),
+        start: vec![],
+        resume: vec![],
+        hooks: false,
+    };
     laptop.call(&harness).await.expect("harness.set");
     let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
     laptop.call(&TaskFocus { task: id.clone() }).await.expect("task.focus");

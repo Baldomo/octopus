@@ -3,8 +3,9 @@ use std::time::Instant;
 
 use octopus_client::servers;
 use octopus_proto::ops::{
-    BrowserOpen, Entry, FileList, FileSearch, FileWrite, Match, TaskCreate, TaskFocus, TaskMove, TermResize,
-    TermTakeLock,
+    BrowserOpen, Entry, FileList, FileSearch, FileWrite, Match, Offer, PairedClient, PairingForget, PairingList,
+    PairingOffer, TaskArchive, TaskCreate, TaskFocus, TaskMove, TaskRename, TermResize, TermTakeLock, WorkspaceAdd,
+    WorkspaceRemove,
 };
 use octopus_proto::pairing::Code;
 use octopus_proto::types::{BrowserId, BrowserTarget, Checkout, PtyId, Stream, TaskId, TaskState, WorkspaceId};
@@ -61,6 +62,56 @@ pub async fn server_pair(hub: Hubbed<'_>, address: String, code: Code) -> Result
 }
 
 #[tauri::command]
+pub async fn server_offer(hub: Hubbed<'_>, server: String) -> Result<Offer, String> {
+    hub.call(&server, &PairingOffer {}).await
+}
+
+#[tauri::command]
+pub async fn server_clients(hub: Hubbed<'_>, server: String) -> Result<Vec<PairedClient>, String> {
+    Ok(hub.call(&server, &PairingList {}).await?.clients)
+}
+
+#[tauri::command]
+pub async fn server_revoke(hub: Hubbed<'_>, server: String, client: String) -> Result<(), String> {
+    hub.call(&server, &PairingForget { client }).await.map(drop)
+}
+
+#[tauri::command]
+pub fn server_rename(hub: Hubbed, server: String, name: String) -> Result<(), String> {
+    hub.rename_server(&server, &name).map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub fn server_forget(hub: Hubbed, server: String) -> Result<(), String> {
+    hub.forget_server(&server).map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub async fn workspace_add(hub: Hubbed<'_>, server: String, name: String, root: String) -> Result<(), String> {
+    hub.call(&server, &WorkspaceAdd { name, root }).await.map(drop)
+}
+
+#[tauri::command]
+pub async fn workspace_remove(hub: Hubbed<'_>, server: String, workspace: WorkspaceId) -> Result<(), String> {
+    hub.call(&server, &WorkspaceRemove { workspace }).await.map(drop)
+}
+
+#[tauri::command]
+pub async fn section_rename(hub: Hubbed<'_>, section: String, name: String) -> Result<(), String> {
+    hub.rename_section(&section, &name).await
+}
+
+#[tauri::command]
+pub async fn task_rename(hub: Hubbed<'_>, at: TaskRef, title: String) -> Result<(), String> {
+    hub.call(&at.server, &TaskRename { task: at.task, title }).await.map(drop)
+}
+
+#[tauri::command]
+pub async fn task_archive(hub: Hubbed<'_>, at: TaskRef) -> Result<(), String> {
+    hub.call(&at.server, &TaskArchive { task: at.task }).await.map(drop)
+}
+
+#[tauri::command]
 pub async fn task_focus(hub: Hubbed<'_>, at: TaskRef) -> Result<(), String> {
     hub.call(&at.server, &TaskFocus { task: at.task }).await.map(drop)
 }
@@ -87,7 +138,8 @@ pub struct NewTask {
 #[tauri::command]
 pub async fn task_create(hub: Hubbed<'_>, task: NewTask) -> Result<String, String> {
     let NewTask { server, workspace, title, parent, state, checkout, harness } = task;
-    let created = hub.call(&server, &TaskCreate { workspace, title, parent, state, checkout, harness }).await?;
+    let create = TaskCreate { workspace, title, parent, state, checkout, harness, session: None };
+    let created = hub.call(&server, &create).await?;
     Ok(TaskRef { server, task: created.task }.key())
 }
 

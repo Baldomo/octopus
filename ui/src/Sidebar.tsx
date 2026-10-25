@@ -1,10 +1,35 @@
 import { createEffect, For, on, onCleanup, Show } from "solid-js";
+import { backend } from "./backend";
 import { dragSource, dropTarget, isDragged, showsDropHint } from "./drag";
 import { FLOAT_TOP, type Column, type Section } from "./generated";
 import { Glyph } from "./Glyph";
 import { dropHint, GroupHead } from "./Group";
 import { commands, hint } from "./keys";
-import { isOpen, model, openTask, servers, showSidebar, showBoard, toggleCollapsed, togglePin, ui } from "./state";
+import { isMenuOpen, MenuHost, menuTrigger, onRightClick } from "./Menu";
+import {
+  AddWorkspace,
+  holdsKeyboard,
+  isRenaming,
+  newTaskIn,
+  RenameInput,
+  SectionMenu,
+  ServerMenu,
+  startRename,
+  TaskMenu,
+  Toast,
+} from "./SidebarControls";
+import {
+  isOpen,
+  model,
+  openTask,
+  servers,
+  serverView,
+  showSidebar,
+  showBoard,
+  toggleCollapsed,
+  togglePin,
+  ui,
+} from "./state";
 
 function Group(props: { section: string; column: Column }) {
   const target = dropTarget(props.section, props.column.state);
@@ -22,20 +47,43 @@ function Group(props: { section: string; column: Column }) {
       <div class="group" classList={{ over: target.over() }} {...target.attributes}>
         <GroupHead column={props.column} />
         <For each={props.column.rows}>
-          {(row) => (
-            <div
-              class="task"
-              classList={{ active: isOpen(row.key), dragging: isDragged(row.key) }}
-              style={{ "--depth": row.depth }}
-              onClick={() => openTask(row.key)}
-              {...dragSource(row, props.section, props.column.state)}
-            >
-              <Glyph glyph={row.glyph} />
-              <span class="tt">{row.title}</span>
-              <Show when={row.via}>{(via) => <span class="via">↳ {via()}</span>}</Show>
-              <span class="srv">{row.at.server}</span>
-            </div>
-          )}
+          {(row) => {
+            let element!: HTMLDivElement;
+            const id = `task:${row.key}`;
+            const menu = () => <TaskMenu row={row} column={props.column} />;
+            return (
+              <div
+                ref={element}
+                class="task"
+                classList={{ active: isOpen(row.key), dragging: isDragged(row.key), "menu-open": isMenuOpen(id) }}
+                style={{ "--depth": row.depth }}
+                tabindex="0"
+                onClick={() => openTask(row.key)}
+                onContextMenu={onRightClick(id, () => element, menu)}
+                onKeyDown={(event) => event.key === "F2" && startRename("task", row.key)}
+                {...dragSource(row, props.section, props.column.state)}
+              >
+                <Glyph glyph={row.glyph} />
+                <Show
+                  when={isRenaming("task", row.key)}
+                  fallback={
+                    <span class="tt" onDblClick={() => startRename("task", row.key)}>
+                      {row.title}
+                    </span>
+                  }
+                >
+                  <RenameInput value={row.title} apply={(title) => backend.taskRename(row.at, title)} />
+                </Show>
+                <Show when={row.via}>{(via) => <span class="via">↳ {via()}</span>}</Show>
+                <span class="srv">{row.at.server}</span>
+                <span class="acts">
+                  <button class="mini more" title="task menu" {...menuTrigger(id, () => element, menu)}>
+                    ⋯
+                  </button>
+                </span>
+              </div>
+            );
+          }}
         </For>
       </div>
     </Show>
@@ -43,27 +91,90 @@ function Group(props: { section: string; column: Column }) {
 }
 
 function SectionGroups(props: { section: Section }) {
+  let head!: HTMLDivElement;
+  const name = () => props.section.name;
+  const id = () => `section:${name()}`;
+  const menu = () => <SectionMenu section={props.section} />;
+  const collapsed = () => ui.prefs.collapsed.includes(name());
   return (
-    <div class="ws" classList={{ closed: ui.prefs.collapsed.includes(props.section.name) }}>
-      <div class="wsh" onClick={() => toggleCollapsed(props.section.name)}>
+    <div class="ws" classList={{ closed: collapsed() }}>
+      <div
+        ref={head}
+        class="wsh"
+        classList={{ "menu-open": isMenuOpen(id()) }}
+        onClick={() => toggleCollapsed(name())}
+        onContextMenu={(event) => onRightClick(id(), () => head, menu)(event)}
+      >
         <span class="car">▼</span>
-        <span
-          class="name"
-          onClick={(event) => {
-            event.stopPropagation();
-            showBoard(props.section.name);
-          }}
+        <Show
+          when={isRenaming("section", name())}
+          fallback={
+            <span
+              class="name"
+              onClick={(event) => {
+                event.stopPropagation();
+                showBoard(name());
+              }}
+              onDblClick={(event) => {
+                event.stopPropagation();
+                startRename("section", name());
+              }}
+            >
+              {name()}
+            </span>
+          }
         >
-          {props.section.name}
-        </span>
+          <RenameInput value={name()} apply={(renamed) => backend.sectionRename(name(), renamed)} />
+        </Show>
         <span class="count">{props.section.live} live</span>
+        <span class="acts">
+          <button
+            class="mini"
+            title="new task here"
+            onClick={(event) => {
+              event.stopPropagation();
+              newTaskIn(name());
+            }}
+          >
+            +
+          </button>
+          <button class="mini more" title="section menu" {...menuTrigger(id(), () => head, menu)}>
+            ⋯
+          </button>
+        </span>
       </div>
       <div class="wsb">
         <For each={props.section.columns.filter((column) => column.live)}>
-          {(column) => <Group section={props.section.name} column={column} />}
+          {(column) => <Group section={name()} column={column} />}
         </For>
+        <Show when={props.section.live === 0}>
+          <div class="empty-state">No live tasks.</div>
+        </Show>
       </div>
     </div>
+  );
+}
+
+/** Keyed by name, as every round trip refreshes each server's view. */
+function ServerChip(props: { name: string }) {
+  let chip!: HTMLSpanElement;
+  const server = () => serverView(props.name);
+  const id = `server:${props.name}`;
+  const menu = () => <ServerMenu name={props.name} />;
+  return (
+    <span
+      ref={chip}
+      class="chip"
+      classList={{ "menu-open": isMenuOpen(id) }}
+      title={server()?.problem ?? undefined}
+      {...menuTrigger(id, () => chip, menu)}
+      onContextMenu={onRightClick(id, () => chip, menu)}
+    >
+      <span class="dot" classList={{ off: !server()?.reachable }} />
+      <Show when={isRenaming("server", props.name)} fallback={props.name}>
+        <RenameInput value={props.name} apply={(name) => backend.serverRename(props.name, name)} />
+      </Show>
+    </span>
   );
 }
 
@@ -71,7 +182,8 @@ function SectionGroups(props: { section: Section }) {
  * The unpinned sidebar goes once the pointer leaves the place it settles in. Entering and leaving count only there:
  * the sidebar sliding in sweeps under a pointer resting at the window's edge, and a modal's scrim takes the pointer
  * without it leaving, so a pointer that was on the sidebar when a modal opened leaves it when the modal closes
- * somewhere off the sidebar.
+ * somewhere off the sidebar. The sidebar stays while it holds the keyboard, and goes when it lets go if the pointer
+ * left meanwhile.
  */
 function autohide(aside: HTMLElement) {
   let hovered = false;
@@ -88,18 +200,19 @@ function autohide(aside: HTMLElement) {
     hovered = false;
     if (!ui.prefs.pinned) showSidebar(false);
   };
+  const settled = () => ui.modal === null && !holdsKeyboard();
   createEffect(
     on(
-      () => ui.modal === null,
-      (closed) => {
-        if (closed && hovered && movedTo !== null && !onAside(movedTo)) leave();
+      settled,
+      (free) => {
+        if (free && hovered && movedTo !== null && !onAside(movedTo)) leave();
         movedTo = null;
       },
       { defer: true },
     ),
   );
   aside.addEventListener("pointerenter", (event) => (hovered ||= onAside(event)));
-  aside.addEventListener("pointerleave", () => hovered && ui.modal === null && leave());
+  aside.addEventListener("pointerleave", () => hovered && settled() && leave());
 }
 
 export function Sidebar(props: { ref: (aside: HTMLElement) => void; shown: boolean }) {
@@ -122,25 +235,21 @@ export function Sidebar(props: { ref: (aside: HTMLElement) => void; shown: boole
         </button>
       </div>
       <div class="servers">
-        <For each={servers()}>
-          {(server) => (
-            <span class="chip" title={server.problem ?? undefined}>
-              <span class="dot" classList={{ off: !server.reachable }} />
-              {server.name}
-            </span>
-          )}
-        </For>
+        <For each={servers().map((server) => server.name)}>{(name) => <ServerChip name={name} />}</For>
         <span class="chip add" onClick={commands.pairServer.run}>
           + server
         </span>
       </div>
       <div class="groups">
         <For each={model.lists.sections}>{(section) => <SectionGroups section={section} />}</For>
+        <AddWorkspace />
       </div>
       <div class="sb-foot">
         <span>{hint(commands.newTask)} new task</span>
         <span>{hint(commands.sidebar)} sidebar</span>
       </div>
+      <MenuHost />
+      <Toast />
     </aside>
   );
 }

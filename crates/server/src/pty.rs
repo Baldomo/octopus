@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use octopus_proto::Error;
-use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
+#[cfg(windows)]
+use portable_pty::Child;
+use portable_pty::{CommandBuilder, MasterPty, PtyPair, PtySize, native_pty_system};
 use tokio::sync::{broadcast, watch};
 
 use crate::{lock, report};
@@ -59,12 +61,10 @@ impl Pty {
         let pair = native_pty_system().openpty(size(INITIAL_COLS, INITIAL_ROWS)).map_err(Error::internal)?;
         let mut command = CommandBuilder::from_argv(argv.iter().map(Into::into).collect());
         command.cwd(cwd);
-        command.env("TERM", "xterm-256color");
-        command.env("COLORTERM", "truecolor");
         for (key, value) in env {
             command.env(key, value);
         }
-        let child = pair.slave.spawn_command(command).map_err(Error::internal)?;
+        let child = start(&pair, command).map_err(Error::internal)?;
         drop(pair.slave);
         let reader = pair.master.try_clone_reader().map_err(Error::internal)?;
         let writer = pair.master.take_writer().map_err(Error::internal)?;
@@ -72,7 +72,7 @@ impl Pty {
         let pty = Arc::new(Self {
             writer: Mutex::new(writer),
             master: Mutex::new(Some(pair.master)),
-            process: Mutex::new(Some(Process::of(child.as_ref()))),
+            process: Mutex::new(Some(Process::of(&child))),
             output: Mutex::new(Output { scrollback: VecDeque::new(), live: Some(live) }),
             exited: watch::Sender::new(false),
         });
@@ -123,8 +123,8 @@ impl Pty {
         Cow::Borrowed(chunk)
     }
 
-    fn reap(&self, mut child: Box<dyn Child + Send + Sync>) {
-        if let Err(error) = child.wait() {
+    fn reap(&self, child: Started) {
+        if let Err(error) = wait(child) {
             report!("waiting on a terminal's process: {error}");
         }
         lock(&self.process).take();
@@ -210,15 +210,171 @@ impl Pty {
     }
 }
 
+#[cfg(unix)]
+type Started = nix::unistd::Pid;
+#[cfg(windows)]
+type Started = Box<dyn Child + Send + Sync>;
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn start(pair: &PtyPair, command: CommandBuilder) -> anyhow::Result<Started> {
+    let pid = pair.slave.spawn_command(command)?.process_id().expect("a spawned unix child has a pid");
+    Ok(nix::unistd::Pid::from_raw(i32::try_from(pid)?))
+}
+
+#[cfg(target_os = "macos")]
+fn start(pair: &PtyPair, command: CommandBuilder) -> anyhow::Result<Started> {
+    let tty = pair.master.tty_name().expect("a macOS PTY has a device path");
+    disclaimed::spawn(command, &tty)
+}
+
+#[cfg(windows)]
+fn start(pair: &PtyPair, command: CommandBuilder) -> anyhow::Result<Started> {
+    pair.slave.spawn_command(command)
+}
+
+#[cfg(unix)]
+fn wait(pid: Started) -> nix::Result<()> {
+    nix::sys::wait::waitpid(pid, None).map(drop)
+}
+
+#[cfg(windows)]
+fn wait(mut child: Started) -> std::io::Result<()> {
+    child.wait().map(drop)
+}
+
 impl Process {
     #[cfg(unix)]
-    fn of(child: &(dyn Child + Send + Sync)) -> Self {
-        let pid = child.process_id().and_then(|pid| i32::try_from(pid).ok()).expect("a spawned unix child has a pid");
-        Self { pid: nix::unistd::Pid::from_raw(pid) }
+    fn of(pid: &Started) -> Self {
+        Self { pid: *pid }
     }
 
     #[cfg(windows)]
-    fn of(child: &(dyn Child + Send + Sync)) -> Self {
+    fn of(child: &Started) -> Self {
         Self { killer: child.clone_killer() }
+    }
+}
+
+/// macOS asks a process's responsible process for its privacy permissions, and a child inherits its parent's.
+/// A terminal's program disclaims the host, so it answers for itself. A process takes a controlling terminal only
+/// through its own ioctl, so a fork takes the PTY, then becomes the program through a disclaiming posix_spawn.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code, reason = "libSystem's fork, ioctl, posix_spawn and responsibility calls have no safe binding")]
+mod disclaimed {
+    use std::ffi::{CString, OsStr, c_int, c_short};
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Path;
+    use std::ptr;
+
+    use anyhow::Context;
+    use nix::libc;
+    use nix::sys::wait::WaitStatus;
+    use nix::unistd::Pid;
+    use portable_pty::CommandBuilder;
+
+    const FLAGS: c_short = (libc::POSIX_SPAWN_SETEXEC
+        | libc::POSIX_SPAWN_CLOEXEC_DEFAULT
+        | libc::POSIX_SPAWN_SETSIGDEF
+        | libc::POSIX_SPAWN_SETSIGMASK) as c_short;
+    const STDIO: [c_int; 3] = [libc::STDIN_FILENO, libc::STDOUT_FILENO, libc::STDERR_FILENO];
+    /// The fork's exit status names the step that failed.
+    const TAKE_TERMINAL: c_int = 1;
+    const START: c_int = 2;
+
+    unsafe extern "C" {
+        fn responsibility_spawnattrs_setdisclaim(attrs: *mut libc::posix_spawnattr_t, disclaim: c_int) -> c_int;
+        fn posix_spawn_file_actions_addinherit_np(actions: *mut libc::posix_spawn_file_actions_t, fd: c_int) -> c_int;
+    }
+
+    fn c_string(text: impl AsRef<OsStr>) -> anyhow::Result<CString> {
+        Ok(CString::new(text.as_ref().as_bytes())?)
+    }
+
+    fn check(what: &'static str, code: c_int) -> anyhow::Result<()> {
+        match code {
+            0 => Ok(()),
+            errno => Err(std::io::Error::from_raw_os_error(errno)).context(what),
+        }
+    }
+
+    /// Spawns `command` as the leader of a new session whose controlling terminal is the PTY at `tty`, so the
+    /// program leads the terminal's foreground group.
+    pub fn spawn(mut command: CommandBuilder, tty: &Path) -> anyhow::Result<Pid> {
+        command.env("SHELL", command.get_shell());
+        let argv = command.get_argv();
+        let cwd = command.get_cwd().expect("a terminal has a working directory");
+        let program = which::which_in(&argv[0], command.get_env("PATH"), cwd);
+        let program = c_string(program.with_context(|| format!("find {:?}", argv[0]))?)?;
+        let (tty, cwd) = (c_string(tty)?, c_string(cwd)?);
+        let argv = argv.iter().map(c_string).collect::<anyhow::Result<Vec<_>>>()?;
+        let env = command
+            .iter_full_env_as_str()
+            .map(|(key, value)| c_string(format!("{key}={value}")))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let argv: Vec<_> = argv.iter().map(|arg| arg.as_ptr().cast_mut()).chain([ptr::null_mut()]).collect();
+        let env: Vec<_> = env.iter().map(|pair| pair.as_ptr().cast_mut()).chain([ptr::null_mut()]).collect();
+
+        let mut attr: libc::posix_spawnattr_t = ptr::null_mut();
+        let mut actions: libc::posix_spawn_file_actions_t = ptr::null_mut();
+        // SAFETY: every pointer outlives the calls, `argv` and `env` end in null, the fork allocates nothing and
+        // calls only syscall wrappers (libSystem's posix_spawn copies the prepared attributes into one syscall), and
+        // destroying an attribute or action set that failed to initialise is a no-op returning EINVAL.
+        unsafe {
+            let (mut every, mut none) = (std::mem::zeroed(), std::mem::zeroed());
+            libc::sigfillset(&mut every);
+            libc::sigemptyset(&mut none);
+            let spawned = (|| {
+                check("init spawn attributes", libc::posix_spawnattr_init(&mut attr))?;
+                check("set spawn flags", libc::posix_spawnattr_setflags(&mut attr, FLAGS))?;
+                check("default signals", libc::posix_spawnattr_setsigdefault(&mut attr, &every))?;
+                check("unblock signals", libc::posix_spawnattr_setsigmask(&mut attr, &none))?;
+                check("disclaim responsibility", responsibility_spawnattrs_setdisclaim(&mut attr, 1))?;
+                check("init file actions", libc::posix_spawn_file_actions_init(&mut actions))?;
+                for stdio in STDIO {
+                    check("keep the terminal", posix_spawn_file_actions_addinherit_np(&mut actions, stdio))?;
+                }
+                check("enter the directory", libc::posix_spawn_file_actions_addchdir_np(&mut actions, cwd.as_ptr()))?;
+                let (mut reader, writer) = std::io::pipe().context("open a pipe for the start's failure")?;
+                match libc::fork() {
+                    -1 => Err(std::io::Error::last_os_error()).context("fork"),
+                    0 => {
+                        libc::setsid();
+                        let terminal = libc::open(tty.as_ptr(), libc::O_RDWR);
+                        let (errno, step) = if terminal != -1
+                            && libc::ioctl(terminal, libc::TIOCSCTTY.into(), 0) != -1
+                            && STDIO.into_iter().all(|stdio| libc::dup2(terminal, stdio) != -1)
+                        {
+                            let argv = argv.as_ptr();
+                            (libc::posix_spawn(&mut 0, program.as_ptr(), &actions, &attr, argv, env.as_ptr()), START)
+                        } else {
+                            (*libc::__error(), TAKE_TERMINAL)
+                        };
+                        libc::write(writer.as_raw_fd(), ptr::from_ref(&errno).cast(), size_of_val(&errno));
+                        libc::_exit(step)
+                    }
+                    pid => {
+                        drop(writer);
+                        let pid = Pid::from_raw(pid);
+                        let mut errno = Vec::new();
+                        reader.read_to_end(&mut errno).context("read the start's failure")?;
+                        if errno.is_empty() {
+                            return Ok(pid);
+                        }
+                        let errno = c_int::from_ne_bytes(errno.try_into().expect("the fork reports one errno"));
+                        let error = std::io::Error::from_raw_os_error(errno);
+                        match nix::sys::wait::waitpid(pid, None) {
+                            Ok(WaitStatus::Exited(_, TAKE_TERMINAL)) => {
+                                Err(anyhow::anyhow!("take the terminal {}: {error}", tty.to_string_lossy()))
+                            }
+                            _ => Err(anyhow::anyhow!("start {}: {error}", program.to_string_lossy())),
+                        }
+                    }
+                }
+            })();
+            libc::posix_spawn_file_actions_destroy(&mut actions);
+            libc::posix_spawnattr_destroy(&mut attr);
+            spawned
+        }
     }
 }

@@ -17,13 +17,28 @@ Add a workspace: a directory this server runs tasks in.
 
 - `--server <server>`: The paired server's name.
 - `--name <name>`: The workspace's name, unique on its server.
-- `--root <root>`: The directory on the server's machine.
+- `--root <root>`: The directory on the server's machine, as an absolute path.
 
 ## `octopus workspace list`
 
 List the server's workspaces.
 
 - `--server <server>`: The paired server's name.
+
+## `octopus workspace rename`
+
+Rename a workspace; it keeps its root and its tasks.
+
+- `--server <server>`: The paired server's name.
+- `--workspace <workspace>`: The workspace, by name.
+- `--name <name>`: Its new name, unique on its server.
+
+## `octopus workspace remove`
+
+Remove a workspace with no live task, with every task in it; their worktrees go and their branches stay.
+
+- `--server <server>`: The paired server's name.
+- `--workspace <workspace>`: The workspace, by name.
 
 ## `octopus harness set`
 
@@ -32,6 +47,8 @@ Declare how a harness starts its agent.
 - `--server <server>`: The paired server's name.
 - `--id <id>`: The harness's id, which tasks name.
 - `--argv <argv>`: The agent's argv as a JSON array of strings, e.g. ["claude"].
+- `--start <start>`: The args appended to argv on a session's first start, with {session} for the session id, e.g. ["--session-id","{session}"].
+- `--resume <resume>`: The args appended to argv on every later start, with {session} for the session id, e.g. ["--resume","{session}"].
 - `--install <install>`: The command that installs the agent, shown when it is missing.
 - `--hooks true|false`: Whether the agent reports its status with `agent report`.
 
@@ -54,6 +71,7 @@ Create a task.
 - `--state pinned|temporary|completed|cancelled`: The task's state.
 - `--checkout root|worktree`: Where the task's files live: the workspace root, or a worktree of its own.
 - `--harness <harness>`: The harness that runs the task's agent.
+- `--session <session>`: An existing session for the agent to resume; none for a fresh session.
 
 ## `octopus task move`
 
@@ -62,6 +80,29 @@ Move a task to a state.
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
 - `--state pinned|temporary|completed|cancelled`: The state to move it to.
+
+## `octopus task rename`
+
+Rename a task; a worktree task's branch keeps its name.
+
+- `--server <server>`: The paired server's name.
+- `--task <task>`: The task's id.
+- `--title <title>`: The task's new title.
+
+## `octopus task set-session`
+
+Point a task's agent at an existing session, ending the agent running now; the next focus resumes it.
+
+- `--server <server>`: The paired server's name.
+- `--task <task>`: The task's id.
+- `--session <session>`: The session to resume.
+
+## `octopus task archive`
+
+Archive an ended task, which takes it off the Tasks board until it moves again.
+
+- `--server <server>`: The paired server's name.
+- `--task <task>`: The task's id.
 
 ## `octopus task focus`
 
@@ -163,6 +204,12 @@ Show a one-time code that pairs one client with this server.
 
 - `--server <server>`: The paired server's name.
 
+## `octopus pairing list`
+
+List the clients this server has paired with.
+
+- `--server <server>`: The paired server's name.
+
 ## `octopus pairing forget`
 
 Forget a paired client, which must pair with a code again; its open connections stay until they close.
@@ -212,3 +259,16 @@ Remember a server on this machine's local socket under a name.
 
 - `--name <name>`: The name to call the server by.
 - `--socket <socket>`: The server's --socket.
+
+## `octopus server rename`
+
+Call a listed server by another name in this client's list; the server is not told.
+
+- `--server <server>`: The paired server's name.
+- `--name <name>`: The name to call the server by.
+
+## `octopus server forget`
+
+Drop a server and its pin from this client's list; the server keeps this client paired.
+
+- `--server <server>`: The paired server's name.

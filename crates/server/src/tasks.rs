@@ -16,6 +16,7 @@ pub fn apply_move(task: &mut TaskRow, to: TaskState, now: i64) -> MoveEffect {
     let from = task.state;
     task.state = to;
     task.ended_at = ended_at(to, now);
+    task.archived_at = None;
     if !from.is_live() && to.is_live() {
         task.focused_at = None;
     }
@@ -36,10 +37,12 @@ mod tests {
             state,
             checkout: Checkout::Root,
             harness: "h".into(),
+            session: None,
             directory: "/w".into(),
             branch: None,
             focused_at: Some(1),
             ended_at: ended_at(state, 1),
+            archived_at: None,
             rev: 0,
         }
     }

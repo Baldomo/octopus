@@ -336,9 +336,8 @@ impl HostClient {
         local::connect_blocking(&self.address).is_ok()
     }
 
-    pub fn spawn(&self, id: &PtyId, argv: &[String], cwd: &Path, env: &[(&str, &str)]) -> Result<(), Error> {
-        let env = env.iter().map(|(key, value)| (key.to_string(), value.to_string())).collect();
-        self.call(&HostRequest::Spawn { id: id.clone(), argv: argv.to_vec(), cwd: cwd.into(), env })
+    pub fn spawn(&self, id: &PtyId, argv: Vec<String>, cwd: &Path, env: Vec<(String, String)>) -> Result<(), Error> {
+        self.call(&HostRequest::Spawn { id: id.clone(), argv, cwd: cwd.into(), env })
     }
 
     pub fn forget(&self, id: &PtyId) -> Result<(), Error> {

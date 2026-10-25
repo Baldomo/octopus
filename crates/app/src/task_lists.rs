@@ -78,6 +78,8 @@ pub struct WorkspaceRef {
     pub server: String,
     pub workspace: WorkspaceId,
     pub name: String,
+    /// The directory on the server's machine.
+    pub root: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -119,9 +121,12 @@ pub fn lists(caches: &BTreeMap<String, Cache>) -> Lists {
         .iter()
         .map(|task| task.task.parent.as_ref().and_then(|parent| index.get(&(task.at.server.as_str(), parent)).copied()))
         .collect();
+    let archived = |i: usize| placed[i].task.archived_at.is_some();
     let nested_under = |i: usize| {
         parents[i].filter(|&parent| {
-            placed[parent].section == placed[i].section && placed[parent].task.state == placed[i].task.state
+            !archived(parent)
+                && placed[parent].section == placed[i].section
+                && placed[parent].task.state == placed[i].task.state
         })
     };
     let mut subtasks = vec![0; placed.len()];
@@ -130,7 +135,7 @@ pub fn lists(caches: &BTreeMap<String, Cache>) -> Lists {
         .values()
         .flat_map(|cache| cache.workspaces.values().map(|workspace| (workspace.name.as_str(), Default::default())))
         .collect();
-    for i in 0..placed.len() {
+    for i in (0..placed.len()).filter(|&i| !archived(i)) {
         if let Some(parent) = parents[i] {
             subtasks[parent] += 1;
         }
@@ -181,6 +186,7 @@ pub fn lists(caches: &BTreeMap<String, Cache>) -> Lists {
                 server: server.clone(),
                 workspace: workspace.id.clone(),
                 name: workspace.name.clone(),
+                root: workspace.root.clone(),
             })
         })
         .collect();
@@ -201,10 +207,12 @@ pub(crate) mod tests {
             state,
             checkout: Checkout::Root,
             harness: "claude-code".into(),
+            session: None,
             directory: "/repo".into(),
             branch: None,
             focused_at: None,
             ended_at: None,
+            archived_at: None,
             rev: 1,
             agent: Agent::NotStarted,
             panels: Vec::new(),
@@ -289,6 +297,19 @@ pub(crate) mod tests {
         assert_eq!(rows(&lists, "acme", TaskState::Pinned), [("elsewhere".into(), 0, Some("protocol v1".into()))]);
         let protocol = &lists.sections[1].columns[0].rows[1];
         assert_eq!((protocol.title.as_str(), protocol.subtasks), ("protocol v1", 3));
+    }
+
+    #[test]
+    fn an_archived_task_sits_nowhere_and_its_subtask_sits_apart() {
+        let mut parent = task("tsk_1", "wsp_a", None, "protocol v1", TaskState::Completed);
+        parent.archived_at = Some(1);
+        let child = task("tsk_2", "wsp_a", Some("tsk_1"), "strict serde", TaskState::Completed);
+        let caches = BTreeMap::from([("mac-mini".into(), cache(&[("wsp_a", "octopus")], vec![parent, child]))]);
+        let lists = lists(&caches);
+        assert_eq!(
+            rows(&lists, "octopus", TaskState::Completed),
+            [("strict serde".into(), 0, Some("protocol v1".into()))]
+        );
     }
 
     #[test]

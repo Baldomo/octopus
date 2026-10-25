@@ -2,7 +2,7 @@ import { createSignal, For, Show } from "solid-js";
 import { backend } from "./backend";
 import { Actions, Field, Segments, TextField } from "./Dialog";
 import { CHECKOUTS, TASK_STATES, type Checkout, type TaskState, type WorkspaceRef } from "./generated";
-import { model, openTask, openView, report, showModal } from "./state";
+import { model, newTaskSection, openTask, openView, report, serverView, setNewTaskSection, showModal } from "./state";
 
 const PARENTS = ["none", "open task"] as const;
 const workspaceKey = (workspace: WorkspaceRef) => `${workspace.server}/${workspace.workspace}`;
@@ -11,9 +11,12 @@ const workspaceKey = (workspace: WorkspaceRef) => `${workspace.server}/${workspa
 export function NewTask() {
   const current = openView();
   const workspaces = () => model.lists.workspaces;
-  const initial = workspaces().find(
-    (workspace) => workspace.server === current?.at.server && workspace.name === current.section,
-  );
+  const section = newTaskSection();
+  setNewTaskSection(null);
+  const initial =
+    section === null
+      ? workspaces().find((workspace) => workspace.server === current?.at.server && workspace.name === current.section)
+      : workspaces().find((workspace) => workspace.name === section && serverView(workspace.server)?.reachable);
   const [workspace, setWorkspace] = createSignal(initial === undefined ? "" : workspaceKey(initial));
   const [title, setTitle] = createSignal("");
   const [parent, setParent] = createSignal<(typeof PARENTS)[number]>("none");
@@ -48,7 +51,7 @@ export function NewTask() {
     <form class="pane dialog" onSubmit={create}>
       <Show
         when={workspaces().length > 0}
-        fallback={<div class="empty">No server lists a workspace yet; add one with octopus workspace add.</div>}
+        fallback={<div class="empty">No server lists a workspace yet; add one with + workspace in the sidebar.</div>}
       >
         <TextField label="title" focus value={title()} change={setTitle} />
         <Field label="workspace">

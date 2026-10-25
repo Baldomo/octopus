@@ -2,6 +2,7 @@ mod browser;
 mod checkouts;
 mod files;
 mod listener;
+mod login;
 mod pairing;
 mod pty;
 mod service;
@@ -15,14 +16,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use octopus_proto::device::{DeviceKey, PublicKey};
 use octopus_proto::ops::{
-    AgentReport, BrowserOpen, Done, Entries, FileList, FileSearch, FileWrite, HarnessSet, Matches, Offer, Paired,
-    PairingForget, PairingOffer, PairingPair, Revised, SessionHello, SessionPing, SessionSync, Shown, Snapshot,
-    TaskCreate, TaskCreated, TaskFocus, TaskGet, TaskMove, TermResize, TermSend, TermTakeLock, Welcome, WorkspaceAdd,
-    WorkspaceCreated, WorkspaceList, Workspaces, Written,
+    AgentReport, BrowserOpen, Clients, Done, Entries, FileList, FileSearch, FileWrite, HarnessSet, Matches, Offer,
+    Paired, PairedClient, PairingForget, PairingList, PairingOffer, PairingPair, Revised, SessionHello, SessionPing,
+    SessionSync, Shown, Snapshot, TaskArchive, TaskCreate, TaskCreated, TaskFocus, TaskGet, TaskMove, TaskRename,
+    TaskSetSession, TermResize, TermSend, TermTakeLock, Welcome, WorkspaceAdd, WorkspaceCreated, WorkspaceList,
+    WorkspaceRemove, WorkspaceRename, Workspaces, Written,
 };
 use octopus_proto::pairing::Side;
 use octopus_proto::types::{
-    AGENT_PANEL, Agent, AgentStatus, BrowserPanel, Checkout, ENV_SERVER, ENV_TASK, Panel, PtyId, Task, TaskId, web_page,
+    AGENT_PANEL, Agent, AgentStatus, BrowserPanel, Checkout, ENV_SERVER, ENV_TASK, Panel, PtyId, SessionId, Task,
+    TaskId, web_page,
 };
 use octopus_proto::{Error, Event, Op, Outcome, Push, Request, parse_args};
 use tokio::sync::broadcast;
@@ -36,6 +39,8 @@ use store::{Harness, Store, TaskRow, TerminalRow};
 use tasks::{MoveEffect, apply_move};
 
 const PUSH_BACKLOG: usize = 4096;
+/// Stands for the task's session id in a harness's start and resume args.
+const SESSION: &str = "{session}";
 
 enum AgentSlot {
     Running { terminal: Arc<Terminal>, status: AgentStatus },
@@ -93,7 +98,32 @@ fn call<O: Op>(args: &serde_json::Value, handler: impl FnOnce(O) -> Result<O::Ok
     Outcome::from(parse_args::<O>(args).and_then(handler))
 }
 
+fn nonempty(what: &str, text: &str) -> Result<(), Error> {
+    if text.trim().is_empty() { Err(Error::invalid(format!("{what} is non-empty"))) } else { Ok(()) }
+}
+
+/// A workspace root: an absolute path to a directory, as its canonical spelling.
+fn directory(root: &str) -> Result<String, Error> {
+    if !Path::new(root).is_absolute() {
+        return Err(Error::invalid(format!("root {root} is not an absolute path")));
+    }
+    let canonical = dunce::canonicalize(root).map_err(|error| Error::invalid(format!("root {root}: {error}")))?;
+    if !canonical.is_dir() {
+        return Err(Error::invalid(format!("root {root} is not a directory")));
+    }
+    Ok(canonical.to_string_lossy().into_owned())
+}
+
 impl State {
+    /// Ends the task's agent terminal and drops its scrollback.
+    fn forget_agent(&mut self, task: &TaskId) {
+        if let Some(AgentSlot::Running { terminal, .. }) = self.agents.remove(task)
+            && let Err(error) = terminal.forget()
+        {
+            report!("forget the agent terminal of {task}: {error}");
+        }
+    }
+
     fn agent_terminal(&self, task: &TaskId) -> Option<&Arc<Terminal>> {
         match self.agents.get(task) {
             Some(AgentSlot::Running { terminal, .. }) => Some(terminal),
@@ -143,10 +173,12 @@ impl State {
             state: row.state,
             checkout: row.checkout,
             harness: row.harness.clone(),
+            session: row.session.clone(),
             directory: row.directory.clone(),
             branch: row.branch.clone(),
             focused_at: row.focused_at,
             ended_at: row.ended_at,
+            archived_at: row.archived_at,
             rev: row.rev,
             agent,
             panels: self.panels(&row.id),
@@ -235,14 +267,20 @@ impl Server {
                 call::<PairingForget>(args, |op| lock(&self.state).store.forget_client(&op.client).map(|()| Done {}))
             }
             PairingOffer::NAME => call::<PairingOffer>(args, |_| Ok::<Offer, Error>(lock(&self.offers).offer(now()))),
+            PairingList::NAME => call::<PairingList>(args, |_| self.pairing_list()),
             WorkspaceAdd::NAME => call::<WorkspaceAdd>(args, |op| self.workspace_add(op)),
             WorkspaceList::NAME => {
                 call::<WorkspaceList>(args, |_| Ok(Workspaces { workspaces: lock(&self.state).store.workspaces()? }))
             }
+            WorkspaceRename::NAME => call::<WorkspaceRename>(args, |op| self.workspace_rename(op)),
+            WorkspaceRemove::NAME => call::<WorkspaceRemove>(args, |op| self.workspace_remove(op)),
             HarnessSet::NAME => call::<HarnessSet>(args, |op| self.harness_set(op)),
             AgentReport::NAME => call::<AgentReport>(args, |op| self.agent_report(op)),
             TaskCreate::NAME => call::<TaskCreate>(args, |op| self.task_create(op)),
             TaskMove::NAME => call::<TaskMove>(args, |op| self.task_move(op)),
+            TaskRename::NAME => call::<TaskRename>(args, |op| self.task_rename(op)),
+            TaskSetSession::NAME => call::<TaskSetSession>(args, |op| self.task_set_session(op)),
+            TaskArchive::NAME => call::<TaskArchive>(args, |op| self.task_archive(op)),
             TaskFocus::NAME => call::<TaskFocus>(args, |op| self.task_focus(op)),
             TaskGet::NAME => call::<TaskGet>(args, |op| {
                 let state = lock(&self.state);
@@ -291,21 +329,71 @@ impl Server {
     }
 
     fn workspace_add(&self, op: WorkspaceAdd) -> Result<WorkspaceCreated, Error> {
-        let root =
-            dunce::canonicalize(&op.root).map_err(|error| Error::invalid(format!("root {}: {error}", op.root)))?;
+        nonempty("a workspace name", &op.name)?;
+        let root = directory(&op.root)?;
         let mut state = lock(&self.state);
-        let (workspace, rev) = state.store.add_workspace(&op.name, &root.to_string_lossy())?;
+        let (workspace, rev) = state.store.add_workspace(&op.name, &root)?;
         let id = workspace.id.clone();
-        self.publish(&state, rev, Event::WorkspaceAdded { workspace });
+        self.publish(&state, rev, Event::WorkspaceUpdated { workspace });
         Ok(WorkspaceCreated { workspace: id, rev })
+    }
+
+    fn workspace_rename(&self, op: WorkspaceRename) -> Result<Revised, Error> {
+        nonempty("a workspace name", &op.name)?;
+        let mut state = lock(&self.state);
+        let (workspace, rev) = state.store.rename_workspace(&op.workspace, &op.name)?;
+        self.publish(&state, rev, Event::WorkspaceUpdated { workspace });
+        Ok(Revised { rev })
+    }
+
+    /// Runs under the state lock throughout, so no task starts in the workspace while it goes.
+    fn workspace_remove(&self, op: WorkspaceRemove) -> Result<Revised, Error> {
+        let mut state = lock(&self.state);
+        let workspace = state.store.workspace(&op.workspace)?;
+        let tasks = state.store.workspace_tasks(&workspace.id)?;
+        let live = tasks.iter().filter(|task| task.state.is_live()).count();
+        if live > 0 {
+            return Err(Error::conflict(format!("{} has {live} live tasks; end them first", workspace.name)));
+        }
+        // A process still holding a worktree open would keep Windows from removing it.
+        for task in &tasks {
+            state.watchers.remove(&task.id);
+            state.browsers.remove(&task.id);
+            state.forget_agent(&task.id);
+        }
+        let root = PathBuf::from(&workspace.root);
+        for task in tasks.iter().filter(|task| task.checkout == Checkout::Worktree) {
+            let directory = PathBuf::from(&task.directory);
+            if directory.exists() {
+                checkouts::remove(&root, &directory)?;
+            }
+        }
+        let (rerooted, rev) = state.store.remove_workspace(&workspace.id)?;
+        for row in &rerooted {
+            self.publish_task(&state, row);
+        }
+        self.publish(&state, rev, Event::WorkspaceRemoved { workspace: workspace.id });
+        Ok(Revised { rev })
+    }
+
+    fn pairing_list(&self) -> Result<Clients, Error> {
+        let pinned = lock(&self.state).store.clients()?;
+        let connected = lock(&self.clients);
+        let clients = pinned
+            .into_iter()
+            .map(|(name, seen_at)| PairedClient { connected: connected.contains_key(&name), name, seen_at })
+            .collect();
+        Ok(Clients { clients })
     }
 
     fn harness_set(&self, op: HarnessSet) -> Result<Revised, Error> {
         if op.argv.is_empty() {
             return Err(Error::invalid("argv is empty"));
         }
+        let harness =
+            Harness { argv: op.argv, start: op.start, resume: op.resume, install: op.install, hooks: op.hooks };
         let mut state = lock(&self.state);
-        let rev = state.store.set_harness(&op.id, &Harness { argv: op.argv, install: op.install, hooks: op.hooks })?;
+        let rev = state.store.set_harness(&op.id, &harness)?;
         self.publish(&state, rev, Event::HarnessUpdated { harness: op.id });
         Ok(Revised { rev })
     }
@@ -324,6 +412,9 @@ impl Server {
     }
 
     fn task_create(&self, op: TaskCreate) -> Result<TaskCreated, Error> {
+        if let Some(session) = &op.session {
+            nonempty("a session id", &session.0)?;
+        }
         let workspace = {
             let state = lock(&self.state);
             if let Some(parent) = &op.parent {
@@ -351,10 +442,12 @@ impl Server {
             state: op.state,
             checkout: op.checkout,
             harness: op.harness,
+            session: op.session,
             directory: directory.to_string_lossy().to_string(),
             branch,
             focused_at: None,
             ended_at: tasks::ended_at(op.state, now()),
+            archived_at: None,
             rev: 0,
         })?;
         self.publish_task(&state, &row);
@@ -374,6 +467,9 @@ impl Server {
         }
         let effect = apply_move(&mut row, op.state, now());
         let rev = state.store.save_task(&mut row)?;
+        if reopening {
+            state.forget_agent(&row.id);
+        }
         if effect == MoveEffect::StopProcesses {
             state.watchers.remove(&row.id);
             if let Some(terminal) = state.agent_terminal(&row.id)
@@ -386,39 +482,110 @@ impl Server {
         Ok(Revised { rev })
     }
 
-    fn task_focus(&self, op: TaskFocus) -> Result<Revised, Error> {
+    fn task_rename(&self, op: TaskRename) -> Result<Revised, Error> {
+        nonempty("a task title", &op.title)?;
         let mut state = lock(&self.state);
         let mut row = state.store.task(&op.task)?;
-        if !row.state.is_live() {
-            return Ok(Revised { rev: row.rev });
-        }
-        self.watch_checkout(&mut state, &row)?;
-        if row.focused_at.is_some() {
-            return Ok(Revised { rev: row.rev });
-        }
-        let slot = self.start_agent(&mut state, &row)?;
-        row.focused_at = Some(now());
+        row.title = op.title;
         let rev = state.store.save_task(&mut row)?;
-        if let Some(AgentSlot::Running { terminal, .. }) = state.agents.insert(row.id.clone(), slot)
-            && let Err(error) = terminal.forget()
-        {
-            report!("forget the previous agent terminal of {}: {error}", row.id);
-        }
         self.publish_task(&state, &row);
         Ok(Revised { rev })
     }
 
-    fn start_agent(&self, state: &mut State, row: &TaskRow) -> Result<AgentSlot, Error> {
-        let Some(harness) = state.store.harness(&row.harness)? else {
-            return Ok(AgentSlot::HarnessUnknown);
-        };
-        let program = harness.argv.first().expect("harness.set rejects an empty argv");
-        if which::which(program).is_err() {
-            return Ok(AgentSlot::HarnessNotInstalled { install: harness.install });
+    fn task_set_session(&self, op: TaskSetSession) -> Result<Revised, Error> {
+        nonempty("a session id", &op.session.0)?;
+        let mut state = lock(&self.state);
+        let mut row = state.store.task(&op.task)?;
+        row.session = Some(op.session);
+        row.focused_at = None;
+        let rev = state.store.save_task(&mut row)?;
+        state.forget_agent(&row.id);
+        self.publish_task(&state, &row);
+        Ok(Revised { rev })
+    }
+
+    fn task_archive(&self, op: TaskArchive) -> Result<Revised, Error> {
+        let mut state = lock(&self.state);
+        let mut row = state.store.task(&op.task)?;
+        if row.state.is_live() {
+            return Err(Error::conflict(format!("{} is live; end it before archiving it", row.id)));
         }
+        row.archived_at = Some(now());
+        let rev = state.store.save_task(&mut row)?;
+        self.publish_task(&state, &row);
+        Ok(Revised { rev })
+    }
+
+    /// The login shell runs outside the state lock, so a slow profile stalls no other op; the task is read again
+    /// after it, in case another focus or a move landed meanwhile.
+    fn task_focus(&self, op: TaskFocus) -> Result<Revised, Error> {
+        let (directory, harness) = {
+            let mut state = lock(&self.state);
+            let row = state.store.task(&op.task)?;
+            if !row.state.is_live() {
+                return Ok(Revised { rev: row.rev });
+            }
+            self.watch_checkout(&mut state, &row)?;
+            if row.focused_at.is_some() {
+                return Ok(Revised { rev: row.rev });
+            }
+            (PathBuf::from(&row.directory), state.store.harness(&row.harness)?)
+        };
+        let started = match harness {
+            Some(harness) => Some((harness, login::resolve(&directory)?)),
+            None => None,
+        };
+        let mut state = lock(&self.state);
+        let mut row = state.store.task(&op.task)?;
+        if !row.state.is_live() || row.focused_at.is_some() {
+            return Ok(Revised { rev: row.rev });
+        }
+        let slot = match started {
+            Some((harness, env)) => self.start_agent(&mut state, &mut row, harness, env)?,
+            None => AgentSlot::HarnessUnknown,
+        };
+        if matches!(slot, AgentSlot::Running { .. }) {
+            row.focused_at = Some(now());
+        }
+        let rev = state.store.save_task(&mut row)?;
+        state.agents.insert(row.id.clone(), slot);
+        self.publish_task(&state, &row);
+        Ok(Revised { rev })
+    }
+
+    /// Looks the program up on the agent's own PATH, so a harness counts as installed exactly when its agent can run.
+    fn start_agent(
+        &self,
+        state: &mut State,
+        row: &mut TaskRow,
+        harness: Harness,
+        mut env: Vec<(String, String)>,
+    ) -> Result<AgentSlot, Error> {
+        let directory = PathBuf::from(&row.directory);
+        let (program, args) = harness.argv.split_first().expect("harness.set rejects an empty argv");
+        let Ok(program) = which::which_in(program, login::search_path(&env), &directory) else {
+            return Ok(AgentSlot::HarnessNotInstalled { install: harness.install });
+        };
+        let session_args = if row.session.is_some() { &harness.resume } else { &harness.start };
+        if session_args.iter().any(|arg| arg.contains(SESSION)) {
+            row.session.get_or_insert_with(|| SessionId(uuid::Uuid::new_v4().to_string()));
+        }
+        let session = row.session.as_ref().map(|session| session.0.as_str()).unwrap_or_default();
+        let argv = std::iter::once(program.to_string_lossy().into_owned())
+            .chain(args.iter().cloned())
+            .chain(session_args.iter().map(|arg| arg.replace(SESSION, session)))
+            .collect();
+        env.extend(
+            [
+                (ENV_TASK, row.id.0.as_str()),
+                (ENV_SERVER, self.name.as_str()),
+                ("TERM", "xterm-256color"),
+                ("COLORTERM", "truecolor"),
+            ]
+            .map(|(key, value)| (key.to_string(), value.to_string())),
+        );
         let id = PtyId::random();
-        let env = [(ENV_TASK, row.id.0.as_str()), (ENV_SERVER, self.name.as_str())];
-        self.host.spawn(&id, &harness.argv, Path::new(&row.directory), &env)?;
+        self.host.spawn(&id, argv, &directory, env)?;
         state.store.record_terminal(&TerminalRow { id: id.clone(), task: row.id.clone() })?;
         Ok(self.adopt(&row.id, id, true))
     }
@@ -580,11 +747,19 @@ impl Server {
         Ok(Revised { rev })
     }
 
+    fn saw(&self, client: &str) {
+        if let Err(error) = lock(&self.state).store.client_seen(client, now()) {
+            report!("record when {client} was seen: {error}");
+        }
+    }
+
     pub(crate) fn client_connected(&self, client: &str) {
+        self.saw(client);
         *lock(&self.clients).entry(client.to_string()).or_default() += 1;
     }
 
     pub(crate) fn client_disconnected(&self, client: &str) {
+        self.saw(client);
         {
             let mut clients = lock(&self.clients);
             let count = clients.get_mut(client).expect("every disconnect follows a connect");

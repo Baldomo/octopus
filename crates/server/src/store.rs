@@ -4,7 +4,7 @@ use std::path::Path;
 use octopus_proto::Error;
 use octopus_proto::device::{DeviceKey, PublicKey};
 use octopus_proto::types::{
-    BrowserId, BrowserPanel, Checkout, PtyId, TaskId, TaskState, Workspace, WorkspaceId, from_wire, to_wire,
+    BrowserId, BrowserPanel, Checkout, PtyId, SessionId, TaskId, TaskState, Workspace, WorkspaceId, from_wire, to_wire,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
@@ -45,6 +45,16 @@ CREATE TABLE IF NOT EXISTS device (id INTEGER PRIMARY KEY CHECK (id = 0), pkcs8 
 CREATE TABLE IF NOT EXISTS clients (name TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE);
 ";
 
+/// Columns added to a table after it was first created, which a store gains on its first open by a build that has
+/// them.
+const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
+    ("tasks", "archived_at", "INTEGER"),
+    ("tasks", "session", "TEXT"),
+    ("clients", "seen_at", "INTEGER"),
+    ("harnesses", "start", "TEXT NOT NULL DEFAULT '[]'"),
+    ("harnesses", "resume", "TEXT NOT NULL DEFAULT '[]'"),
+];
+
 /// A task's agent terminal, the one panel a task has.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TerminalRow {
@@ -61,16 +71,20 @@ pub struct TaskRow {
     pub state: TaskState,
     pub checkout: Checkout,
     pub harness: String,
+    pub session: Option<SessionId>,
     pub directory: String,
     pub branch: Option<String>,
     pub focused_at: Option<i64>,
     pub ended_at: Option<i64>,
+    pub archived_at: Option<i64>,
     pub rev: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Harness {
     pub argv: Vec<String>,
+    pub start: Vec<String>,
+    pub resume: Vec<String>,
     pub install: String,
     pub hooks: bool,
 }
@@ -114,12 +128,28 @@ fn task_row(row: &Row) -> rusqlite::Result<TaskRow> {
         state: wire_column(row, "state")?,
         checkout: wire_column(row, "checkout")?,
         harness: row.get("harness")?,
+        session: row.get::<_, Option<String>>("session")?.map(SessionId),
         directory: row.get("directory")?,
         branch: row.get("branch")?,
         focused_at: row.get("focused_at")?,
         ended_at: row.get("ended_at")?,
+        archived_at: row.get("archived_at")?,
         rev: row.get::<_, i64>("rev")?.cast_unsigned(),
     })
+}
+
+fn add_missing_columns(db: &Connection) -> rusqlite::Result<()> {
+    for (table, column, kind) in ADDED_COLUMNS {
+        let present: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+            [table, column],
+            |row| row.get(0),
+        )?;
+        if !present {
+            db.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"), [])?;
+        }
+    }
+    Ok(())
 }
 
 fn workspace_row(row: &Row) -> rusqlite::Result<Workspace> {
@@ -132,6 +162,7 @@ impl Store {
         owner_only(path).map_err(|error| Error::internal(format!("{}: {error}", path.display())))?;
         let db = Connection::open(path).map_err(Error::internal)?;
         db.execute_batch(SCHEMA).map_err(Error::internal)?;
+        add_missing_columns(&db).map_err(Error::internal)?;
         Ok(Self { db })
     }
 
@@ -181,6 +212,22 @@ impl Store {
             0 => Err(Error::not_found(format!("a paired client named {name}"))),
             _ => Ok(()),
         }
+    }
+
+    /// Every pinned client's name, with when one of its connections last opened or closed.
+    pub fn clients(&self) -> Result<Vec<(String, Option<i64>)>, Error> {
+        let mut statement =
+            self.db.prepare("SELECT name, seen_at FROM clients ORDER BY name").map_err(Error::internal)?;
+        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?))).map_err(Error::internal)?;
+        rows.collect::<Result<_, _>>().map_err(Error::internal)
+    }
+
+    /// A name no client paired under, such as a local socket client's, is seen by nobody.
+    pub fn client_seen(&self, name: &str, at: i64) -> Result<(), Error> {
+        self.db
+            .execute("UPDATE clients SET seen_at = ?2 WHERE name = ?1", params![name, at])
+            .map(drop)
+            .map_err(Error::internal)
     }
 
     pub fn client_pinned_to(&self, key: &PublicKey) -> Result<Option<String>, Error> {
@@ -234,13 +281,78 @@ impl Store {
             .ok_or_else(|| Error::not_found(id))
     }
 
+    pub fn rename_workspace(&mut self, id: &WorkspaceId, name: &str) -> Result<(Workspace, u64), Error> {
+        let tx = self.db.transaction().map_err(Error::internal)?;
+        let taken: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM workspaces WHERE name = ?1 AND id != ?2)",
+                params![name, id.0],
+                |row| row.get(0),
+            )
+            .map_err(Error::internal)?;
+        if taken {
+            return Err(Error::conflict(format!("a workspace named {name} exists")));
+        }
+        let workspace = tx
+            .query_row("UPDATE workspaces SET name = ?2 WHERE id = ?1 RETURNING *", params![id.0, name], workspace_row)
+            .optional()
+            .map_err(Error::internal)?
+            .ok_or_else(|| Error::not_found(id))?;
+        let rev = bump_rev(&tx)?;
+        tx.commit().map_err(Error::internal)?;
+        Ok((workspace, rev))
+    }
+
+    pub fn workspace_tasks(&self, id: &WorkspaceId) -> Result<Vec<TaskRow>, Error> {
+        let mut statement =
+            self.db.prepare("SELECT * FROM tasks WHERE workspace = ?1 ORDER BY rowid").map_err(Error::internal)?;
+        let rows = statement.query_map([&id.0], task_row).map_err(Error::internal)?;
+        rows.collect::<Result<_, _>>().map_err(Error::internal)
+    }
+
+    /// Deletes the workspace with its tasks and their terminal and browser rows. Each task of another workspace
+    /// whose parent goes becomes a root task at a rev of its own, below the removal's.
+    pub fn remove_workspace(&mut self, id: &WorkspaceId) -> Result<(Vec<TaskRow>, u64), Error> {
+        let tx = self.db.transaction().map_err(Error::internal)?;
+        let orphans: Vec<String> = tx
+            .prepare(
+                "SELECT id FROM tasks WHERE workspace != ?1
+                 AND parent IN (SELECT id FROM tasks WHERE workspace = ?1) ORDER BY rowid",
+            )
+            .and_then(|mut statement| statement.query_map([&id.0], |row| row.get(0))?.collect())
+            .map_err(Error::internal)?;
+        let mut rerooted = Vec::new();
+        for orphan in orphans {
+            let rev = bump_rev(&tx)?;
+            let row = tx
+                .query_row(
+                    "UPDATE tasks SET parent = NULL, rev = ?2 WHERE id = ?1 RETURNING *",
+                    params![orphan, rev.cast_signed()],
+                    task_row,
+                )
+                .map_err(Error::internal)?;
+            rerooted.push(row);
+        }
+        let in_workspace = "task IN (SELECT id FROM tasks WHERE workspace = ?1)";
+        for table in ["terminals", "browsers"] {
+            tx.execute(&format!("DELETE FROM {table} WHERE {in_workspace}"), [&id.0]).map_err(Error::internal)?;
+        }
+        tx.execute("DELETE FROM tasks WHERE workspace = ?1", [&id.0]).map_err(Error::internal)?;
+        tx.execute("DELETE FROM workspaces WHERE id = ?1", [&id.0]).map_err(Error::internal)?;
+        let rev = bump_rev(&tx)?;
+        tx.commit().map_err(Error::internal)?;
+        Ok((rerooted, rev))
+    }
+
     pub fn set_harness(&mut self, id: &str, harness: &Harness) -> Result<u64, Error> {
-        let argv = serde_json::to_string(&harness.argv).map_err(Error::internal)?;
+        let json = |args: &Vec<String>| serde_json::to_string(args).map_err(Error::internal);
+        let (argv, start, resume) = (json(&harness.argv)?, json(&harness.start)?, json(&harness.resume)?);
         let tx = self.db.transaction().map_err(Error::internal)?;
         tx.execute(
-            "INSERT INTO harnesses (id, argv, install, hooks) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(id) DO UPDATE SET argv = excluded.argv, install = excluded.install, hooks = excluded.hooks",
-            params![id, argv, harness.install, harness.hooks],
+            "INSERT INTO harnesses (id, argv, start, resume, install, hooks) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET argv = excluded.argv, start = excluded.start, resume = excluded.resume,
+             install = excluded.install, hooks = excluded.hooks",
+            params![id, argv, start, resume, harness.install, harness.hooks],
         )
         .map_err(Error::internal)?;
         let rev = bump_rev(&tx)?;
@@ -249,15 +361,16 @@ impl Store {
     }
 
     pub fn harness(&self, id: &str) -> Result<Option<Harness>, Error> {
-        let row: Option<(String, String, bool)> = self
+        let row: Option<([String; 3], String, bool)> = self
             .db
-            .query_row("SELECT argv, install, hooks FROM harnesses WHERE id = ?1", [id], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            .query_row("SELECT argv, start, resume, install, hooks FROM harnesses WHERE id = ?1", [id], |row| {
+                Ok(([row.get(0)?, row.get(1)?, row.get(2)?], row.get(3)?, row.get(4)?))
             })
             .optional()
             .map_err(Error::internal)?;
-        row.map(|(argv, install, hooks)| {
-            Ok(Harness { argv: serde_json::from_str(&argv).map_err(Error::internal)?, install, hooks })
+        row.map(|([argv, start, resume], install, hooks)| {
+            let args = |json: &str| serde_json::from_str(json).map_err(Error::internal);
+            Ok(Harness { argv: args(&argv)?, start: args(&start)?, resume: args(&resume)?, install, hooks })
         })
         .transpose()
     }
@@ -266,8 +379,8 @@ impl Store {
         let tx = self.db.transaction().map_err(Error::internal)?;
         row.rev = bump_rev(&tx)?;
         tx.execute(
-            "INSERT INTO tasks (id, workspace, parent, title, state, checkout, harness, directory, branch, focused_at, ended_at, rev)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO tasks (id, workspace, parent, title, state, checkout, harness, session, directory, branch, focused_at, ended_at, archived_at, rev)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 row.id.0,
                 row.workspace.0,
@@ -276,10 +389,12 @@ impl Store {
                 to_wire(&row.state),
                 to_wire(&row.checkout),
                 row.harness,
+                row.session.as_ref().map(|session| &session.0),
                 row.directory,
                 row.branch,
                 row.focused_at,
                 row.ended_at,
+                row.archived_at,
                 row.rev.cast_signed()
             ],
         )
@@ -315,8 +430,18 @@ impl Store {
         let tx = self.db.transaction().map_err(Error::internal)?;
         row.rev = bump_rev(&tx)?;
         tx.execute(
-            "UPDATE tasks SET state = ?2, focused_at = ?3, ended_at = ?4, rev = ?5 WHERE id = ?1",
-            params![row.id.0, to_wire(&row.state), row.focused_at, row.ended_at, row.rev.cast_signed()],
+            "UPDATE tasks SET title = ?2, state = ?3, session = ?4, focused_at = ?5, ended_at = ?6, archived_at = ?7,
+             rev = ?8 WHERE id = ?1",
+            params![
+                row.id.0,
+                row.title,
+                to_wire(&row.state),
+                row.session.as_ref().map(|session| &session.0),
+                row.focused_at,
+                row.ended_at,
+                row.archived_at,
+                row.rev.cast_signed()
+            ],
         )
         .map_err(Error::internal)?;
         tx.commit().map_err(Error::internal)?;
@@ -427,5 +552,31 @@ impl Store {
         }
         tx.commit().map_err(Error::internal)?;
         Ok(kept)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_store_from_an_earlier_build_gains_the_columns_added_since() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("store.db");
+        let earlier = Connection::open(&path).expect("open");
+        earlier
+            .execute_batch(
+                "CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, parent TEXT, title TEXT NOT NULL,
+                 state TEXT NOT NULL, checkout TEXT NOT NULL, harness TEXT NOT NULL, directory TEXT NOT NULL,
+                 branch TEXT, focused_at INTEGER, ended_at INTEGER, rev INTEGER NOT NULL);
+                 INSERT INTO tasks VALUES ('tsk_1', 'wsp_1', NULL, 't', 'pinned', 'root', 'h', '/w', NULL, NULL, NULL, 1);
+                 CREATE TABLE clients (name TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE);",
+            )
+            .expect("an earlier schema");
+        drop(earlier);
+        let store = Store::open(&path).expect("open the earlier store");
+        let task = store.task(&TaskId("tsk_1".into())).expect("its task");
+        assert_eq!((task.archived_at, task.session), (None, None));
+        assert_eq!(store.clients().expect("clients"), []);
     }
 }

@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use octopus_client::cache::{Cache, PushEffect};
 use octopus_client::servers::{Address, Server, Servers};
 use octopus_client::{CallError, Connection, Identity};
-use octopus_proto::ops::SessionSync;
+use octopus_proto::ops::{SessionSync, WorkspaceRename};
 use octopus_proto::{Event, Op, Push};
 use serde::Serialize;
 use tauri::AppHandle;
@@ -31,7 +31,11 @@ const FILES_BATCH: Duration = Duration::from_millis(100);
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 pub struct ServerView {
     pub name: String,
+    /// The QUIC endpoint as host:port; none for a server on the local socket.
+    pub endpoint: Option<String>,
     pub reachable: bool,
+    /// When `reachable` last changed, in milliseconds since 1970.
+    pub since: i64,
     /// The round trip of the connection's newest heartbeat.
     pub rtt_ms: Option<u32>,
     pub problem: Option<String>,
@@ -55,6 +59,14 @@ struct Link {
     address: Address,
     connection: Option<Arc<Connection>>,
     problem: Option<String>,
+    since: i64,
+    supervisor: tauri::async_runtime::JoinHandle<()>,
+}
+
+impl Drop for Link {
+    fn drop(&mut self) {
+        self.supervisor.abort();
+    }
 }
 
 #[derive(Default)]
@@ -65,10 +77,9 @@ struct State {
     files_changed: BTreeMap<TaskRef, BTreeSet<String>>,
 }
 
-impl State {
-    fn link(&mut self, server: &str) -> &mut Link {
-        self.links.get_mut(server).expect("supervise lists a server before its session runs")
-    }
+fn now() -> i64 {
+    let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).expect("the clock reads after 1970");
+    i64::try_from(elapsed.as_millis()).expect("milliseconds since 1970 fit in i64")
 }
 
 pub struct Hub {
@@ -108,12 +119,11 @@ impl Hub {
         hub
     }
 
+    /// A link that goes aborts its supervisor at its next await, so a step it already started may find its link gone.
     fn supervise(self: &Arc<Self>, server: Server) {
-        let link = Link { address: server.address.clone(), connection: None, problem: None };
-        lock(&self.state).links.insert(server.name.clone(), link);
-        self.servers_changed.notify_one();
-        let hub = Arc::clone(self);
-        tauri::async_runtime::spawn(async move {
+        let mut state = lock(&self.state);
+        let (hub, name, address) = (Arc::clone(self), server.name.clone(), server.address.clone());
+        let supervisor = tauri::async_runtime::spawn(async move {
             loop {
                 let problem = match hub.session(&server).await {
                     Ok(closed) => closed,
@@ -123,6 +133,17 @@ impl Hub {
                 tokio::time::sleep(RECONNECT).await;
             }
         });
+        state.links.insert(name, Link { address, connection: None, problem: None, since: now(), supervisor });
+        self.servers_changed.notify_one();
+    }
+
+    /// Stops reaching the server and drops its tasks from the lists.
+    fn unsupervise(&self, server: &str) {
+        let mut state = lock(&self.state);
+        state.links.remove(server);
+        state.caches.remove(server);
+        self.model_changed.notify_one();
+        self.servers_changed.notify_one();
     }
 
     /// Runs one connection until it ends, keeping the server's cache current, and resolves to why it closed.
@@ -148,10 +169,13 @@ impl Hub {
         let since_rev = lock(&self.state).caches.get(server).map(|cache| cache.rev);
         let snapshot = connection.call(&SessionSync { since_rev }).await?;
         let mut state = lock(&self.state);
-        state.caches.insert(server.to_string(), Cache::from_snapshot(snapshot));
-        let link = state.link(server);
+        let Some(link) = state.links.get_mut(server) else { return Ok(()) };
+        if link.connection.is_none() {
+            link.since = now();
+        }
         link.connection = Some(Arc::clone(connection));
         link.problem = None;
+        state.caches.insert(server.to_string(), Cache::from_snapshot(snapshot));
         self.model_changed.notify_one();
         self.servers_changed.notify_one();
         Ok(())
@@ -165,7 +189,7 @@ impl Hub {
             self.files_changed.notify_one();
             return;
         }
-        let cache = state.caches.get_mut(server).expect("a session resyncs before it applies pushes");
+        let Some(cache) = state.caches.get_mut(server) else { return };
         if cache.apply(&push) == PushEffect::Applied {
             self.model_changed.notify_one();
         }
@@ -173,8 +197,10 @@ impl Hub {
 
     fn lost(&self, server: &str, problem: String) {
         let mut state = lock(&self.state);
-        let link = state.link(server);
-        link.connection = None;
+        let Some(link) = state.links.get_mut(server) else { return };
+        if link.connection.take().is_some() {
+            link.since = now();
+        }
         link.problem = Some(problem);
         self.servers_changed.notify_one();
     }
@@ -201,6 +227,60 @@ impl Hub {
         }
         Servers::remember(server.clone())?;
         self.supervise(server);
+        Ok(())
+    }
+
+    /// Lists the server under a new name and reaches it afresh under that name.
+    pub fn rename_server(self: &Arc<Self>, from: &str, to: &str) -> anyhow::Result<()> {
+        if lock(&self.state).links.contains_key(to) {
+            anyhow::bail!("a server named {to} is already in the list");
+        }
+        let mut servers = Servers::load()?;
+        let renamed = servers.rename(from, to)?;
+        servers.save()?;
+        self.unsupervise(from);
+        self.supervise(renamed);
+        Ok(())
+    }
+
+    pub fn forget_server(&self, server: &str) -> anyhow::Result<()> {
+        let mut servers = Servers::load()?;
+        servers.forget(server)?;
+        servers.save()?;
+        self.unsupervise(server);
+        Ok(())
+    }
+
+    /// Renames the section's workspace on every server of the section, refusing before any rename when a server
+    /// would split the section: one that is unreachable, or one that already holds a workspace named `to`.
+    pub async fn rename_section(&self, from: &str, to: &str) -> Result<(), String> {
+        let renames = {
+            let state = lock(&self.state);
+            let mut renames = Vec::new();
+            for (server, cache) in &state.caches {
+                let Some(workspace) = cache.workspaces.values().find(|workspace| workspace.name == from) else {
+                    continue;
+                };
+                if state.links.get(server).is_none_or(|link| link.connection.is_none()) {
+                    return Err(format!("{server} is unreachable, so {from} would split"));
+                }
+                if from != to && cache.workspaces.values().any(|workspace| workspace.name == to) {
+                    return Err(format!("{server} already has {to}"));
+                }
+                renames.push((server.clone(), WorkspaceRename { workspace: workspace.id.clone(), name: to.into() }));
+            }
+            renames
+        };
+        let mut renamed = Vec::new();
+        for (server, rename) in renames {
+            if let Err(error) = self.call(&server, &rename).await {
+                return Err(match renamed.as_slice() {
+                    [] => error,
+                    done => format!("{error}; {} already renamed {from} to {to}", done.join(", ")),
+                });
+            }
+            renamed.push(server);
+        }
         Ok(())
     }
 
@@ -235,7 +315,12 @@ impl Hub {
             .iter()
             .map(|(name, link)| ServerView {
                 name: name.clone(),
+                endpoint: match &link.address {
+                    Address::Local { .. } => None,
+                    Address::Quic { endpoint, .. } => Some(endpoint.clone()),
+                },
                 reachable: link.connection.is_some(),
+                since: link.since,
                 rtt_ms: link
                     .connection
                     .as_ref()

@@ -11,13 +11,16 @@ import type {
   Model,
   Navigated,
   NewTask,
+  Offer,
   OnScreen,
+  PairedClient,
   PtyId,
   ServerView,
   TaskRef,
   TaskState,
   Ui,
   UiAct,
+  WorkspaceId,
 } from "./generated";
 
 export const backend = {
@@ -27,8 +30,21 @@ export const backend = {
   titleBarDoubleClick: () => invoke<void>("title_bar_double_click"),
   /** Resolves to the paired server's name. */
   serverPair: (address: string, code: string) => invoke<string>("server_pair", { address, code }),
+  serverOffer: (server: string) => invoke<Offer>("server_offer", { server }),
+  serverClients: (server: string) => invoke<PairedClient[]>("server_clients", { server }),
+  serverRevoke: (server: string, client: string) => invoke<void>("server_revoke", { server, client }),
+  /** Renames the server in this client's list only. */
+  serverRename: (server: string, name: string) => invoke<void>("server_rename", { server, name }),
+  /** Forgets the server in this client's list only. */
+  serverForget: (server: string) => invoke<void>("server_forget", { server }),
+  workspaceAdd: (server: string, name: string, root: string) => invoke<void>("workspace_add", { server, name, root }),
+  workspaceRemove: (server: string, workspace: WorkspaceId) => invoke<void>("workspace_remove", { server, workspace }),
+  /** Renames the section's workspace on every server of the section. */
+  sectionRename: (section: string, name: string) => invoke<void>("section_rename", { section, name }),
   taskFocus: (at: TaskRef) => invoke<void>("task_focus", { at }),
   taskMove: (at: TaskRef, state: TaskState) => invoke<void>("task_move", { at, state }),
+  taskRename: (at: TaskRef, title: string) => invoke<void>("task_rename", { at, title }),
+  taskArchive: (at: TaskRef) => invoke<void>("task_archive", { at }),
   /** Resolves to the created task's key. */
   taskCreate: (task: NewTask) => invoke<string>("task_create", { task }),
   termAttach: (at: TaskRef, pty: PtyId, output: Channel<ArrayBuffer>) =>

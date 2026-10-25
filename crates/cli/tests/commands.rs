@@ -16,7 +16,7 @@ fn a_call_missing_flags_names_all_of_them_at_once() {
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        "error: missing required flags: --parent (pass none for a root task), --state, --checkout, --harness\n"
+        "error: missing required flags: --parent (pass none for a root task), --state, --checkout, --harness, --session (pass none for a fresh session)\n"
     );
 }
 

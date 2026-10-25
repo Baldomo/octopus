@@ -34,8 +34,12 @@ impl Cache {
             Event::TaskUpdated { task } => {
                 self.tasks.insert(task.id.clone(), task.as_ref().clone());
             }
-            Event::WorkspaceAdded { workspace } => {
+            Event::WorkspaceUpdated { workspace } => {
                 self.workspaces.insert(workspace.id.clone(), workspace.clone());
+            }
+            Event::WorkspaceRemoved { workspace } => {
+                self.workspaces.remove(workspace);
+                self.tasks.retain(|_, task| task.workspace != *workspace);
             }
             Event::HarnessUpdated { .. } => {}
         }

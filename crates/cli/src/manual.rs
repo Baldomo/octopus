@@ -53,6 +53,19 @@ pub enum ServerVerb {
         #[arg(long)]
         socket: PathBuf,
     },
+    /// Call a listed server by another name in this client's list; the server is not told.
+    Rename {
+        #[arg(long, help = SERVER_HELP)]
+        server: String,
+        /// The name to call the server by.
+        #[arg(long)]
+        name: String,
+    },
+    /// Drop a server and its pin from this client's list; the server keeps this client paired.
+    Forget {
+        #[arg(long, help = SERVER_HELP)]
+        server: String,
+    },
 }
 
 impl ServerVerb {
@@ -78,6 +91,18 @@ impl ServerVerb {
             }
             Self::Add { name, socket } => {
                 print(&Servers::remember(KnownServer { name, address: Address::Local { socket } })?)
+            }
+            Self::Rename { server, name } => {
+                let mut servers = Servers::load()?;
+                servers.rename(&server, &name)?;
+                servers.save()?;
+                print(&servers)
+            }
+            Self::Forget { server } => {
+                let mut servers = Servers::load()?;
+                servers.forget(&server)?;
+                servers.save()?;
+                print(&servers)
             }
         }
     }

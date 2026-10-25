@@ -44,6 +44,8 @@ const [ui, setUi] = createStore<Ui>({
   float: { x: 0, y: FLOAT_TOP, width: 0, height: 0 },
 });
 export { ui };
+/** The section the next new-task form opens on; the sidebar and the form share the float layer. */
+export const [newTaskSection, setNewTaskSection] = createSignal<string | null>(null);
 /** A drag lives inside the layer it started in. */
 export const [dragged, setDragged] = createSignal<Dragged | null>(null);
 

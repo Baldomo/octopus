@@ -6,7 +6,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
 use crate::schema::{self, Fields};
-use crate::types::{Task, TaskId, Workspace};
+use crate::types::{Task, TaskId, Workspace, WorkspaceId};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -61,8 +61,11 @@ pub struct Push {
 pub enum Event {
     #[serde(rename = "task.updated")]
     TaskUpdated { task: Box<Task> },
-    #[serde(rename = "workspace.added")]
-    WorkspaceAdded { workspace: Workspace },
+    #[serde(rename = "workspace.updated")]
+    WorkspaceUpdated { workspace: Workspace },
+    /// Its tasks are gone with it.
+    #[serde(rename = "workspace.removed")]
+    WorkspaceRemoved { workspace: WorkspaceId },
     #[serde(rename = "harness.updated")]
     HarnessUpdated { harness: String },
     #[serde(rename = "file.changed")]

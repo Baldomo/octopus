@@ -81,6 +81,23 @@ impl Arg for Option<TaskId> {
     }
 }
 
+/// The conversation a task's agent resumes, as its harness names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(transparent)]
+pub struct SessionId(pub String);
+
+impl Arg for SessionId {
+    fn shape() -> Shape {
+        Shape::Text
+    }
+}
+
+impl Arg for Option<SessionId> {
+    fn shape() -> Shape {
+        Shape::Nullable { value: Box::new(Shape::Text), none: "a fresh session" }
+    }
+}
+
 impl Arg for Option<u64> {
     fn shape() -> Shape {
         Shape::Nullable { value: Box::new(Shape::Integer), none: "none" }
@@ -226,10 +243,12 @@ pub struct Task {
     pub state: TaskState,
     pub checkout: Checkout,
     pub harness: String,
+    pub session: Option<SessionId>,
     pub directory: String,
     pub branch: Option<String>,
     pub focused_at: Option<i64>,
     pub ended_at: Option<i64>,
+    pub archived_at: Option<i64>,
     pub rev: u64,
     pub agent: Agent,
     pub panels: Vec<Panel>,

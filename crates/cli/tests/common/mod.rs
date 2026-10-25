@@ -63,22 +63,36 @@ pub struct ServerProcess {
     pub socket: PathBuf,
 }
 
+fn server_run(dir: &Path) -> Command {
+    let mut command = Command::new(OCTOPUS);
+    command
+        .args(["server", "run", "--name", SERVER, "--socket"])
+        .arg(address(dir, "server.sock"))
+        .arg("--store")
+        .arg(dir.join("store.db"))
+        .arg("--worktrees")
+        .arg(dir.join("worktrees"))
+        .arg("--terminal-host")
+        .arg(address(dir, "host.sock"))
+        .args(["--quic", "127.0.0.1:0"]);
+    command
+}
+
 impl ServerProcess {
     pub async fn run(dir: &Path) -> Self {
-        let socket = address(dir, "server.sock");
-        let child = Command::new(OCTOPUS)
-            .args(["server", "run", "--name", SERVER, "--socket"])
-            .arg(&socket)
-            .arg("--store")
-            .arg(dir.join("store.db"))
-            .arg("--worktrees")
-            .arg(dir.join("worktrees"))
-            .arg("--terminal-host")
-            .arg(address(dir, "host.sock"))
-            .args(["--quic", "127.0.0.1:0"])
-            .spawn()
-            .expect("spawn octopus server run");
-        let process = Self { child, socket };
+        Self::serve(dir, server_run(dir)).await
+    }
+
+    /// Started the way launchd starts a service: a bare PATH, and `home` as the account's home.
+    pub async fn launched(dir: &Path, home: &Path) -> Self {
+        let mut command = server_run(dir);
+        command.env_clear().env("HOME", home).env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin");
+        Self::serve(dir, command).await
+    }
+
+    async fn serve(dir: &Path, mut command: Command) -> Self {
+        let child = command.spawn().expect("spawn octopus server run");
+        let process = Self { child, socket: address(dir, "server.sock") };
         let probe = identity("probe");
         eventually("the server answering", async || Connection::connect(&local(&process.socket), &probe).await.is_ok())
             .await;
@@ -133,6 +147,7 @@ pub async fn create(connection: &Connection, workspace: &WorkspaceId, checkout: 
         state: TaskState::Pinned,
         checkout,
         harness: harness.into(),
+        session: None,
     };
     connection.call(&create).await.expect("task.create").task
 }
@@ -141,7 +156,8 @@ pub async fn task(connection: &Connection, task: &TaskId) -> Task {
     connection.call(&TaskGet { task: task.clone() }).await.expect("task.get")
 }
 
-pub async fn read_until(stream: &mut (impl AsyncRead + Unpin), needle: &str) {
+/// Everything the stream sent until `needle` arrived.
+pub async fn read_until(stream: &mut (impl AsyncRead + Unpin), needle: &str) -> String {
     let mut seen = Vec::new();
     let mut buffer = [0u8; 4096];
     let found = tokio::time::timeout(Duration::from_secs(5), async {
@@ -153,6 +169,7 @@ pub async fn read_until(stream: &mut (impl AsyncRead + Unpin), needle: &str) {
     })
     .await;
     assert!(found.is_ok(), "no {needle:?} within 5 s; saw {:?}", String::from_utf8_lossy(&seen));
+    String::from_utf8_lossy(&seen).into_owned()
 }
 
 pub async fn eventually(what: &str, mut check: impl AsyncFnMut() -> bool) {

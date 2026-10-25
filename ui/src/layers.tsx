@@ -9,6 +9,7 @@ import { NewTask } from "./NewTask";
 import { PairServer } from "./PairServer";
 import { Palette } from "./Palette";
 import { Sidebar } from "./Sidebar";
+import { holdsKeyboard } from "./SidebarControls";
 import { act, floatSurface, model, openView, serverView, showModal, showSidebar, sinkSurface, ui } from "./state";
 import { StatusBar } from "./StatusBar";
 import { TerminalStacks } from "./Terminals";
@@ -21,18 +22,18 @@ addEventListener("resize", () => setWebview({ width: innerWidth, height: innerHe
 
 /**
  * A surface of the float layer: while it is `out`, and until its exit transition ends, the app covers its rect with
- * the float layer, and a modal surface holds the keyboard. It is `shown` from the moment the webview holds it, so it
+ * the float layer, and a surface holds the keyboard while it is `modal`. It is `shown` from the moment the webview holds it, so it
  * never draws where the window cannot show it yet.
  */
-function floating(surface: { name: string; modal: boolean; out: () => boolean }) {
+function floating(surface: { name: string; modal: () => boolean; out: () => boolean }) {
   const { name, modal, out } = surface;
   /** The surface's far corner in this webview's coordinates. */
   const [reach, setReach] = createSignal<{ right: number; bottom: number } | null>(null);
   const ref = (element: HTMLElement) => {
     createEffect(
       on(
-        () => [out(), ui.viewport.width, ui.viewport.height] as const,
-        ([isOut]) => {
+        () => [out(), modal(), ui.viewport.width, ui.viewport.height] as const,
+        ([isOut, isModal]) => {
           const rect = {
             x: element.offsetLeft,
             y: element.offsetTop,
@@ -40,7 +41,7 @@ function floating(surface: { name: string; modal: boolean; out: () => boolean })
             height: element.offsetHeight,
           };
           setReach({ right: rect.x + rect.width, bottom: rect.y + rect.height - FLOAT_TOP });
-          if (isOut) floatSurface(name, rect, modal);
+          if (isOut) floatSurface(name, rect, isModal);
           else if (element.getAnimations().length === 0) sinkSurface(name);
         },
       ),
@@ -126,7 +127,7 @@ export function Docked() {
 }
 
 function Modal(props: { modal: ModalName }) {
-  const scrim = floating({ name: "modal", modal: true, out: () => true });
+  const scrim = floating({ name: "modal", modal: () => true, out: () => true });
   return (
     <>
       <div class="scrim" ref={scrim.ref} onClick={() => showModal(null)} />
@@ -152,7 +153,7 @@ function Modal(props: { modal: ModalName }) {
  * layer from a corner that never moves to cover whatever floats.
  */
 export function Floating() {
-  const sidebar = floating({ name: "sidebar", modal: false, out: () => ui.sidebar });
+  const sidebar = floating({ name: "sidebar", modal: holdsKeyboard, out: () => ui.sidebar });
   return (
     <div class="float-layer" style={{ width: `${ui.viewport.width}px`, height: `${ui.viewport.height}px` }}>
       <Sidebar ref={sidebar.ref} shown={sidebar.shown()} />
