@@ -1,12 +1,13 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use octopus_client::servers::Server;
+use octopus_client::servers;
 use octopus_proto::ops::{
-    Entry, FileList, FileSearch, FileWrite, Match, TaskCreate, TaskFocus, TaskMove, TermResize, TermTakeLock,
+    BrowserOpen, Entry, FileList, FileSearch, FileWrite, Match, TaskCreate, TaskFocus, TaskMove, TermResize,
+    TermTakeLock,
 };
-use octopus_proto::types::{Checkout, PtyId, Stream, TaskId, TaskState, WorkspaceId};
+use octopus_proto::pairing::Code;
+use octopus_proto::types::{BrowserId, BrowserTarget, Checkout, PtyId, Stream, TaskId, TaskState, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, State};
@@ -32,7 +33,7 @@ pub struct Boot {
 
 #[tauri::command]
 pub fn boot(hub: Hubbed) -> Boot {
-    Boot { me: hub.me.clone(), servers: hub.servers(), model: hub.model() }
+    Boot { me: hub.me.name.clone(), servers: hub.servers(), model: hub.model() }
 }
 
 #[tauri::command]
@@ -40,9 +41,14 @@ pub fn ready(launched: State<Launched>) {
     eprintln!("octopus app: interactive {} ms after launch", launched.0.elapsed().as_millis());
 }
 
+/// Pairs with the server at `address` using the code it offered, lists it, and resolves to its name.
 #[tauri::command]
-pub async fn server_add(hub: Hubbed<'_>, name: String, socket: PathBuf) -> Result<(), String> {
-    hub.add(Server { name, socket }).map_err(|error| format!("{error:#}"))
+pub async fn server_pair(hub: Hubbed<'_>, address: String, code: Code) -> Result<String, String> {
+    hub.refuse_listed(&address).map_err(|error| format!("{error:#}"))?;
+    let server = servers::pair(&address, &code, &hub.me).await.map_err(|error| format!("{error:#}"))?;
+    let name = server.name.clone();
+    hub.add(server).map_err(|error| format!("{error:#}"))?;
+    Ok(name)
 }
 
 #[tauri::command]
@@ -133,27 +139,48 @@ pub async fn file_search(hub: Hubbed<'_>, at: TaskRef, pattern: String) -> Resul
     Ok(hub.call(&at.server, &FileSearch { task: at.task, pattern }).await?.matches)
 }
 
+/// Shows `url` in a browser panel of the task on its server, which pushes the panel to every client; resolves to
+/// the panel's id.
 #[tauri::command]
 pub async fn browser_open(
-    app: AppHandle,
-    browsers: State<'_, Browsers>,
-    panel: String,
+    hub: Hubbed<'_>,
+    at: TaskRef,
+    panel: BrowserTarget,
     url: String,
+) -> Result<BrowserId, String> {
+    Ok(hub.call(&at.server, &BrowserOpen { task: at.task, url, panel }).await?.panel)
+}
+
+/// Renders the panel's server `url` on this client; resolves to the port it reaches through a tunnel, if any.
+#[tauri::command]
+pub async fn browser_show(
+    app: AppHandle,
+    hub: Hubbed<'_>,
+    browsers: State<'_, Browsers>,
+    at: TaskRef,
+    panel: BrowserId,
+    url: String,
+) -> Result<Option<u16>, String> {
+    browsers.show(&app, &hub, &at, &panel, &url).await
+}
+
+#[tauri::command]
+pub async fn browser_place(
+    browsers: State<'_, Browsers>,
+    at: TaskRef,
+    panel: BrowserId,
+    bounds: Option<Bounds>,
 ) -> Result<(), String> {
-    browsers.open(&app, &panel, &url)
+    browsers.place(&at, &panel, bounds)
 }
 
 #[tauri::command]
-pub async fn browser_place(browsers: State<'_, Browsers>, panel: String, bounds: Option<Bounds>) -> Result<(), String> {
-    browsers.place(&panel, bounds)
+pub async fn browser_go(browsers: State<'_, Browsers>, at: TaskRef, panel: BrowserId, go: Go) -> Result<(), String> {
+    browsers.go(&at, &panel, go)
 }
 
+/// Closes the panel's webview on this client; the panel stays on its server.
 #[tauri::command]
-pub async fn browser_go(browsers: State<'_, Browsers>, panel: String, go: Go) -> Result<(), String> {
-    browsers.go(&panel, go)
-}
-
-#[tauri::command]
-pub async fn browser_close(browsers: State<'_, Browsers>, panel: String) -> Result<(), String> {
-    browsers.close(&panel)
+pub async fn browser_close(browsers: State<'_, Browsers>, at: TaskRef, panel: BrowserId) -> Result<(), String> {
+    browsers.close(&at, &panel).await
 }

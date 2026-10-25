@@ -6,6 +6,8 @@ export type WorkspaceId = string;
 
 export type PtyId = string;
 
+export type BrowserId = string;
+
 export type TaskState = "pinned" | "temporary" | "completed" | "cancelled";
 
 export type Checkout = "root" | "worktree";
@@ -16,7 +18,9 @@ export type Agent = { "kind": "not_started" } | { "kind": "running", status: Age
 
 export type Panel = { id: PtyId, name: string, running: boolean, lock_holder: string | null, };
 
-export type Task = { id: TaskId, workspace: WorkspaceId, parent: TaskId | null, title: string, state: TaskState, checkout: Checkout, harness: string, directory: string, branch: string | null, focused_at: number | null, ended_at: number | null, rev: number, agent: Agent, panels: Array<Panel>, };
+export type BrowserPanel = { panel: BrowserId, url: string, };
+
+export type Task = { id: TaskId, workspace: WorkspaceId, parent: TaskId | null, title: string, state: TaskState, checkout: Checkout, harness: string, directory: string, branch: string | null, focused_at: number | null, ended_at: number | null, rev: number, agent: Agent, panels: Array<Panel>, browsers: Array<BrowserPanel>, };
 
 export type EntryKind = "file" | "directory";
 
@@ -62,7 +66,7 @@ next: TaskState, live: boolean, glyph: Glyph, task: Task, };
 
 export type ServerView = { name: string, reachable: boolean, 
 /**
- * The round trip of the newest `workspace.list`, which stands in for a ping.
+ * The round trip of the connection's newest heartbeat.
  */
 rtt_ms: number | null, problem: string | null, };
 
@@ -86,12 +90,18 @@ export type Bounds = { x: number, y: number, width: number, height: number, };
 
 export type Go = "back" | "forward" | "reload";
 
-export type Navigated = { panel: string, url: string, };
+export type Navigated = { 
+/**
+ * The task's key.
+ */
+task: string, panel: BrowserId, url: string, };
 
 export const TASK_STATES = ["pinned","temporary","completed","cancelled"] as const;
 
 export const CHECKOUTS = ["root","worktree"] as const;
 
 export const AGENT_PANEL = "agent" as const;
+
+export const NEW_BROWSER_PANEL = "new" as const;
 
 export const EVENTS = {"browserNavigated":"browser_navigated","filesChanged":"files_changed","model":"model","servers":"servers"} as const;

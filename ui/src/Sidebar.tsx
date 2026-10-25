@@ -106,7 +106,7 @@ export function Sidebar() {
             </span>
           )}
         </For>
-        <span class="chip add" onClick={commands.addServer.run}>
+        <span class="chip add" onClick={commands.pairServer.run}>
           + server
         </span>
       </div>

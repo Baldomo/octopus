@@ -1,13 +1,17 @@
 #![allow(dead_code)]
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Arc;
 use std::time::Duration;
 
-use octopus_client::Connection;
+use octopus_client::servers::Address;
+use octopus_client::{Connection, Identity};
+use octopus_proto::device::DeviceKey;
 use octopus_proto::local::Listener;
 use octopus_proto::ops::{TaskCreate, TaskGet, WorkspaceAdd};
+use octopus_proto::quic;
 use octopus_proto::types::{Checkout, Task, TaskId, TaskState, WorkspaceId};
 use octopus_server::{Server, TerminalHost, serve};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -18,6 +22,8 @@ pub const OCTOPUS: &str = env!("CARGO_BIN_EXE_octopus");
 pub struct Running {
     pub server: Arc<Server>,
     pub socket: PathBuf,
+    /// Where QUIC listens, on loopback.
+    pub quic: SocketAddr,
 }
 
 /// The local socket `name` of the test in `dir`; on Windows a named pipe, which lives outside the filesystem.
@@ -36,8 +42,19 @@ pub fn start(dir: &Path, socket: &str, host: &str) -> Running {
     let socket = address(dir, socket);
     let host = TerminalHost { program: OCTOPUS.into(), address: address(dir, host) };
     let server = Server::open(SERVER, &dir.join("store.db"), &dir.join("worktrees"), &host).expect("open server");
-    tokio::spawn(serve(Arc::clone(&server), Listener::bind(&socket).expect("bind")));
-    Running { server, socket }
+    let remote = quic::listen(([127, 0, 0, 1], 0).into(), server.device()).expect("listen on QUIC");
+    let quic = remote.local_addr().expect("the QUIC address");
+    tokio::spawn(serve(Arc::clone(&server), Listener::bind(&socket).expect("bind"), remote));
+    Running { server, socket, quic }
+}
+
+/// A client named `name` with a key of its own.
+pub fn identity(name: &str) -> Identity {
+    Identity { name: name.into(), key: DeviceKey::generate() }
+}
+
+pub fn local(socket: &Path) -> Address {
+    Address::Local { socket: socket.to_path_buf() }
 }
 
 /// An `octopus server run` process, killed when dropped.
@@ -58,15 +75,18 @@ impl ServerProcess {
             .arg(dir.join("worktrees"))
             .arg("--terminal-host")
             .arg(address(dir, "host.sock"))
+            .args(["--quic", "127.0.0.1:0"])
             .spawn()
             .expect("spawn octopus server run");
         let process = Self { child, socket };
-        eventually("the server answering", async || Connection::connect(&process.socket, "probe").await.is_ok()).await;
+        let probe = identity("probe");
+        eventually("the server answering", async || Connection::connect(&local(&process.socket), &probe).await.is_ok())
+            .await;
         process
     }
 
     pub async fn connect(&self, client: &str) -> Connection {
-        Connection::connect(&self.socket, client).await.expect("connect")
+        Connection::connect(&local(&self.socket), &identity(client)).await.expect("connect")
     }
 
     /// Ends the process the way a crash does, with no chance to clean up.
@@ -84,7 +104,7 @@ impl Drop for ServerProcess {
 }
 
 pub async fn connect(running: &Running, client: &str) -> Connection {
-    Connection::connect(&running.socket, client).await.expect("connect")
+    Connection::connect(&local(&running.socket), &identity(client)).await.expect("connect")
 }
 
 pub fn shell_var(var: &str) -> String {

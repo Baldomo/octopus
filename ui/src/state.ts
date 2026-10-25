@@ -6,7 +6,7 @@ const VIEWS = ["task", "tasks"] as const;
 const SURFACES = ["files", "browser"] as const;
 export type View = (typeof VIEWS)[number];
 export type Surface = (typeof SURFACES)[number];
-export type Overlay = "palette" | "new-task" | "add-server";
+export type Overlay = "palette" | "new-task" | "pair-server";
 export type Dragged = { key: string; at: TaskRef; section: string; state: TaskState };
 
 /** How many opened tasks stay mounted, so switching among them skips the mount. */

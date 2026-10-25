@@ -1,5 +1,6 @@
 //! Registers `octopus server run` with the platform's user service manager, started at login.
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -8,11 +9,13 @@ use serde::Serialize;
 
 #[derive(clap::Args)]
 pub struct ServerRun {
+    /// The server's name, which agents in its terminals see as OCTOPUS_SERVER.
     #[arg(long)]
     pub name: String,
     /// A Unix socket path, or a named pipe `\\.\pipe\<name>` on Windows.
     #[arg(long)]
     pub socket: PathBuf,
+    /// The SQLite file the server keeps its state in.
     #[arg(long)]
     pub store: PathBuf,
     /// Where task worktrees live: <worktrees>/<workspace>/<task>.
@@ -22,6 +25,9 @@ pub struct ServerRun {
     /// started if nothing answers there.
     #[arg(long)]
     pub terminal_host: PathBuf,
+    /// The UDP address QUIC listens on for clients on other machines, e.g. 0.0.0.0:7300.
+    #[arg(long)]
+    pub quic: SocketAddr,
 }
 
 impl ServerRun {
@@ -35,13 +41,14 @@ impl ServerRun {
         Ok(())
     }
 
-    fn flags(&self) -> [(&'static str, String); 5] {
+    fn flags(&self) -> [(&'static str, String); 6] {
         [
             ("--name", self.name.clone()),
             ("--socket", self.socket.display().to_string()),
             ("--store", self.store.display().to_string()),
             ("--worktrees", self.worktrees.display().to_string()),
             ("--terminal-host", self.terminal_host.display().to_string()),
+            ("--quic", self.quic.to_string()),
         ]
     }
 }
@@ -81,6 +88,7 @@ impl Service {
             store: absolute(run.store)?,
             worktrees: absolute(run.worktrees)?,
             terminal_host: absolute(run.terminal_host)?,
+            quic: run.quic,
         };
         run.check()?;
         let service = Self { id, run, program: absolute(program)?, log: absolute(log)? };
@@ -361,11 +369,12 @@ mod tests {
             store: "/var/octopus/store.db".into(),
             worktrees: "/var/octopus/worktrees".into(),
             terminal_host: "/run/octopus/host.sock".into(),
+            quic: ([0, 0, 0, 0], 7300).into(),
         };
         Service { id: "octopus-mac-mini".into(), run, program: "/opt/octopus/bin/octopus".into(), log: log.into() }
     }
 
-    const ARGV: [&str; 13] = [
+    const ARGV: [&str; 15] = [
         "/opt/octopus/bin/octopus",
         "server",
         "run",
@@ -379,6 +388,8 @@ mod tests {
         "/var/octopus/worktrees",
         "--terminal-host",
         "/run/octopus/host.sock",
+        "--quic",
+        "0.0.0.0:7300",
     ];
 
     #[test]
@@ -434,9 +445,9 @@ WantedBy=default.target
     fn a_service_takes_one_safe_name_and_distinct_sockets() {
         assert_eq!(service_id("mac-mini.2").expect("id"), "octopus-mac-mini.2");
         assert!(service_id("mac mini").is_err());
-        let ServerRun { name, socket, store, worktrees, .. } = service("/log").run;
+        let ServerRun { name, socket, store, worktrees, quic, .. } = service("/log").run;
         let host = PathBuf::from(socket.display().to_string().to_uppercase());
-        let shared = ServerRun { name, terminal_host: host, socket, store, worktrees };
+        let shared = ServerRun { name, terminal_host: host, socket, store, worktrees, quic };
         assert!(shared.check().is_err(), "one socket, spelled in another case");
     }
 }

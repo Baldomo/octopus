@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use octopus_client::cache::{Cache, PushEffect};
-use octopus_client::servers::{Server, Servers};
-use octopus_client::{CallError, Connection};
-use octopus_proto::ops::{SessionSync, WorkspaceList};
+use octopus_client::servers::{Address, Server, Servers};
+use octopus_client::{CallError, Connection, Identity};
+use octopus_proto::ops::SessionSync;
 use octopus_proto::{Event, Op, Push};
 use serde::Serialize;
 use tauri::AppHandle;
@@ -23,8 +23,8 @@ pub const SERVERS_EVENT: &str = "servers";
 pub const FILES_CHANGED_EVENT: &str = "files_changed";
 
 const RECONNECT: Duration = Duration::from_secs(1);
-const PING: Duration = Duration::from_secs(2);
-const PING_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often a server's chip and status bar pick up its connection's newest round trip.
+const RTT_REFRESH: Duration = Duration::from_secs(2);
 const MODEL_FRAME: Duration = Duration::from_millis(16);
 const FILES_BATCH: Duration = Duration::from_millis(100);
 
@@ -32,7 +32,7 @@ const FILES_BATCH: Duration = Duration::from_millis(100);
 pub struct ServerView {
     pub name: String,
     pub reachable: bool,
-    /// The round trip of the newest `workspace.list`, which stands in for a ping.
+    /// The round trip of the connection's newest heartbeat.
     pub rtt_ms: Option<u32>,
     pub problem: Option<String>,
 }
@@ -51,10 +51,9 @@ pub struct FilesChanged {
     pub paths: Vec<String>,
 }
 
-#[derive(Default)]
 struct Link {
+    address: Address,
     connection: Option<Arc<Connection>>,
-    rtt: Option<Duration>,
     problem: Option<String>,
 }
 
@@ -73,7 +72,7 @@ impl State {
 }
 
 pub struct Hub {
-    pub me: String,
+    pub me: Identity,
     app: AppHandle,
     state: Mutex<State>,
     versions: AtomicU64,
@@ -90,7 +89,7 @@ pub fn failure(server: &str, error: CallError) -> String {
 }
 
 impl Hub {
-    pub fn start(app: AppHandle, me: String, servers: Vec<Server>) -> Arc<Self> {
+    pub fn start(app: AppHandle, me: Identity, servers: Vec<Server>) -> Arc<Self> {
         let hub = Arc::new(Self {
             me,
             app,
@@ -110,13 +109,14 @@ impl Hub {
     }
 
     fn supervise(self: &Arc<Self>, server: Server) {
-        lock(&self.state).links.insert(server.name.clone(), Link::default());
+        let link = Link { address: server.address.clone(), connection: None, problem: None };
+        lock(&self.state).links.insert(server.name.clone(), link);
         self.servers_changed.notify_one();
         let hub = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
             loop {
                 let problem = match hub.session(&server).await {
-                    Ok(()) => "the server closed the connection".to_string(),
+                    Ok(closed) => closed,
                     Err(error) => format!("{error:#}"),
                 };
                 hub.lost(&server.name, problem);
@@ -125,21 +125,21 @@ impl Hub {
         });
     }
 
-    /// Runs one connection until it ends, keeping the server's cache current.
-    async fn session(&self, server: &Server) -> anyhow::Result<()> {
-        let connection = Arc::new(Connection::connect(&server.socket, &self.me).await?);
+    /// Runs one connection until it ends, keeping the server's cache current, and resolves to why it closed.
+    async fn session(&self, server: &Server) -> anyhow::Result<String> {
+        let connection = Arc::new(Connection::connect(&server.address, &self.me).await?);
         let mut pushes = connection.pushes();
         self.resync(&server.name, &connection).await?;
-        let mut ping = tokio::time::interval(PING);
+        let mut refresh = tokio::time::interval(RTT_REFRESH);
         loop {
             tokio::select! {
-                () = connection.closed() => return Ok(()),
+                closed = connection.closed() => return Ok(closed),
                 push = pushes.recv() => match push {
                     Ok(push) => self.apply(&server.name, push),
                     Err(RecvError::Lagged(_)) => self.resync(&server.name, &connection).await?,
                     Err(RecvError::Closed) => unreachable!("the connection owns its push sender"),
                 },
-                _ = ping.tick() => self.ping(&server.name, &connection).await?,
+                _ = refresh.tick() => self.servers_changed.notify_one(),
             }
         }
     }
@@ -153,14 +153,6 @@ impl Hub {
         link.connection = Some(Arc::clone(connection));
         link.problem = None;
         self.model_changed.notify_one();
-        self.servers_changed.notify_one();
-        Ok(())
-    }
-
-    async fn ping(&self, server: &str, connection: &Connection) -> anyhow::Result<()> {
-        let started = Instant::now();
-        tokio::time::timeout(PING_TIMEOUT, connection.call(&WorkspaceList {})).await??;
-        lock(&self.state).link(server).rtt = Some(started.elapsed());
         self.servers_changed.notify_one();
         Ok(())
     }
@@ -183,25 +175,42 @@ impl Hub {
         let mut state = lock(&self.state);
         let link = state.link(server);
         link.connection = None;
-        link.rtt = None;
         link.problem = Some(problem);
         self.servers_changed.notify_one();
     }
 
+    /// Re-pairing a listed server, to pin a new key, is the CLI's `pairing accept`; this window keeps the pins it
+    /// started with.
+    pub fn refuse_listed(&self, endpoint: &str) -> anyhow::Result<()> {
+        let state = lock(&self.state);
+        let listed = state
+            .links
+            .iter()
+            .find(|(_, link)| matches!(&link.address, Address::Quic { endpoint: listed, .. } if listed == endpoint));
+        match listed {
+            Some((name, _)) => {
+                anyhow::bail!("{endpoint} is listed as {name}; re-pair it with `octopus pairing accept`")
+            }
+            None => Ok(()),
+        }
+    }
+
     pub fn add(self: &Arc<Self>, server: Server) -> anyhow::Result<()> {
-        let mut servers = Servers::load()?;
-        let supervised = lock(&self.state).links.contains_key(&server.name);
-        if supervised || servers.servers.iter().any(|known| known.name == server.name) {
+        if lock(&self.state).links.contains_key(&server.name) {
             anyhow::bail!("a server named {} is already in the list", server.name);
         }
-        servers.add(server.clone())?;
-        servers.save()?;
+        Servers::remember(server.clone())?;
         self.supervise(server);
         Ok(())
     }
 
     pub async fn call<O: Op>(&self, server: &str, op: &O) -> Result<O::Ok, String> {
         self.connection(server)?.call(op).await.map_err(|error| failure(server, error))
+    }
+
+    /// Whether the server runs on another machine, where its ports are reached through a tunnel.
+    pub fn is_another_machine(&self, server: &str) -> bool {
+        lock(&self.state).links.get(server).is_some_and(|link| link.address.is_another_machine())
     }
 
     pub fn connection(&self, server: &str) -> Result<Arc<Connection>, String> {
@@ -227,7 +236,11 @@ impl Hub {
             .map(|(name, link)| ServerView {
                 name: name.clone(),
                 reachable: link.connection.is_some(),
-                rtt_ms: link.rtt.map(|rtt| saturate(rtt.as_millis())),
+                rtt_ms: link
+                    .connection
+                    .as_ref()
+                    .and_then(|connection| connection.rtt())
+                    .map(|rtt| saturate(rtt.as_millis())),
                 problem: link.problem.clone(),
             })
             .collect()

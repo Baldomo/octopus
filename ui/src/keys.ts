@@ -13,7 +13,7 @@ export const commands = {
   newTask: { label: "New task", key: "N", run: () => setOverlay("new-task") },
   search: { label: "Search tasks, files, commands", key: "K", run: () => setOverlay("palette") },
   sidebar: { label: "Toggle sidebar", key: "\\", run: () => setSidebar(!sidebar()) },
-  addServer: { label: "Add a server", key: null, run: () => setOverlay("add-server") },
+  pairServer: { label: "Pair a server", key: null, run: () => setOverlay("pair-server") },
 } satisfies Record<string, Command>;
 
 /** On Linux and Windows, ⌘ is Ctrl+Shift. */

@@ -1,10 +1,15 @@
+pub mod device;
 pub mod frames;
 pub mod local;
 pub mod ops;
+pub mod pairing;
+pub mod quic;
+pub mod schema;
 pub mod types;
 
 pub use frames::{
     Error, Event, Op, Outcome, Push, Request, Response, ServerFrame, StreamHeader, line, parse_args, parse_request,
+    request_from,
 };
 
 #[cfg(test)]
@@ -19,6 +24,27 @@ mod tests {
             error,
             Error::MissingField { fields: vec!["parent".into(), "state".into(), "checkout".into(), "harness".into()] }
         );
+    }
+
+    schema::record!(Page { url: String, panel: String });
+    schema::record!(Nested { task: types::TaskId, page: Page, tabs: Vec<Page> });
+
+    impl Op for Nested {
+        const NAME: &'static str = "test.nested";
+        const DOC: &'static str = "";
+        type Ok = ();
+    }
+
+    #[test]
+    fn nested_args_name_every_missing_and_undeclared_field_at_every_depth() {
+        let args = json!({"page": {"url": "u"}, "tabs": [{"url": "u", "panel": "p"}, {"panel": "p"}]});
+        let missing = parse_args::<Nested>(&args).unwrap_err();
+        assert_eq!(
+            missing,
+            Error::MissingField { fields: vec!["task".into(), "page.panel".into(), "tabs[1].url".into()] }
+        );
+        let args = json!({"task": "tsk_1", "page": {"url": "u", "panel": "p", "zoom": 2}, "tabs": []});
+        assert_eq!(parse_args::<Nested>(&args).unwrap_err(), Error::UnknownField { fields: vec!["page.zoom".into()] });
     }
 
     #[test]
@@ -48,7 +74,8 @@ mod tests {
         assert_eq!(file.name(), "file:tsk_1/src/main.rs");
         assert_eq!(Stream::parse(&file.name()), Some(file));
         assert_eq!(Stream::parse("pty:pty_2"), Some(Stream::Pty(PtyId("pty_2".into()))));
-        assert_eq!(Stream::parse("tunnel:5173"), None);
+        assert_eq!(Stream::parse(&Stream::Tunnel(5173).name()), Some(Stream::Tunnel(5173)));
+        assert_eq!(Stream::parse("tunnel:http"), None);
     }
 
     #[test]

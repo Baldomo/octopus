@@ -5,31 +5,22 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde::Serialize;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
-use crate::frames::{Outcome, line};
+use crate::frames::{Outcome, REPLY_BUFFER, decode_reply, line};
 
 pub use platform::{Accepted, BlockingStream, Listener, Stream, connect, connect_blocking};
 
 const ACCEPT_RETRY: Duration = Duration::from_millis(100);
-/// A 1-byte buffer leaves every byte after the reply line in the stream.
-const REPLY_BUFFER: usize = 1;
 
 fn already_served(address: &Path) -> io::Error {
     io::Error::new(io::ErrorKind::AddrInUse, format!("{} is already served", address.display()))
 }
 
-fn decode(reply: &[u8]) -> io::Result<Outcome> {
-    serde_json::from_slice(reply).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
-}
-
 /// Connects, sends `header` as one line, and reads the one `Outcome` line that answers it.
 pub async fn open(address: &Path, header: &impl Serialize) -> io::Result<(Stream, Outcome)> {
     let mut stream = connect(address).await?;
-    stream.write_all(line(header).as_bytes()).await?;
-    let mut reply = Vec::new();
-    tokio::io::BufReader::with_capacity(REPLY_BUFFER, &mut stream).read_until(b'\n', &mut reply).await?;
-    Ok((stream, decode(&reply)?))
+    let outcome = crate::frames::open(&mut stream, header).await?;
+    Ok((stream, outcome))
 }
 
 pub fn open_blocking(address: &Path, header: &impl Serialize) -> io::Result<(BlockingStream, Outcome)> {
@@ -37,7 +28,7 @@ pub fn open_blocking(address: &Path, header: &impl Serialize) -> io::Result<(Blo
     stream.write_all(line(header).as_bytes())?;
     let mut reply = Vec::new();
     io::BufReader::with_capacity(REPLY_BUFFER, &mut stream).read_until(b'\n', &mut reply)?;
-    Ok((stream, decode(&reply)?))
+    Ok((stream, decode_reply(&reply)?))
 }
 
 /// Hands every connection to `serve`; a failed accept is one peer's failure, so it is reported and the

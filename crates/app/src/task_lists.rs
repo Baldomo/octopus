@@ -208,6 +208,7 @@ pub(crate) mod tests {
             rev: 1,
             agent: Agent::NotStarted,
             panels: Vec::new(),
+            browsers: Vec::new(),
         }
     }
 

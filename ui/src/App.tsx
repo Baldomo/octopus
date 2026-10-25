@@ -1,5 +1,4 @@
 import { createEffect, createMemo, Match, on, Show, Switch } from "solid-js";
-import { AddServer } from "./AddServer";
 import { backend } from "./backend";
 import { Board } from "./Board";
 import { Browser, forgetBrowsersExcept } from "./Browser";
@@ -7,6 +6,7 @@ import { Files } from "./Files";
 import { forgetFilesExcept } from "./taskFiles";
 import { commands, hint } from "./keys";
 import { NewTask } from "./NewTask";
+import { PairServer } from "./PairServer";
 import { Palette } from "./Palette";
 import { Sidebar } from "./Sidebar";
 import {
@@ -86,8 +86,8 @@ export function App() {
         <Match when={overlay() === "new-task"}>
           <NewTask />
         </Match>
-        <Match when={overlay() === "add-server"}>
-          <AddServer />
+        <Match when={overlay() === "pair-server"}>
+          <PairServer />
         </Match>
       </Switch>
     </div>

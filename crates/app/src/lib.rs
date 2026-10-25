@@ -10,6 +10,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
 
 use anyhow::Context;
+use octopus_client::Identity;
 use octopus_client::servers::Servers;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, EventTarget, Manager, WebviewWindowBuilder};
@@ -50,12 +51,12 @@ fn open_window(app: &tauri::App) -> anyhow::Result<()> {
 pub fn run() -> anyhow::Result<()> {
     let launched = Instant::now();
     let servers = Servers::load()?.servers;
-    let me = gethostname::gethostname().to_string_lossy().into_owned();
+    let me = Identity::load()?;
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             commands::boot,
             commands::ready,
-            commands::server_add,
+            commands::server_pair,
             commands::task_focus,
             commands::task_move,
             commands::task_create,
@@ -69,6 +70,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::file_write,
             commands::file_search,
             commands::browser_open,
+            commands::browser_show,
             commands::browser_place,
             commands::browser_go,
             commands::browser_close,

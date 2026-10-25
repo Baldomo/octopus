@@ -1,9 +1,10 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { EVENTS } from "./generated";
+import { EVENTS, NEW_BROWSER_PANEL } from "./generated";
 import type {
   Boot,
   Bounds,
+  BrowserId,
   Entry,
   FilesChanged,
   Go,
@@ -20,7 +21,8 @@ import type {
 export const backend = {
   boot: () => invoke<Boot>("boot"),
   ready: () => invoke<void>("ready"),
-  serverAdd: (name: string, socket: string) => invoke<void>("server_add", { name, socket }),
+  /** Resolves to the paired server's name. */
+  serverPair: (address: string, code: string) => invoke<string>("server_pair", { address, code }),
   taskFocus: (at: TaskRef) => invoke<void>("task_focus", { at }),
   taskMove: (at: TaskRef, state: TaskState) => invoke<void>("task_move", { at, state }),
   /** Resolves to the created task's key. */
@@ -36,10 +38,17 @@ export const backend = {
   fileRead: (at: TaskRef, path: string) => invoke<string>("file_read", { at, path }),
   fileWrite: (at: TaskRef, path: string, content: string) => invoke<void>("file_write", { at, path, content }),
   fileSearch: (at: TaskRef, pattern: string) => invoke<Match[]>("file_search", { at, pattern }),
-  browserOpen: (panel: string, url: string) => invoke<void>("browser_open", { panel, url }),
-  browserPlace: (panel: string, bounds: Bounds | null) => invoke<void>("browser_place", { panel, bounds }),
-  browserGo: (panel: string, go: Go) => invoke<void>("browser_go", { panel, go }),
-  browserClose: (panel: string) => invoke<void>("browser_close", { panel }),
+  /** Resolves to the id of the panel that shows `url` on the task's server. */
+  browserOpen: (at: TaskRef, panel: BrowserId | typeof NEW_BROWSER_PANEL, url: string) =>
+    invoke<BrowserId>("browser_open", { at, panel, url }),
+  /** Resolves to the port the page reaches through a tunnel, if it does. */
+  browserShow: (at: TaskRef, panel: BrowserId, url: string) =>
+    invoke<number | null>("browser_show", { at, panel, url }),
+  browserPlace: (at: TaskRef, panel: BrowserId, bounds: Bounds | null) =>
+    invoke<void>("browser_place", { at, panel, bounds }),
+  browserGo: (at: TaskRef, panel: BrowserId, go: Go) => invoke<void>("browser_go", { at, panel, go }),
+  /** Closes the panel's webview on this client; the panel stays on its server. */
+  browserClose: (at: TaskRef, panel: BrowserId) => invoke<void>("browser_close", { at, panel }),
 };
 
 export const events = {

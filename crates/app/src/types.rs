@@ -2,7 +2,8 @@
 
 use octopus_proto::ops::{Entry, EntryKind, Match};
 use octopus_proto::types::{
-    AGENT_PANEL, Agent, AgentStatus, Checkout, Panel, PtyId, Task, TaskId, TaskState, WorkspaceId,
+    AGENT_PANEL, Agent, AgentStatus, BrowserId, BrowserPanel, Checkout, NEW_BROWSER_PANEL, Panel, PtyId, Task, TaskId,
+    TaskState, WorkspaceId,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -34,11 +35,13 @@ pub fn render() -> String {
         TaskId,
         WorkspaceId,
         PtyId,
+        BrowserId,
         TaskState,
         Checkout,
         AgentStatus,
         Agent,
         Panel,
+        BrowserPanel,
         Task,
         EntryKind,
         Entry,
@@ -64,6 +67,7 @@ pub fn render() -> String {
         constant("TASK_STATES", &TaskState::ALL),
         constant("CHECKOUTS", &Checkout::ALL),
         constant("AGENT_PANEL", &AGENT_PANEL),
+        constant("NEW_BROWSER_PANEL", &NEW_BROWSER_PANEL),
         constant(
             "EVENTS",
             &json!({

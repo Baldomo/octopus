@@ -1,7 +1,11 @@
+use std::io;
+
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
+use crate::schema::{self, Fields};
 use crate::types::{Task, TaskId, Workspace};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -72,14 +76,15 @@ pub enum ServerFrame {
     Push(Push),
 }
 
-/// The first line of a connection that carries one data stream. The server answers with one
-/// `Outcome` line, then the stream's bytes.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct StreamHeader {
-    pub open: String,
-    pub client: String,
-}
+schema::record!(
+    /// The first line of a data stream. The server answers with one `Outcome` line, then the stream's bytes.
+    StreamHeader {
+        /// The data stream's name, `<kind>:<key>`.
+        open: String,
+        /// The client's name, as on its control connection.
+        client: String,
+    }
+);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, thiserror::Error)]
 #[serde(tag = "code", rename_all = "snake_case", deny_unknown_fields)]
@@ -100,6 +105,10 @@ pub enum Error {
     Conflict { message: String },
     #[error("internal: {message}")]
     Internal { message: String },
+    #[error("this client is not paired with the server; pair it with a code first")]
+    Unpaired,
+    #[error("the pairing code is spent, expired, or another server's")]
+    CodeRefused,
 }
 
 impl Error {
@@ -120,9 +129,9 @@ impl Error {
     }
 }
 
-pub trait Op: Serialize + DeserializeOwned {
+pub trait Op: Fields + Serialize + DeserializeOwned {
     const NAME: &'static str;
-    const FIELDS: &'static [&'static str];
+    const DOC: &'static str;
     type Ok: Serialize + DeserializeOwned;
 }
 
@@ -133,26 +142,35 @@ pub fn line(frame: &impl Serialize) -> String {
     line
 }
 
-/// Parses an op's args, reporting every absent field at once and rejecting any undeclared one.
-pub fn parse_args<O: Op>(args: &Value) -> Result<O, Error> {
-    let Some(object) = args.as_object() else {
-        return Err(Error::invalid("args must be an object"));
-    };
-    let missing: Vec<String> =
-        O::FIELDS.iter().filter(|field| !object.contains_key(**field)).map(|field| field.to_string()).collect();
-    if !missing.is_empty() {
-        return Err(Error::MissingField { fields: missing });
-    }
-    let unknown: Vec<String> = object.keys().filter(|key| !O::FIELDS.contains(&key.as_str())).cloned().collect();
-    if !unknown.is_empty() {
-        return Err(Error::UnknownField { fields: unknown });
-    }
+/// Parses an op's args or a stream header, reporting every absent field at every depth at once and rejecting any
+/// undeclared one.
+pub fn parse_args<T: Fields + DeserializeOwned>(args: &Value) -> Result<T, Error> {
+    schema::check(T::fields(), args)?;
     serde_json::from_value(args.clone()).map_err(Error::invalid)
+}
+
+/// A 1-byte buffer leaves every byte after the reply line in the stream.
+pub(crate) const REPLY_BUFFER: usize = 1;
+
+pub(crate) fn decode_reply(reply: &[u8]) -> io::Result<Outcome> {
+    serde_json::from_slice(reply).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
+/// Sends `header` as one line and reads the one `Outcome` line that answers it, leaving every later byte unread.
+pub async fn open<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S, header: &impl Serialize) -> io::Result<Outcome> {
+    stream.write_all(line(header).as_bytes()).await?;
+    let mut reply = Vec::new();
+    BufReader::with_capacity(REPLY_BUFFER, stream).read_until(b'\n', &mut reply).await?;
+    decode_reply(&reply)
 }
 
 /// Parses one control request line, keeping its id when the line is JSON but not a request.
 pub fn parse_request(line: &str) -> Result<Request, (u64, Error)> {
-    let value: Value = serde_json::from_str(line).map_err(|error| (0, Error::invalid(error)))?;
+    request_from(serde_json::from_str(line).map_err(|error| (0, Error::invalid(error)))?)
+}
+
+/// A request from a line already parsed as JSON.
+pub fn request_from(value: Value) -> Result<Request, (u64, Error)> {
     let id = value.get("id").and_then(Value::as_u64).unwrap_or(0);
     serde_json::from_value(value).map_err(|error| (id, Error::invalid(error)))
 }

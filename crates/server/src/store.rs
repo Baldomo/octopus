@@ -1,8 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use octopus_proto::Error;
-use octopus_proto::types::{Checkout, PtyId, TaskId, TaskState, Workspace, WorkspaceId, from_wire, to_wire};
+use octopus_proto::device::{DeviceKey, PublicKey};
+use octopus_proto::types::{
+    BrowserId, BrowserPanel, Checkout, PtyId, TaskId, TaskState, Workspace, WorkspaceId, from_wire, to_wire,
+};
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use serde::de::DeserializeOwned;
@@ -32,6 +35,14 @@ CREATE TABLE IF NOT EXISTS terminals (
     task TEXT PRIMARY KEY REFERENCES tasks(id),
     id TEXT NOT NULL UNIQUE
 );
+CREATE TABLE IF NOT EXISTS browsers (
+    task TEXT NOT NULL REFERENCES tasks(id),
+    panel TEXT NOT NULL,
+    url TEXT NOT NULL,
+    PRIMARY KEY (task, panel)
+);
+CREATE TABLE IF NOT EXISTS device (id INTEGER PRIMARY KEY CHECK (id = 0), pkcs8 BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS clients (name TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE);
 ";
 
 /// A task's agent terminal, the one panel a task has.
@@ -62,6 +73,19 @@ pub struct Harness {
     pub argv: Vec<String>,
     pub install: String,
     pub hooks: bool,
+}
+
+#[cfg(unix)]
+fn owner_only(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    std::fs::OpenOptions::new().create(true).append(true).mode(0o600).open(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+}
+
+/// A Windows profile's files are its user's own.
+#[cfg(windows)]
+fn owner_only(_path: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 pub struct Store {
@@ -103,10 +127,67 @@ fn workspace_row(row: &Row) -> rusqlite::Result<Workspace> {
 }
 
 impl Store {
+    /// The store holds the server's private key, so only its owner may read it.
     pub fn open(path: &Path) -> Result<Self, Error> {
+        owner_only(path).map_err(|error| Error::internal(format!("{}: {error}", path.display())))?;
         let db = Connection::open(path).map_err(Error::internal)?;
         db.execute_batch(SCHEMA).map_err(Error::internal)?;
         Ok(Self { db })
+    }
+
+    /// The server's own key, made on the store's first open.
+    pub fn device_key(&mut self) -> Result<DeviceKey, Error> {
+        let tx = self.db.transaction().map_err(Error::internal)?;
+        let stored: Option<Vec<u8>> =
+            tx.query_row("SELECT pkcs8 FROM device", [], |row| row.get(0)).optional().map_err(Error::internal)?;
+        let key = match stored {
+            Some(pkcs8) => DeviceKey::from_pkcs8(&pkcs8).map_err(Error::internal)?,
+            None => {
+                let key = DeviceKey::generate();
+                tx.execute("INSERT INTO device (id, pkcs8) VALUES (0, ?1)", [key.pkcs8()]).map_err(Error::internal)?;
+                key
+            }
+        };
+        tx.commit().map_err(Error::internal)?;
+        Ok(key)
+    }
+
+    /// A name pinned to another device stays its, until `pairing.forget` lets it go.
+    pub fn refuse_namesake(&self, name: &str, key: &PublicKey) -> Result<(), Error> {
+        let holder: Option<String> = self
+            .db
+            .query_row("SELECT key FROM clients WHERE name = ?1", [name], |row| row.get(0))
+            .optional()
+            .map_err(Error::internal)?;
+        match holder {
+            Some(holder) if holder != key.to_string() => Err(Error::conflict(format!(
+                "the client name {name} is paired to another device's key; `pairing forget` it first"
+            ))),
+            _ => Ok(()),
+        }
+    }
+
+    /// Replaces the key's earlier pin, so a re-paired client keeps one.
+    pub fn pin_client(&mut self, name: &str, key: &PublicKey) -> Result<(), Error> {
+        let key = key.to_string();
+        let tx = self.db.transaction().map_err(Error::internal)?;
+        tx.execute("DELETE FROM clients WHERE key = ?1", [&key]).map_err(Error::internal)?;
+        tx.execute("INSERT INTO clients (name, key) VALUES (?1, ?2)", params![name, key]).map_err(Error::internal)?;
+        tx.commit().map_err(Error::internal)
+    }
+
+    pub fn forget_client(&mut self, name: &str) -> Result<(), Error> {
+        match self.db.execute("DELETE FROM clients WHERE name = ?1", [name]).map_err(Error::internal)? {
+            0 => Err(Error::not_found(format!("a paired client named {name}"))),
+            _ => Ok(()),
+        }
+    }
+
+    pub fn client_pinned_to(&self, key: &PublicKey) -> Result<Option<String>, Error> {
+        self.db
+            .query_row("SELECT name FROM clients WHERE key = ?1", [key.to_string()], |row| row.get(0))
+            .optional()
+            .map_err(Error::internal)
     }
 
     pub fn rev(&self) -> Result<u64, Error> {
@@ -255,6 +336,44 @@ impl Store {
             .optional()
             .map_err(Error::internal)?
             .ok_or_else(|| Error::not_found(id))?;
+        tx.commit().map_err(Error::internal)?;
+        Ok(row)
+    }
+
+    /// Every task's browser panels, each task's in the order they opened.
+    pub fn browsers(&self) -> Result<HashMap<TaskId, Vec<BrowserPanel>>, Error> {
+        let mut statement =
+            self.db.prepare("SELECT task, panel, url FROM browsers ORDER BY rowid").map_err(Error::internal)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((TaskId(row.get(0)?), BrowserPanel { panel: BrowserId(row.get(1)?), url: row.get(2)? }))
+            })
+            .map_err(Error::internal)?;
+        let mut browsers: HashMap<TaskId, Vec<BrowserPanel>> = HashMap::new();
+        for row in rows {
+            let (task, panel) = row.map_err(Error::internal)?;
+            browsers.entry(task).or_default().push(panel);
+        }
+        Ok(browsers)
+    }
+
+    /// Points the task's browser panel at `url`, adding the panel if it is new, and moves the task to a new rev.
+    pub fn show_page(&mut self, task: &TaskId, page: &BrowserPanel) -> Result<TaskRow, Error> {
+        let tx = self.db.transaction().map_err(Error::internal)?;
+        tx.execute(
+            "INSERT INTO browsers (task, panel, url) VALUES (?1, ?2, ?3)
+             ON CONFLICT(task, panel) DO UPDATE SET url = excluded.url",
+            params![task.0, page.panel.0, page.url],
+        )
+        .map_err(Error::internal)?;
+        let rev = bump_rev(&tx)?;
+        let row = tx
+            .query_row(
+                "UPDATE tasks SET rev = ?2 WHERE id = ?1 RETURNING *",
+                params![task.0, rev.cast_signed()],
+                task_row,
+            )
+            .map_err(Error::internal)?;
         tx.commit().map_err(Error::internal)?;
         Ok(row)
     }

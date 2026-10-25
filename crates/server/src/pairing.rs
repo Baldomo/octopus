@@ -1,0 +1,32 @@
+//! The one-time codes a server offers. A code pairs the first client that proves it, then is spent.
+
+use octopus_proto::device::PublicKey;
+use octopus_proto::ops::Offer;
+use octopus_proto::pairing::{Code, Proof, Side};
+
+const CODE_LIFETIME_MS: i64 = 10 * 60 * 1000;
+
+/// Kept in memory only: a server restart spends every code.
+#[derive(Default)]
+pub struct Offers(Vec<(Code, i64)>);
+
+impl Offers {
+    pub fn offer(&mut self, now: i64) -> Offer {
+        self.forget_expired(now);
+        let code = Code::random();
+        let expires_at = now + CODE_LIFETIME_MS;
+        self.0.push((code, expires_at));
+        Offer { code, expires_at }
+    }
+
+    /// Spends and returns the unexpired code the client's proof was made with.
+    pub fn redeem(&mut self, now: i64, proof: &Proof, server: &PublicKey, client: &PublicKey) -> Option<Code> {
+        self.forget_expired(now);
+        let spent = self.0.iter().position(|(code, _)| code.proves(proof, Side::Client, server, client))?;
+        Some(self.0.remove(spent).0)
+    }
+
+    fn forget_expired(&mut self, now: i64) {
+        self.0.retain(|(_, expires_at)| *expires_at > now);
+    }
+}

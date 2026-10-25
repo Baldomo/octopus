@@ -1,6 +1,8 @@
+mod browser;
 mod checkouts;
 mod files;
 mod listener;
+mod pairing;
 mod pty;
 mod service;
 mod store;
@@ -11,19 +13,23 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, Weak, mpsc};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use octopus_proto::device::{DeviceKey, PublicKey};
 use octopus_proto::ops::{
-    AgentReport, Entries, FileList, FileSearch, FileWrite, HarnessSet, Matches, Revised, SessionHello, SessionSync,
-    Snapshot, TaskCreate, TaskCreated, TaskFocus, TaskGet, TaskMove, TermResize, TermSend, TermTakeLock, Welcome,
-    WorkspaceAdd, WorkspaceCreated, WorkspaceList, Workspaces, Written,
+    AgentReport, BrowserOpen, Done, Entries, FileList, FileSearch, FileWrite, HarnessSet, Matches, Offer, Paired,
+    PairingForget, PairingOffer, PairingPair, Revised, SessionHello, SessionPing, SessionSync, Shown, Snapshot,
+    TaskCreate, TaskCreated, TaskFocus, TaskGet, TaskMove, TermResize, TermSend, TermTakeLock, Welcome, WorkspaceAdd,
+    WorkspaceCreated, WorkspaceList, Workspaces, Written,
 };
+use octopus_proto::pairing::Side;
 use octopus_proto::types::{
-    AGENT_PANEL, Agent, AgentStatus, Checkout, ENV_SERVER, ENV_TASK, Panel, PtyId, Task, TaskId,
+    AGENT_PANEL, Agent, AgentStatus, BrowserPanel, Checkout, ENV_SERVER, ENV_TASK, Panel, PtyId, Task, TaskId, web_page,
 };
 use octopus_proto::{Error, Event, Op, Outcome, Push, Request, parse_args};
 use tokio::sync::broadcast;
 
 pub use checkouts::WORKTREE_LIFETIME_MS;
 pub use listener::serve;
+use pairing::Offers;
 use service::{HostClient, Terminal};
 pub use service::{TerminalHost, run_terminal_host};
 use store::{Harness, Store, TaskRow, TerminalRow};
@@ -40,12 +46,16 @@ enum AgentSlot {
 struct State {
     store: Store,
     agents: HashMap<TaskId, AgentSlot>,
+    /// The store's browser panels, which every task view carries.
+    browsers: HashMap<TaskId, Vec<BrowserPanel>>,
     watchers: HashMap<TaskId, notify::RecommendedWatcher>,
 }
 
 pub struct Server {
     me: Weak<Server>,
     name: String,
+    device: DeviceKey,
+    offers: Mutex<Offers>,
     worktrees: PathBuf,
     host: Arc<HostClient>,
     state: Mutex<State>,
@@ -140,6 +150,7 @@ impl State {
             rev: row.rev,
             agent,
             panels: self.panels(&row.id),
+            browsers: self.browsers.get(&row.id).cloned().unwrap_or_default(),
         }
     }
 }
@@ -148,6 +159,8 @@ impl Server {
     /// Reattaches the hosted terminals the store records and ends the ones it doesn't.
     pub fn open(name: &str, store: &Path, worktrees: &Path, host: &TerminalHost) -> Result<Arc<Self>, Error> {
         let mut store = Store::open(store)?;
+        let device = store.device_key()?;
+        let browsers = store.browsers()?;
         let host = Arc::new(HostClient::reach_or_start(host)?);
         let mut hosted: HashMap<PtyId, bool> =
             host.list()?.into_iter().map(|hosted| (hosted.id, hosted.running)).collect();
@@ -157,9 +170,11 @@ impl Server {
         let server = Arc::new_cyclic(|me| Self {
             me: me.clone(),
             name: name.to_string(),
+            device,
+            offers: Mutex::default(),
             worktrees: worktrees.to_path_buf(),
             host,
-            state: Mutex::new(State { store, agents: HashMap::new(), watchers: HashMap::new() }),
+            state: Mutex::new(State { store, agents: HashMap::new(), browsers, watchers: HashMap::new() }),
             clients: Mutex::new(HashMap::new()),
             pushes,
             file_changes,
@@ -184,6 +199,28 @@ impl Server {
         Ok(server)
     }
 
+    /// The key this server proves to every client over QUIC.
+    pub fn device(&self) -> &DeviceKey {
+        &self.device
+    }
+
+    pub(crate) fn paired_name(&self, client: &PublicKey) -> Result<Option<String>, Error> {
+        lock(&self.state).store.client_pinned_to(client)
+    }
+
+    /// Pins the client's key under its name once it proves an unspent code.
+    pub(crate) fn pair(&self, client: &PublicKey, op: PairingPair) -> Result<Paired, Error> {
+        if op.client.is_empty() {
+            return Err(Error::invalid("a client name is non-empty"));
+        }
+        let server = self.device.public();
+        let mut state = lock(&self.state);
+        state.store.refuse_namesake(&op.client, client)?;
+        let code = lock(&self.offers).redeem(now(), &op.proof, &server, client).ok_or(Error::CodeRefused)?;
+        state.store.pin_client(&op.client, client)?;
+        Ok(Paired { server: self.name.clone(), proof: code.prove(Side::Server, &server, client) })
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<Push> {
         self.pushes.subscribe()
     }
@@ -193,6 +230,11 @@ impl Server {
         match request.op.as_str() {
             SessionHello::NAME => call::<SessionHello>(args, |_| self.welcome()),
             SessionSync::NAME => call::<SessionSync>(args, |_| self.snapshot()),
+            SessionPing::NAME => call::<SessionPing>(args, |_| Ok(Done {})),
+            PairingForget::NAME => {
+                call::<PairingForget>(args, |op| lock(&self.state).store.forget_client(&op.client).map(|()| Done {}))
+            }
+            PairingOffer::NAME => call::<PairingOffer>(args, |_| Ok::<Offer, Error>(lock(&self.offers).offer(now()))),
             WorkspaceAdd::NAME => call::<WorkspaceAdd>(args, |op| self.workspace_add(op)),
             WorkspaceList::NAME => {
                 call::<WorkspaceList>(args, |_| Ok(Workspaces { workspaces: lock(&self.state).store.workspaces()? }))
@@ -215,6 +257,7 @@ impl Server {
             FileWrite::NAME => call::<FileWrite>(args, |op| {
                 Ok(Written { bytes: files::write(&self.checkout_dir(&op.task)?, &op.path, op.content.as_bytes())? })
             }),
+            BrowserOpen::NAME => call::<BrowserOpen>(args, |op| self.browser_open(op)),
             FileSearch::NAME => call::<FileSearch>(args, |op| {
                 Ok(Matches { matches: files::search_literal(&self.checkout_dir(&op.task)?, &op.pattern) })
             }),
@@ -400,6 +443,22 @@ impl Server {
                 report!("publish the exit of {}: {error}", terminal.id);
             }
         });
+    }
+
+    fn browser_open(&self, op: BrowserOpen) -> Result<Shown, Error> {
+        web_page(&op.url).map_err(Error::invalid)?;
+        let mut state = lock(&self.state);
+        state.store.task(&op.task)?;
+        let panels = state.browsers.get(&op.task).map(Vec::as_slice).unwrap_or_default();
+        let page = BrowserPanel { panel: browser::panel(panels, op.panel)?, url: op.url };
+        let row = state.store.show_page(&op.task, &page)?;
+        let panels = state.browsers.entry(op.task).or_default();
+        match panels.iter_mut().find(|known| known.panel == page.panel) {
+            Some(known) => known.url = page.url.clone(),
+            None => panels.push(page.clone()),
+        }
+        self.publish_task(&state, &row);
+        Ok(Shown { panel: page.panel, rev: row.rev })
     }
 
     fn checkout_dir(&self, task: &TaskId) -> Result<PathBuf, Error> {
