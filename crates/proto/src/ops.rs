@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::frames::Op;
 use crate::types::{AgentStatus, Checkout, Task, TaskId, TaskState, Workspace, WorkspaceId};
@@ -79,14 +80,14 @@ op!(TermSend, "term.send", Revised, { task: TaskId, panel: String, text: String,
 op!(TermTakeLock, "term.take_lock", Revised, { task: TaskId, panel: String });
 op!(TermResize, "term.resize", Revised, { task: TaskId, panel: String, cols: u16, rows: u16 });
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryKind {
     File,
     Directory,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Entry {
     pub name: String,
@@ -99,7 +100,7 @@ pub struct Entries {
     pub entries: Vec<Entry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Match {
     pub path: String,

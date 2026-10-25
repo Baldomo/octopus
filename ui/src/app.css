@@ -1,0 +1,217 @@
+/* Layout only: every component's look comes from DESIGN.html's #components block. */
+
+:root {
+  /* DESIGN: a nested row or card indents 14px per level. */
+  --nest: 14px;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  user-select: none;
+}
+
+.app {
+  height: 100vh;
+  display: grid;
+  grid-template-rows: var(--chrome-h) 1fr var(--status-h);
+  position: relative;
+}
+
+.chrome .lights {
+  width: 52px;
+  height: 100%;
+}
+.chrome .seg button kbd {
+  pointer-events: none;
+}
+
+.halves,
+.tasks-view {
+  grid-row: 2;
+  min-height: 0;
+  padding: var(--s2) var(--s2) 0;
+}
+.halves {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s2);
+}
+.halves > .pane,
+.tasks-view > .pane {
+  min-height: 0;
+  height: 100%;
+}
+.pane.stack {
+  border-color: var(--accent-line);
+}
+.surface {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+  font-size: var(--fs-small);
+  padding: var(--s6);
+  text-align: center;
+}
+
+.tasks-view .pane {
+  overflow: auto;
+}
+.tasks-view .board {
+  padding: var(--s3);
+}
+
+.term-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.term {
+  overflow: hidden;
+}
+.term-host {
+  height: 100%;
+}
+
+.tree {
+  overflow: auto;
+  cursor: default;
+}
+.editor {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--term);
+}
+.etabs {
+  flex: none;
+  cursor: default;
+}
+.editor-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.editor-host {
+  height: 100%;
+}
+.over-editor {
+  position: absolute;
+  inset: 0;
+  background: var(--term);
+}
+
+.browser {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.navb {
+  cursor: pointer;
+}
+.page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.search input,
+.search select,
+.url input {
+  all: unset;
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font: inherit;
+  user-select: text;
+}
+.search input::placeholder,
+.url input::placeholder {
+  color: var(--faint);
+}
+
+.edge {
+  position: absolute;
+  top: var(--chrome-h);
+  bottom: var(--status-h);
+  left: 0;
+  width: var(--s2);
+  z-index: 9;
+}
+.sidebar {
+  position: absolute;
+  top: calc(var(--chrome-h) + var(--s2));
+  bottom: calc(var(--status-h) + var(--s2));
+  left: var(--s2);
+  z-index: 10;
+}
+.sidebar.hidden {
+  pointer-events: none;
+}
+.sidebar .search {
+  cursor: pointer;
+}
+.groups .task {
+  padding-left: calc(var(--s2) + var(--nest) * var(--depth));
+}
+.tcard {
+  margin-left: calc(var(--nest) * var(--depth));
+}
+
+.scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 19;
+}
+.dialog {
+  position: absolute;
+  top: calc(var(--chrome-h) + var(--s6) * 2);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 560px;
+  max-height: 60vh;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3);
+}
+.dialog .gh {
+  padding: var(--s1) 0 0;
+}
+.dialog .seg {
+  align-self: flex-start;
+}
+.dialog .results {
+  overflow: auto;
+  min-height: 0;
+}
+.dialog .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.status .problem {
+  color: var(--err);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}

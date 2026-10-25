@@ -13,7 +13,7 @@ use octopus_proto::types::Stream;
 use octopus_proto::{Error, Op, Outcome, Push, Request, ServerFrame, StreamHeader, line};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{broadcast, oneshot, watch};
 
 const PUSH_BACKLOG: usize = 4096;
 
@@ -29,6 +29,7 @@ pub struct Connection {
     pending: Pending,
     next_id: AtomicU64,
     pushes: broadcast::Sender<Push>,
+    closed: watch::Receiver<bool>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -49,6 +50,7 @@ impl Connection {
         let (read, write) = tokio::io::split(stream);
         let pending: Pending = Arc::default();
         let (pushes, _) = broadcast::channel(PUSH_BACKLOG);
+        let (close, closed) = watch::channel(false);
         let (reader_pending, reader_pushes) = (Arc::clone(&pending), pushes.clone());
         tokio::spawn(async move {
             let mut lines = BufReader::new(read).lines();
@@ -68,6 +70,7 @@ impl Connection {
                     }
                 }
             }
+            close.send_replace(true);
             lock(&reader_pending).clear();
         });
         let connection = Self {
@@ -77,6 +80,7 @@ impl Connection {
             pending,
             next_id: AtomicU64::new(1),
             pushes,
+            closed,
         };
         connection.call(&SessionHello { client: client.to_string() }).await.map_err(|error| anyhow!("{error}"))?;
         Ok(connection)
@@ -84,6 +88,12 @@ impl Connection {
 
     pub fn pushes(&self) -> broadcast::Receiver<Push> {
         self.pushes.subscribe()
+    }
+
+    /// Resolves once the server side of the control connection has gone.
+    pub async fn closed(&self) {
+        let mut closed = self.closed.clone();
+        let _resolved_either_way = closed.wait_for(|closed| *closed).await;
     }
 
     pub async fn call<O: Op>(&self, op: &O) -> Result<O::Ok, CallError> {
@@ -98,6 +108,10 @@ impl Connection {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (waiter, outcome) = oneshot::channel();
         lock(&self.pending).insert(id, waiter);
+        if *self.closed.borrow() {
+            lock(&self.pending).remove(&id);
+            return Err(anyhow!("connection closed"));
+        }
         let request = line(&Request { id, op: op.to_string(), args });
         self.write.lock().await.write_all(request.as_bytes()).await.context("send request")?;
         outcome.await.context("connection closed before the response")
@@ -111,5 +125,35 @@ impl Connection {
             Outcome::Ok(_) => Ok(connection),
             Outcome::Err(error) => Err(CallError::Server(error)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn address(name: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(format!(r"\\.\pipe\octopus-client-{}-{name}", std::process::id()))
+        } else {
+            std::env::temp_dir().join(format!("octopus-client-{}-{name}.sock", std::process::id()))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_call_after_the_server_hangs_up_fails_instead_of_waiting() {
+        let socket = address("closed");
+        let mut listener = local::Listener::bind(&socket).expect("bind");
+        tokio::spawn(async move {
+            let (read, mut write) = tokio::io::split(listener.accept().await.expect("accept"));
+            let mut hello = String::new();
+            BufReader::new(read).read_line(&mut hello).await.expect("hello");
+            write.write_all(b"{\"id\":1,\"ok\":{\"server\":\"s\",\"rev\":0}}\n").await.expect("welcome");
+        });
+        let connection = Connection::connect(&socket, "laptop").await.expect("connect");
+        tokio::time::timeout(Duration::from_secs(5), connection.closed()).await.expect("closed resolves");
+        let call = connection.call_raw("workspace.list", serde_json::json!({}));
+        assert!(tokio::time::timeout(Duration::from_secs(5), call).await.expect("no hang").is_err());
     }
 }

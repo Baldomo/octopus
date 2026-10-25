@@ -1,9 +1,10 @@
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 macro_rules! id {
     ($name:ident, $prefix:literal) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
         #[serde(transparent)]
         pub struct $name(pub String);
 
@@ -44,7 +45,7 @@ pub fn to_wire<T: Serialize>(value: &T) -> String {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskState {
     Pinned,
@@ -61,11 +62,15 @@ impl TaskState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Checkout {
     Root,
     Worktree,
+}
+
+impl Checkout {
+    pub const ALL: [Self; 2] = [Self::Root, Self::Worktree];
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -76,7 +81,7 @@ pub struct Workspace {
     pub root: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Panel {
     pub id: PtyId,
@@ -91,7 +96,7 @@ impl Panel {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentStatus {
     Working,
@@ -99,7 +104,7 @@ pub enum AgentStatus {
     Idle,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Agent {
     NotStarted,
@@ -109,7 +114,7 @@ pub enum Agent {
     HarnessUnknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Task {
     pub id: TaskId,

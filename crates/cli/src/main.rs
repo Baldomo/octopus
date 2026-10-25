@@ -23,7 +23,15 @@ use serde::Serialize;
 #[command(name = "octopus", about = "Drive octopus servers. Every flag is required.")]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    verb: Verb,
+}
+
+#[derive(Subcommand)]
+enum Verb {
+    /// Open the window onto every server in this client's list.
+    App,
+    #[command(flatten)]
+    Command(Command),
 }
 
 #[derive(Subcommand)]
@@ -246,7 +254,7 @@ async fn run(command: Command) -> anyhow::Result<()> {
         }
         Command::Server(ServerCommand::Add { name, socket }) => {
             let mut servers = Servers::load()?;
-            servers.add(KnownServer { name, socket });
+            servers.add(KnownServer { name, socket })?;
             servers.save()?;
             print(&servers)
         }
@@ -310,9 +318,15 @@ async fn run(command: Command) -> anyhow::Result<()> {
     }
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
-    match run(Cli::parse().command).await {
+/// The app owns the main thread, which the macOS event loop requires; every other command runs on tokio.
+fn main() -> ExitCode {
+    let outcome = match Cli::parse().verb {
+        Verb::App => octopus_app::run(),
+        Verb::Command(command) => tokio::runtime::Runtime::new()
+            .context("start the runtime")
+            .and_then(|runtime| runtime.block_on(run(command))),
+    };
+    match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error:#}");
