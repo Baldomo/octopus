@@ -1,0 +1,43 @@
+mod common;
+
+use std::time::Duration;
+
+use common::{connect, create, start, workspace};
+use octopus_client::cache::{Cache, PushEffect};
+use octopus_proto::ops::{SessionSync, TaskMove};
+use octopus_proto::types::{Checkout, TaskState};
+use octopus_proto::{Event, Push};
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clients_moving_tasks_at_once_converge_on_one_server_state() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock");
+    let laptop = connect(&running, "laptop").await;
+    let desk = connect(&running, "desk").await;
+    let mut pushes = laptop.pushes();
+    let mut cache = Cache::from_snapshot(laptop.call(&SessionSync { since_rev: None }).await.expect("sync"));
+
+    let workspace = workspace(&desk, dir.path()).await;
+    let task = create(&desk, &workspace, Checkout::Root, "none").await;
+    let moves = TaskState::ALL.into_iter().cycle().take(40).enumerate().map(|(index, state)| {
+        let (writer, task) = (if index % 2 == 0 { &laptop } else { &desk }, task.clone());
+        async move { writer.call(&TaskMove { task, state }).await }
+    });
+    let revs: Vec<u64> =
+        futures::future::join_all(moves).await.into_iter().map(|moved| moved.expect("task.move").rev).collect();
+    let last = *revs.iter().max().expect("revs");
+
+    let caught_up = tokio::time::timeout(Duration::from_secs(5), async {
+        while cache.rev < last {
+            let push = pushes.recv().await.expect("push");
+            assert_ne!(cache.apply(&push), PushEffect::Stale, "a push arrived after a newer one");
+        }
+    })
+    .await;
+    assert!(caught_up.is_ok(), "laptop's cache stalled at rev {}", cache.rev);
+    let fresh = Cache::from_snapshot(desk.call(&SessionSync { since_rev: Some(cache.rev) }).await.expect("resync"));
+    assert_eq!(cache, fresh);
+
+    let stale = Push { rev: 1, event: Event::HarnessUpdated { harness: "h".into() } };
+    assert_eq!(cache.apply(&stale), PushEffect::Stale);
+}

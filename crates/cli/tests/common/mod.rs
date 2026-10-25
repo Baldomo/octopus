@@ -1,0 +1,146 @@
+#![allow(dead_code)]
+
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
+use std::sync::Arc;
+use std::time::Duration;
+
+use octopus_client::Connection;
+use octopus_proto::local::Listener;
+use octopus_proto::ops::{TaskCreate, TaskGet, WorkspaceAdd};
+use octopus_proto::types::{Checkout, Task, TaskId, TaskState, WorkspaceId};
+use octopus_server::{Server, TerminalHost, serve};
+use tokio::io::{AsyncRead, AsyncReadExt};
+
+pub const SERVER: &str = "mac-mini";
+pub const OCTOPUS: &str = env!("CARGO_BIN_EXE_octopus");
+
+pub struct Running {
+    pub server: Arc<Server>,
+    pub socket: PathBuf,
+}
+
+/// The local socket `name` of the test in `dir`; on Windows a named pipe, which lives outside the filesystem.
+pub fn address(dir: &Path, name: &str) -> PathBuf {
+    if cfg!(windows) {
+        let test = dir.file_name().expect("a tempdir has a name").to_string_lossy();
+        PathBuf::from(format!(r"\\.\pipe\octopus-{test}-{name}"))
+    } else {
+        dir.join(name)
+    }
+}
+
+/// Serves `dir`'s store on `socket`, keeping terminals in the host at `host`. A second call on the same `dir` and
+/// `host` plays a server restart; a fresh `host` plays a machine restart: the server finds none of its terminals.
+pub fn start(dir: &Path, socket: &str, host: &str) -> Running {
+    let socket = address(dir, socket);
+    let host = TerminalHost { program: OCTOPUS.into(), address: address(dir, host) };
+    let server = Server::open(SERVER, &dir.join("store.db"), &dir.join("worktrees"), &host).expect("open server");
+    tokio::spawn(serve(Arc::clone(&server), Listener::bind(&socket).expect("bind")));
+    Running { server, socket }
+}
+
+/// An `octopus server run` process, killed when dropped.
+pub struct ServerProcess {
+    child: Child,
+    pub socket: PathBuf,
+}
+
+impl ServerProcess {
+    pub async fn run(dir: &Path) -> Self {
+        let socket = address(dir, "server.sock");
+        let child = Command::new(OCTOPUS)
+            .args(["server", "run", "--name", SERVER, "--socket"])
+            .arg(&socket)
+            .arg("--store")
+            .arg(dir.join("store.db"))
+            .arg("--worktrees")
+            .arg(dir.join("worktrees"))
+            .arg("--terminal-host")
+            .arg(address(dir, "host.sock"))
+            .spawn()
+            .expect("spawn octopus server run");
+        let process = Self { child, socket };
+        eventually("the server answering", async || Connection::connect(&process.socket, "probe").await.is_ok()).await;
+        process
+    }
+
+    pub async fn connect(&self, client: &str) -> Connection {
+        Connection::connect(&self.socket, client).await.expect("connect")
+    }
+
+    /// Ends the process the way a crash does, with no chance to clean up.
+    pub fn kill(mut self) {
+        self.child.kill().expect("kill the server");
+        self.child.wait().expect("reap the server");
+    }
+}
+
+impl Drop for ServerProcess {
+    fn drop(&mut self) {
+        let _already_dead = self.child.kill();
+        let _reaped = self.child.wait();
+    }
+}
+
+pub async fn connect(running: &Running, client: &str) -> Connection {
+    Connection::connect(&running.socket, client).await.expect("connect")
+}
+
+pub fn shell_var(var: &str) -> String {
+    if cfg!(windows) { format!("%{var}%") } else { format!("${var}") }
+}
+
+/// An agent that prints `<line>`, then stays open reading input, which the terminal echoes.
+pub fn echo_agent(line: &str) -> Vec<String> {
+    if cfg!(windows) {
+        vec!["cmd".into(), "/q".into(), "/k".into(), format!("echo {line}")]
+    } else {
+        vec!["sh".into(), "-c".into(), format!("echo {line}; exec cat")]
+    }
+}
+
+pub async fn workspace(connection: &Connection, root: &Path) -> WorkspaceId {
+    let add = WorkspaceAdd { name: "octopus".into(), root: root.to_string_lossy().to_string() };
+    connection.call(&add).await.expect("workspace.add").workspace
+}
+
+pub async fn create(connection: &Connection, workspace: &WorkspaceId, checkout: Checkout, harness: &str) -> TaskId {
+    let create = TaskCreate {
+        workspace: workspace.clone(),
+        title: "Strict serde".into(),
+        parent: None,
+        state: TaskState::Pinned,
+        checkout,
+        harness: harness.into(),
+    };
+    connection.call(&create).await.expect("task.create").task
+}
+
+pub async fn task(connection: &Connection, task: &TaskId) -> Task {
+    connection.call(&TaskGet { task: task.clone() }).await.expect("task.get")
+}
+
+pub async fn read_until(stream: &mut (impl AsyncRead + Unpin), needle: &str) {
+    let mut seen = Vec::new();
+    let mut buffer = [0u8; 4096];
+    let found = tokio::time::timeout(Duration::from_secs(5), async {
+        while !String::from_utf8_lossy(&seen).contains(needle) {
+            let read = stream.read(&mut buffer).await.expect("read stream");
+            assert!(read > 0, "stream ended before {needle:?}; saw {:?}", String::from_utf8_lossy(&seen));
+            seen.extend_from_slice(&buffer[..read]);
+        }
+    })
+    .await;
+    assert!(found.is_ok(), "no {needle:?} within 5 s; saw {:?}", String::from_utf8_lossy(&seen));
+}
+
+pub async fn eventually(what: &str, mut check: impl AsyncFnMut() -> bool) {
+    let reached = tokio::time::timeout(Duration::from_secs(8), async {
+        while !check().await {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(reached.is_ok(), "{what} did not happen within 8 s");
+}

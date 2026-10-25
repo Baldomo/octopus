@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+octopus-proto = { path = "crates/proto" }
+octopus-server = { path = "crates/server" }
+octopus-client = { path = "crates/client" }
+octopus-app = { path = "crates/app" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
