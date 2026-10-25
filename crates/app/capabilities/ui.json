@@ -1,6 +1,6 @@
 {
   "identifier": "ui",
-  "description": "The UI webview listens to the app's events and drags the window by its title bar.",
-  "webviews": ["main"],
-  "permissions": ["core:event:default", "core:window:allow-start-dragging"]
+  "description": "Both UI layers listen to the app's events.",
+  "webviews": ["main", "float"],
+  "permissions": ["core:event:default"]
 }

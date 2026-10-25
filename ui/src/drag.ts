@@ -1,7 +1,7 @@
 import { createRoot, createSelector, createSignal } from "solid-js";
 import { backend } from "./backend";
 import { TASK_STATES, type Row, type TaskState } from "./generated";
-import { act, dragged, setDragged } from "./state";
+import { act, dragged, layer, setDragged, ui } from "./state";
 
 /** Pointer travel that turns a press on a task into a drag. */
 const DRAG_PX = 4;
@@ -9,7 +9,14 @@ const DRAG_PX = 4;
 type Target = { section: string; state: TaskState };
 const [over, setOver] = createSignal<Target | null>(null);
 
+/** A point the float layer covers shows the float layer's UI, whatever the base layer has beneath it. */
+function covered(x: number, y: number) {
+  const { x: left, y: top, width, height } = ui.float;
+  return layer === "base" && x >= left && x < left + width && y >= top && y < top + height;
+}
+
 function targetAt(x: number, y: number, section: string): Target | null {
+  if (covered(x, y)) return null;
   const element = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drop-section]");
   const state = TASK_STATES.find((candidate) => candidate === element?.dataset.dropState);
   return element?.dataset.dropSection === section && state !== undefined ? { section, state } : null;

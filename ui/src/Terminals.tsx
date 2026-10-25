@@ -7,7 +7,7 @@ import { backend, Channel } from "./backend";
 import { AGENT_PANEL, type Panel, type PtyId, type TaskRef, type TaskView } from "./generated";
 import { Glyph } from "./Glyph";
 import { commands, hint } from "./keys";
-import { act, me, model, open, recent, report, serverView, view } from "./state";
+import { act, me, model, report, serverView, ui } from "./state";
 import { hex, px, styleOf, token } from "./tokens";
 
 let theme: ITheme | undefined;
@@ -51,9 +51,8 @@ function Term(props: { at: TaskRef; panel: Panel; visible: boolean }) {
   const mine = () => props.panel.lock_holder === me();
   const writable = () => props.panel.running && (props.panel.lock_holder === null || mine());
   const xterm = new Terminal({
-    fontFamily: token("--mono"),
+    fontFamily: token("--mono-terminal"),
     fontSize: px("--fs-mono"),
-    lineHeight: Number(token("--lh-mono")),
     theme: terminalTheme(),
     cursorBlink: true,
     scrollback: SCROLLBACK_LINES,
@@ -192,7 +191,7 @@ function AgentTab(props: { open: TaskView; on: boolean; choose?: () => void }) {
 
 function Stack(props: { key: string }) {
   const task = () => model.tasks[props.key];
-  const shown = () => open() === props.key && view() === "task";
+  const shown = () => ui.prefs.open === props.key && ui.prefs.view === "task";
   const [chosen, setChosen] = createSignal<PtyId | null>(null);
   const panels = () => task()?.task.panels ?? [];
   const selected = () => panels().find((panel) => panel.id === chosen()) ?? panels()[0];
@@ -256,8 +255,8 @@ function Stack(props: { key: string }) {
 export function TerminalStacks() {
   return (
     <>
-      <For each={recent()}>{(key) => <Stack key={key} />}</For>
-      <Show when={open() === null}>
+      <For each={ui.recent}>{(key) => <Stack key={key} />}</For>
+      <Show when={ui.prefs.open === null}>
         <div class="pane stack">
           <div class="empty">Open a task from the sidebar ({hint(commands.sidebar)}).</div>
         </div>

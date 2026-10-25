@@ -78,15 +78,61 @@ version: number, lists: Lists, tasks: { [key in string]: TaskView }, };
 
 export type FilesChanged = { key: string, paths: Array<string>, };
 
+export type View = "task" | "tasks";
+
+export type Surface = "files" | "browser";
+
+export type Modal = "palette" | "new_task" | "pair_server";
+
+export type Prefs = { pinned: boolean, collapsed: Array<string>, surface: Surface, view: View, 
+/**
+ * The open task's key.
+ */
+open: string | null, 
+/**
+ * The section the Tasks board shows.
+ */
+board: string | null, };
+
+export type Reveal = { 
+/**
+ * The task's key.
+ */
+task: string, path: string, 
+/**
+ * Counts reveals, so revealing the same file again opens it again.
+ */
+nth: number, };
+
+export type Ui = { 
+/**
+ * Raised by every change, so a layer drops a state that arrives after a newer one.
+ */
+version: number, prefs: Prefs, 
+/**
+ * The opened tasks' keys, newest first.
+ */
+recent: Array<string>, sidebar: boolean, modal: Modal | null, reveal: Reveal | null, problem: string | null, viewport: Viewport, 
+/**
+ * Where the float layer covers the window: from its fixed corner past every surface of it that is out.
+ */
+float: Bounds, };
+
+export type UiAct = { "do": "open_task", key: string, } | { "do": "show_view", view: View, } | { "do": "show_board", section: string, } | { "do": "show_surface", surface: Surface, } | { "do": "toggle_pin" } | { "do": "toggle_collapsed", section: string, } | { "do": "show_sidebar", shown: boolean, } | { "do": "toggle_sidebar" } | { "do": "show_modal", modal: Modal | null, } | { "do": "float", surface: string, rect: Bounds, modal: boolean, } | { "do": "sink", surface: string, } | { "do": "reveal", task: string, path: string, } | { "do": "report", problem: string, };
+
+export type Viewport = { width: number, height: number, };
+
 export type Boot = { 
 /**
  * This client's name, as terminal lock holders see it.
  */
-me: string, servers: Array<ServerView>, model: Model, };
+me: string, servers: Array<ServerView>, model: Model, ui: Ui, };
 
 export type NewTask = { server: string, workspace: WorkspaceId, title: string, parent: TaskId | null, state: TaskState, checkout: Checkout, harness: string, };
 
 export type Bounds = { x: number, y: number, width: number, height: number, };
+
+export type OnScreen = { at: TaskRef, panel: BrowserId, bounds: Bounds, };
 
 export type Go = "back" | "forward" | "reload";
 
@@ -104,4 +150,8 @@ export const AGENT_PANEL = "agent" as const;
 
 export const NEW_BROWSER_PANEL = "new" as const;
 
-export const EVENTS = {"browserNavigated":"browser_navigated","filesChanged":"files_changed","model":"model","servers":"servers"} as const;
+export const FLOAT_LAYER = "float" as const;
+
+export const FLOAT_TOP = 38.0 as const;
+
+export const EVENTS = {"browserNavigated":"browser_navigated","filesChanged":"files_changed","model":"model","servers":"servers","ui":"ui"} as const;

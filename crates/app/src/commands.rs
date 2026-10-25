@@ -14,12 +14,15 @@ use tauri::{AppHandle, State};
 use tokio::io::AsyncReadExt;
 use ts_rs::TS;
 
-use crate::browser::{Bounds, Browsers, Go};
+use crate::browser::{Browsers, Go, OnScreen};
 use crate::hub::{Hub, Model, ServerView, failure};
 use crate::task_lists::TaskRef;
 use crate::terminal::Terminals;
+use crate::ui::{Ui, UiAct, UiStore};
 
 type Hubbed<'a> = State<'a, Arc<Hub>>;
+type Uis<'a> = State<'a, Arc<UiStore>>;
+type Browsing<'a> = State<'a, Browsers>;
 
 pub struct Launched(pub Instant);
 
@@ -29,16 +32,22 @@ pub struct Boot {
     pub me: String,
     pub servers: Vec<ServerView>,
     pub model: Model,
+    pub ui: Ui,
 }
 
 #[tauri::command]
-pub fn boot(hub: Hubbed) -> Boot {
-    Boot { me: hub.me.name.clone(), servers: hub.servers(), model: hub.model() }
+pub fn boot(hub: Hubbed, ui: Uis) -> Boot {
+    Boot { me: hub.me.name.clone(), servers: hub.servers(), model: hub.model(), ui: ui.ui() }
 }
 
 #[tauri::command]
-pub fn ready(launched: State<Launched>) {
-    eprintln!("octopus app: interactive {} ms after launch", launched.0.elapsed().as_millis());
+pub fn ready(webview: tauri::Webview, launched: State<Launched>) {
+    eprintln!("octopus app: {} interactive {} ms after launch", webview.label(), launched.0.elapsed().as_millis());
+}
+
+#[tauri::command]
+pub fn ui_act(ui: Uis, act: UiAct) -> Result<(), String> {
+    ui.act(act)
 }
 
 /// Pairs with the server at `address` using the code it offered, lists it, and resolves to its name.
@@ -153,34 +162,54 @@ pub async fn browser_open(
 
 /// Renders the panel's server `url` on this client; resolves to the port it reaches through a tunnel, if any.
 #[tauri::command]
-pub async fn browser_show(
+pub async fn browser_load(
     app: AppHandle,
     hub: Hubbed<'_>,
-    browsers: State<'_, Browsers>,
+    browsers: Browsing<'_>,
     at: TaskRef,
     panel: BrowserId,
     url: String,
 ) -> Result<Option<u16>, String> {
-    browsers.show(&app, &hub, &at, &panel, &url).await
+    browsers.load(&app, &hub, &at, &panel, &url).await
 }
 
 #[tauri::command]
-pub async fn browser_place(
-    browsers: State<'_, Browsers>,
-    at: TaskRef,
-    panel: BrowserId,
-    bounds: Option<Bounds>,
-) -> Result<(), String> {
-    browsers.place(&at, &panel, bounds)
+pub async fn browser_show_page(browsers: Browsing<'_>, on_screen: Option<OnScreen>) -> Result<(), String> {
+    browsers.show_page(on_screen)
 }
 
 #[tauri::command]
-pub async fn browser_go(browsers: State<'_, Browsers>, at: TaskRef, panel: BrowserId, go: Go) -> Result<(), String> {
+pub async fn browser_go(browsers: Browsing<'_>, at: TaskRef, panel: BrowserId, go: Go) -> Result<(), String> {
     browsers.go(&at, &panel, go)
 }
 
 /// Closes the panel's webview on this client; the panel stays on its server.
 #[tauri::command]
-pub async fn browser_close(browsers: State<'_, Browsers>, at: TaskRef, panel: BrowserId) -> Result<(), String> {
+pub async fn browser_close(browsers: Browsing<'_>, at: TaskRef, panel: BrowserId) -> Result<(), String> {
     browsers.close(&at, &panel).await
+}
+
+/// What double-clicking the title bar does, as the user set it: on macOS in System Settings ▸ Desktop & Dock,
+/// elsewhere always a zoom.
+fn title_bar_action() -> &'static str {
+    if !cfg!(target_os = "macos") {
+        return "Maximize";
+    }
+    let read = std::process::Command::new("defaults").args(["read", "-g", "AppleActionOnDoubleClick"]).output();
+    match read.map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string()).as_deref() {
+        Ok("Minimize") => "Minimize",
+        Ok("None") => "None",
+        _ => "Maximize",
+    }
+}
+
+#[tauri::command]
+pub fn title_bar_double_click(window: tauri::Window) -> Result<(), String> {
+    let done = match title_bar_action() {
+        "Minimize" => window.minimize(),
+        "None" => Ok(()),
+        _ if window.is_maximized().map_err(|error| error.to_string())? => window.unmaximize(),
+        _ => window.maximize(),
+    };
+    done.map_err(|error| error.to_string())
 }

@@ -1,5 +1,5 @@
-//! Each browser panel of a task renders as a native webview laid over the left half of the window. A page on a
-//! loopback host of a server on another machine loads through a tunnel to that port on the server's machine.
+//! Each browser panel of a task renders as a native webview in the window's page layer. A page on a loopback host
+//! of a server on another machine loads through a tunnel to that port on the server's machine.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,35 +9,16 @@ use octopus_client::tunnel::{Tunnel, listen_on_localhost};
 use octopus_proto::types::{BrowserId, web_page};
 use serde::{Deserialize, Serialize};
 use tauri::webview::{PageLoadEvent, WebviewBuilder};
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl};
+use tauri::{AppHandle, Url, Webview, WebviewUrl};
 use ts_rs::TS;
 use url::Host;
 
 use crate::hub::Hub;
+use crate::layers::{Bounds, Layers};
 use crate::task_lists::TaskRef;
-use crate::{UI, emit, lock};
+use crate::{emit, lock};
 
 pub const NAVIGATED_EVENT: &str = "browser_navigated";
-
-/// Where a browser panel's page sits, in the UI's CSS pixels.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
-pub struct Bounds {
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-}
-
-impl Bounds {
-    fn position(self) -> LogicalPosition<f64> {
-        LogicalPosition::new(self.x, self.y)
-    }
-
-    fn size(self) -> LogicalSize<f64> {
-        LogicalSize::new(self.width, self.height)
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -71,6 +52,15 @@ fn loopback_port(page: &Url) -> Option<u16> {
     loopback.then(|| page.port_or_known_default()).flatten()
 }
 
+/// The browser panel the page layer shows, at its rect.
+#[derive(Debug, Clone, PartialEq, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct OnScreen {
+    pub at: TaskRef,
+    pub panel: BrowserId,
+    pub bounds: Bounds,
+}
+
 struct Rendered {
     webview: Webview,
     /// The `url` of the panel's server state that the webview last loaded.
@@ -84,8 +74,8 @@ struct Held {
     _tunnel: Tunnel,
 }
 
-#[derive(Default)]
 pub struct Browsers {
+    layers: Arc<Layers>,
     next: AtomicU64,
     rendered: Mutex<HashMap<String, Rendered>>,
     /// Keyed by port: this client's `localhost:<port>` reaches one server at a time.
@@ -97,6 +87,10 @@ fn failed(error: tauri::Error) -> String {
 }
 
 impl Browsers {
+    pub fn new(layers: Arc<Layers>) -> Self {
+        Self { layers, next: AtomicU64::new(0), rendered: Mutex::default(), tunnels: tokio::sync::Mutex::default() }
+    }
+
     fn with<T>(
         &self,
         at: &TaskRef,
@@ -109,9 +103,9 @@ impl Browsers {
         act(&rendered.webview).map_err(failed)
     }
 
-    /// Loads the panel's `url` into its webview, created hidden on its first page; `place` shows it. Resolves to the
-    /// port the page reaches through a tunnel, if it does.
-    pub async fn show(
+    /// Loads the panel's `url` into its webview, created hidden on its first page; `show_page` puts it on screen.
+    /// Resolves to the port the page reaches through a tunnel, if it does.
+    pub async fn load(
         &self,
         app: &AppHandle,
         hub: &Arc<Hub>,
@@ -123,7 +117,7 @@ impl Browsers {
         let page = web_page(url)?;
         let tunneled = loopback_port(&page).filter(|_| hub.is_another_machine(&at.server));
         self.hold_tunnel(hub, &at.server, &key, tunneled).await?;
-        if let Err(error) = self.load(app, at, panel, page) {
+        if let Err(error) = self.point(app, at, panel, page) {
             release(&mut *self.tunnels.lock().await, &key, None);
             return Err(error);
         }
@@ -131,7 +125,7 @@ impl Browsers {
     }
 
     /// Points the panel's webview at `page`, creating it on the panel's first page.
-    fn load(&self, app: &AppHandle, at: &TaskRef, panel: &BrowserId, page: Url) -> Result<(), String> {
+    fn point(&self, app: &AppHandle, at: &TaskRef, panel: &BrowserId, page: Url) -> Result<(), String> {
         let (key, url) = (panel_key(at, panel), page.to_string());
         let mut rendered = lock(&self.rendered);
         match rendered.get_mut(&key) {
@@ -149,7 +143,6 @@ impl Browsers {
     }
 
     fn create(&self, app: &AppHandle, at: &TaskRef, panel: &BrowserId, url: Url) -> Result<Webview, String> {
-        let window = app.get_window(UI).ok_or("the window is gone")?;
         let label = format!("browser-{}", self.next.fetch_add(1, Ordering::Relaxed));
         let (events, task, panel) = (app.clone(), at.key(), panel.clone());
         let builder = WebviewBuilder::new(label, WebviewUrl::External(url)).on_page_load(move |_, payload| {
@@ -158,10 +151,7 @@ impl Browsers {
                 emit(&events, NAVIGATED_EVENT, navigated);
             }
         });
-        let webview =
-            window.add_child(builder, LogicalPosition::new(0.0, 0.0), LogicalSize::new(0.0, 0.0)).map_err(failed)?;
-        webview.hide().map_err(failed)?;
-        Ok(webview)
+        self.layers.add_page(builder).map_err(failed)
     }
 
     /// Holds the tunnel to `port` for the panel `key`, and lets go of any other it held.
@@ -190,16 +180,11 @@ impl Browsers {
         Ok(())
     }
 
-    /// `None` hides the page: a native webview draws above every element of the UI.
-    pub fn place(&self, at: &TaskRef, panel: &BrowserId, bounds: Option<Bounds>) -> Result<(), String> {
-        self.with(at, panel, |webview| match bounds {
-            Some(bounds) => {
-                webview.set_position(bounds.position())?;
-                webview.set_size(bounds.size())?;
-                webview.show()
-            }
-            None => webview.hide(),
-        })
+    pub fn show_page(&self, on_screen: Option<OnScreen>) -> Result<(), String> {
+        let next = on_screen
+            .map(|OnScreen { at, panel, bounds }| self.with(&at, &panel, |webview| Ok((webview.clone(), bounds))))
+            .transpose()?;
+        self.layers.show_page(next).map_err(failed)
     }
 
     pub fn go(&self, at: &TaskRef, panel: &BrowserId, go: Go) -> Result<(), String> {
@@ -215,7 +200,7 @@ impl Browsers {
         let key = panel_key(at, panel);
         release(&mut *self.tunnels.lock().await, &key, None);
         let rendered = lock(&self.rendered).remove(&key).ok_or_else(|| format!("no browser panel {key}"))?;
-        rendered.webview.close().map_err(failed)
+        self.layers.close_page(&rendered.webview).map_err(failed)
     }
 }
 

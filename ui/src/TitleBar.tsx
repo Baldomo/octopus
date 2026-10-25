@@ -1,7 +1,7 @@
 import { For, Show } from "solid-js";
 import { backend } from "./backend";
 import { commands, hint, mac } from "./keys";
-import { act, board, openView, serverView, view } from "./state";
+import { act, openView, serverView, ui } from "./state";
 
 function Crumbs(props: { crumbs: string[] }) {
   return (
@@ -20,17 +20,23 @@ function Crumbs(props: { crumbs: string[] }) {
 
 export function TitleBar() {
   const crumbs = () => {
-    if (view() === "tasks") return board() === null ? [] : [board()!, "all tasks"];
+    if (ui.prefs.view === "tasks") return ui.prefs.board === null ? [] : [ui.prefs.board, "all tasks"];
     return openView()?.crumbs ?? [];
   };
   return (
-    <header class="chrome" data-tauri-drag-region>
+    <header
+      class="chrome"
+      data-tauri-drag-region
+      onDblClick={(event) => {
+        if ((event.target as HTMLElement).hasAttribute("data-tauri-drag-region")) act(backend.titleBarDoubleClick());
+      }}
+    >
       <Show when={mac}>
         <div class="lights" data-tauri-drag-region />
       </Show>
       <Crumbs crumbs={crumbs()} />
       <div class="spacer" data-tauri-drag-region />
-      <Show when={view() === "task" && openView()}>
+      <Show when={ui.prefs.view === "task" && openView()}>
         {(open) => (
           <>
             <span class="server">
@@ -49,10 +55,10 @@ export function TitleBar() {
         )}
       </Show>
       <div class="seg">
-        <button classList={{ on: view() === "task" }} onClick={commands.taskView.run}>
+        <button classList={{ on: ui.prefs.view === "task" }} onClick={commands.taskView.run}>
           Task<kbd>{hint(commands.taskView)}</kbd>
         </button>
-        <button classList={{ on: view() === "tasks" }} onClick={commands.tasksView.run}>
+        <button classList={{ on: ui.prefs.view === "tasks" }} onClick={commands.tasksView.run}>
           Tasks<kbd>{hint(commands.tasksView)}</kbd>
         </button>
       </div>

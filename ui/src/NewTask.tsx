@@ -2,7 +2,7 @@ import { createSignal, For, Show } from "solid-js";
 import { backend } from "./backend";
 import { Actions, Field, Segments, TextField } from "./Dialog";
 import { CHECKOUTS, TASK_STATES, type Checkout, type TaskState, type WorkspaceRef } from "./generated";
-import { model, openTask, openView, report, setOverlay } from "./state";
+import { model, openTask, openView, report, showModal } from "./state";
 
 const PARENTS = ["none", "open task"] as const;
 const workspaceKey = (workspace: WorkspaceRef) => `${workspace.server}/${workspace.workspace}`;
@@ -39,7 +39,7 @@ export function NewTask() {
         harness: harness().trim(),
       })
       .then((key) => {
-        setOverlay(null);
+        showModal(null);
         openTask(key);
       }, report);
   };

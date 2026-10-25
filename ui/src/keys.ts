@@ -1,4 +1,4 @@
-import { overlay, setOverlay, setSidebar, setView, showSurface, showTasks, sidebar } from "./state";
+import { showModal, showSurface, showTasks, showView, toggleSidebar, ui } from "./state";
 
 export const mac = navigator.userAgent.includes("Mac");
 
@@ -6,14 +6,14 @@ export type Command = { label: string; key: string | null; run: () => void };
 
 /** Every action a key or the palette runs; `key` is the letter after ⌘. */
 export const commands = {
-  taskView: { label: "Task view", key: "E", run: () => setView("task") },
+  taskView: { label: "Task view", key: "E", run: () => showView("task") },
   tasksView: { label: "Tasks view", key: "T", run: showTasks },
   files: { label: "Files", key: "1", run: () => showSurface("files") },
   browser: { label: "Browser", key: "2", run: () => showSurface("browser") },
-  newTask: { label: "New task", key: "N", run: () => setOverlay("new-task") },
-  search: { label: "Search tasks, files, commands", key: "K", run: () => setOverlay("palette") },
-  sidebar: { label: "Toggle sidebar", key: "\\", run: () => setSidebar(!sidebar()) },
-  pairServer: { label: "Pair a server", key: null, run: () => setOverlay("pair-server") },
+  newTask: { label: "New task", key: "N", run: () => showModal("new_task") },
+  search: { label: "Search tasks, files, commands", key: "K", run: () => showModal("palette") },
+  sidebar: { label: "Toggle sidebar", key: "\\", run: toggleSidebar },
+  pairServer: { label: "Pair a server", key: null, run: () => showModal("pair_server") },
 } satisfies Record<string, Command>;
 
 /** On Linux and Windows, ⌘ is Ctrl+Shift. */
@@ -40,9 +40,9 @@ export function bindKeys() {
         event.preventDefault();
         event.stopPropagation();
         command.run();
-      } else if (event.key === "Escape" && overlay() !== null) {
+      } else if (event.key === "Escape" && ui.modal !== null) {
         event.preventDefault();
-        setOverlay(null);
+        showModal(null);
       }
     },
     { capture: true },

@@ -1,7 +1,7 @@
 import { createSignal } from "solid-js";
 import { backend } from "./backend";
 import { Actions, TextField } from "./Dialog";
-import { report, setOverlay } from "./state";
+import { report, showModal } from "./state";
 
 /** Pairs with a server on another machine through the code its `octopus pairing offer` shows. */
 export function PairServer() {
@@ -11,7 +11,7 @@ export function PairServer() {
   const pair = (event: SubmitEvent) => {
     event.preventDefault();
     if (!complete()) return;
-    backend.serverPair(address().trim(), code().trim()).then(() => setOverlay(null), report);
+    backend.serverPair(address().trim(), code().trim()).then(() => showModal(null), report);
   };
   return (
     <form class="pane dialog" onSubmit={pair}>

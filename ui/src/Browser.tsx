@@ -2,12 +2,10 @@ import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "s
 import { createStore, produce } from "solid-js/store";
 import { backend, events } from "./backend";
 import { NEW_BROWSER_PANEL } from "./generated";
-import type { Bounds, BrowserId, BrowserPanel, Go, TaskRef } from "./generated";
-import { act, openView, overlay, recent, report, sidebar } from "./state";
-import { px } from "./tokens";
+import type { BrowserId, BrowserPanel, Go, OnScreen, TaskRef } from "./generated";
+import { act, openView, report, ui } from "./state";
 
 type Target = BrowserId | typeof NEW_BROWSER_PANEL;
-type Placed = { at: TaskRef; panel: BrowserId };
 
 /** The panel each task's URL bar drives on this client; `new` makes the next page open a panel of its own. */
 const [selected, setSelected] = createStore<Record<string, Target>>({});
@@ -23,7 +21,7 @@ events
   )
   .catch(report);
 
-/** Native webview calls run one at a time: a hide racing past an earlier show would leave a page on screen. */
+/** Native webview calls run in the order the UI makes them, so a page exists before it is placed or closed. */
 let queue: Promise<unknown> = Promise.resolve();
 const serially = <T,>(call: () => Promise<T>): Promise<T> => {
   const next = queue.then(call);
@@ -98,44 +96,39 @@ export function Browser(props: { visible: boolean }) {
       ([at, task, panel, url]) => {
         if (at === undefined || task === undefined || panel === undefined || url === undefined) return;
         setLoaded(produce((pages) => delete pages[task]?.[panel]));
-        serially(() => backend.browserShow(at, panel, url)).then((port) => {
-          if (!recent().includes(task)) return act(serially(() => backend.browserClose(at, panel)));
+        serially(() => backend.browserLoad(at, panel, url)).then((port) => {
+          if (!ui.recent.includes(task)) return act(serially(() => backend.browserClose(at, panel)));
           setRendered(produce((tasks) => ((tasks[task] ??= { at, tunnels: {} }).tunnels[panel] = port)));
         }, report);
       },
     ),
   );
 
-  /** The page's rect, clear of the sidebar: a native webview draws above every element of the UI. */
-  const bounds = (sidebarShown: boolean): Bounds => {
-    const rect = page.getBoundingClientRect();
-    const clear = sidebarShown ? px("--sidebar-w") + 2 * px("--s2") : 0;
-    const x = Math.max(rect.left, clear);
-    return { x, y: rect.top, width: Math.max(0, rect.right - x), height: rect.height };
-  };
-  const onScreen = (): Placed | null => {
+  const onScreen = (): Omit<OnScreen, "bounds"> | null => {
     const task = openView();
     const panel = current();
-    if (!props.visible || overlay() !== null || task === undefined || panel === undefined) return null;
+    if (!props.visible || task === undefined || panel === undefined) return null;
     return tunnelOf(task.key, panel.panel) === undefined ? null : { at: task.at, panel: panel.panel };
   };
 
-  let placed: Placed | null = null;
-  const place = () => {
-    const shown = onScreen();
-    const sidebarShown = sidebar();
-    const stale = placed;
-    if (stale !== null && stale.panel !== shown?.panel)
-      act(serially(() => backend.browserPlace(stale.at, stale.panel, null)));
-    if (shown !== null) {
-      const at = bounds(sidebarShown);
-      act(serially(() => backend.browserPlace(shown.at, shown.panel, at)));
-    }
-    placed = shown;
+  /**
+   * A page arrives as this layer paints the frame it is laid out in, and leaves only once this layer has painted what
+   * it uncovers: two processes paint the window, so a page may outstay its frame, but never leaves a hole.
+   */
+  let latest = 0;
+  const showPage = (shown: Omit<OnScreen, "bounds"> | null) => {
+    const placing = ++latest;
+    const send = () => {
+      if (placing !== latest) return;
+      const { left, top, width, height } = page.getBoundingClientRect();
+      const bounds = { x: left, y: top, width, height };
+      act(serially(() => backend.browserShowPage(shown === null ? null : { ...shown, bounds })));
+    };
+    requestAnimationFrame(shown === null ? () => setTimeout(send) : send);
   };
-  createEffect(place);
+  createEffect(() => showPage(onScreen()));
   onMount(() => {
-    const observer = new ResizeObserver(place);
+    const observer = new ResizeObserver(() => showPage(onScreen()));
     observer.observe(page);
     onCleanup(() => observer.disconnect());
   });

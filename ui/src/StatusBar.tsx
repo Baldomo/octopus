@@ -1,5 +1,5 @@
 import { Show } from "solid-js";
-import { openView, problem, serverView } from "./state";
+import { openView, serverView, ui } from "./state";
 
 export function StatusBar() {
   return (
@@ -22,7 +22,7 @@ export function StatusBar() {
         }}
       </Show>
       <span class="spacer" />
-      <Show when={problem()}>{(text) => <span class="problem">{text()}</span>}</Show>
+      <Show when={ui.problem}>{(text) => <span class="problem">{text()}</span>}</Show>
       <Show when={openView()}>{(open) => <span>harness {open().task.harness}</span>}</Show>
     </footer>
   );

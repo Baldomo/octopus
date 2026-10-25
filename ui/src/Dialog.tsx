@@ -1,5 +1,5 @@
 import { For, type JSX } from "solid-js";
-import { setOverlay } from "./state";
+import { showModal } from "./state";
 
 export const autofocus = (input: HTMLInputElement) => queueMicrotask(() => input.focus());
 
@@ -51,7 +51,7 @@ export function Segments<T extends string>(props: { options: readonly T[]; value
 export function Actions(props: { submit: string; complete: boolean }) {
   return (
     <div class="actions">
-      <button type="button" class="btn" onClick={() => setOverlay(null)}>
+      <button type="button" class="btn" onClick={() => showModal(null)}>
         Cancel
       </button>
       <button type="submit" class="btn live" disabled={!props.complete}>

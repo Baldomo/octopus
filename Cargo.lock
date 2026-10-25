@@ -2545,6 +2545,7 @@ name = "octopus-app"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "gtk",
  "octopus-client",
  "octopus-proto",
  "serde",

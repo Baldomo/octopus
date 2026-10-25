@@ -3,7 +3,6 @@ import { listen } from "@tauri-apps/api/event";
 import { EVENTS, NEW_BROWSER_PANEL } from "./generated";
 import type {
   Boot,
-  Bounds,
   BrowserId,
   Entry,
   FilesChanged,
@@ -12,15 +11,20 @@ import type {
   Model,
   Navigated,
   NewTask,
+  OnScreen,
   PtyId,
   ServerView,
   TaskRef,
   TaskState,
+  Ui,
+  UiAct,
 } from "./generated";
 
 export const backend = {
   boot: () => invoke<Boot>("boot"),
   ready: () => invoke<void>("ready"),
+  uiAct: (act: UiAct) => invoke<void>("ui_act", { act }),
+  titleBarDoubleClick: () => invoke<void>("title_bar_double_click"),
   /** Resolves to the paired server's name. */
   serverPair: (address: string, code: string) => invoke<string>("server_pair", { address, code }),
   taskFocus: (at: TaskRef) => invoke<void>("task_focus", { at }),
@@ -42,10 +46,9 @@ export const backend = {
   browserOpen: (at: TaskRef, panel: BrowserId | typeof NEW_BROWSER_PANEL, url: string) =>
     invoke<BrowserId>("browser_open", { at, panel, url }),
   /** Resolves to the port the page reaches through a tunnel, if it does. */
-  browserShow: (at: TaskRef, panel: BrowserId, url: string) =>
-    invoke<number | null>("browser_show", { at, panel, url }),
-  browserPlace: (at: TaskRef, panel: BrowserId, bounds: Bounds | null) =>
-    invoke<void>("browser_place", { at, panel, bounds }),
+  browserLoad: (at: TaskRef, panel: BrowserId, url: string) =>
+    invoke<number | null>("browser_load", { at, panel, url }),
+  browserShowPage: (onScreen: OnScreen | null) => invoke<void>("browser_show_page", { onScreen }),
   browserGo: (at: TaskRef, panel: BrowserId, go: Go) => invoke<void>("browser_go", { at, panel, go }),
   /** Closes the panel's webview on this client; the panel stays on its server. */
   browserClose: (at: TaskRef, panel: BrowserId) => invoke<void>("browser_close", { at, panel }),
@@ -59,6 +62,7 @@ export const events = {
     listen<FilesChanged[]>(EVENTS.filesChanged, (event) => handle(event.payload)),
   browserNavigated: (handle: (navigated: Navigated) => void) =>
     listen<Navigated>(EVENTS.browserNavigated, (event) => handle(event.payload)),
+  ui: (handle: (ui: Ui) => void) => listen<Ui>(EVENTS.ui, (event) => handle(event.payload)),
 };
 
 export { Channel };

@@ -1,0 +1,6 @@
+{
+  "identifier": "title-bar",
+  "description": "The base layer drags the window by its title bar.",
+  "webviews": ["main"],
+  "permissions": ["core:window:allow-start-dragging"]
+}

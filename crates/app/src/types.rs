@@ -9,10 +9,12 @@ use serde::Serialize;
 use serde_json::json;
 use ts_rs::{Config, TS};
 
-use crate::browser::{Bounds, Go, NAVIGATED_EVENT, Navigated};
+use crate::browser::{Go, NAVIGATED_EVENT, Navigated, OnScreen};
 use crate::commands::{Boot, NewTask};
 use crate::hub::{FILES_CHANGED_EVENT, FilesChanged, MODEL_EVENT, Model, SERVERS_EVENT, ServerView};
+use crate::layers::{Bounds, FLOAT, Viewport, float_top};
 use crate::task_lists::{Column, Glyph, Lists, Row, Section, TaskRef, WorkspaceRef};
+use crate::ui::{Modal, Prefs, Reveal, Surface, UI_EVENT, Ui, UiAct, View};
 use crate::window::TaskView;
 
 /// Where the rendered file lives, relative to the workspace root.
@@ -57,9 +59,18 @@ pub fn render() -> String {
         ServerView,
         Model,
         FilesChanged,
+        View,
+        Surface,
+        Modal,
+        Prefs,
+        Reveal,
+        Ui,
+        UiAct,
+        Viewport,
         Boot,
         NewTask,
         Bounds,
+        OnScreen,
         Go,
         Navigated,
     );
@@ -68,6 +79,8 @@ pub fn render() -> String {
         constant("CHECKOUTS", &Checkout::ALL),
         constant("AGENT_PANEL", &AGENT_PANEL),
         constant("NEW_BROWSER_PANEL", &NEW_BROWSER_PANEL),
+        constant("FLOAT_LAYER", &FLOAT),
+        constant("FLOAT_TOP", &float_top()),
         constant(
             "EVENTS",
             &json!({
@@ -75,6 +88,7 @@ pub fn render() -> String {
                 "servers": SERVERS_EVENT,
                 "filesChanged": FILES_CHANGED_EVENT,
                 "browserNavigated": NAVIGATED_EVENT,
+                "ui": UI_EVENT,
             }),
         ),
     ];

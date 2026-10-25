@@ -60,6 +60,7 @@ impl Pty {
         let mut command = CommandBuilder::from_argv(argv.iter().map(Into::into).collect());
         command.cwd(cwd);
         command.env("TERM", "xterm-256color");
+        command.env("COLORTERM", "truecolor");
         for (key, value) in env {
             command.env(key, value);
         }

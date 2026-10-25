@@ -1,10 +1,9 @@
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js";
 import { backend } from "./backend";
 import { autofocus } from "./Dialog";
-import { filesOf } from "./taskFiles";
 import type { Match } from "./generated";
 import { commands as keyCommands, hint } from "./keys";
-import { act, model, openTask, openView, report, setOverlay, showSurface } from "./state";
+import { model, openTask, openView, report, reveal, showModal } from "./state";
 
 type Item = { label: string; detail: string; run: () => void };
 
@@ -56,10 +55,7 @@ export function Palette() {
         : matches().map((found) => ({
             label: `${found.path}:${found.line}`,
             detail: found.text.trim(),
-            run: () => {
-              showSurface("files");
-              act(filesOf(open).open(found.path));
-            },
+            run: () => reveal(open.key, found.path),
           }));
     return [
       { name: "commands", items: commands.filter((command) => command.label.toLowerCase().includes(text)) },
@@ -70,7 +66,7 @@ export function Palette() {
   const items = createMemo(() => groups().flatMap((group) => group.items));
   const run = (item: Item | undefined) => {
     if (item === undefined) return;
-    setOverlay(null);
+    showModal(null);
     item.run();
   };
 

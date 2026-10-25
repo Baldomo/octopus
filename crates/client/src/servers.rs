@@ -98,11 +98,12 @@ const DEVICE_KEY_FILE: &str = "device.key";
 const PAIRING_REPLY_BYTES: u64 = 4096;
 const PAIRING_PATIENCE: Duration = Duration::from_secs(10);
 
-fn config(file: &str) -> anyhow::Result<PathBuf> {
+/// Where this client keeps `file` among its config.
+pub fn config(file: &str) -> anyhow::Result<PathBuf> {
     Ok(dirs::config_dir().ok_or_else(|| anyhow!("no config directory on this platform"))?.join("octopus").join(file))
 }
 
-fn create_parent(path: &std::path::Path) -> anyhow::Result<()> {
+pub fn create_parent(path: &std::path::Path) -> anyhow::Result<()> {
     let parent = path.parent().expect("a config file lives in a directory");
     std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))
 }

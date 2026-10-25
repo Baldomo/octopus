@@ -18,6 +18,18 @@ body {
   grid-template-rows: var(--chrome-h) 1fr var(--status-h);
   position: relative;
 }
+/* The float layer shows the window beneath wherever none of its surfaces draws. */
+[data-layer="float"],
+[data-layer="float"] body {
+  background: transparent;
+}
+/* The float layer's webview hangs from the title bar's bottom edge, and its surfaces lay out in window coordinates
+   in a box that never scrolls. */
+.float-layer {
+  position: fixed;
+  top: calc(-1 * var(--chrome-h));
+  left: 0;
+}
 
 .chrome .lights {
   width: 52px;
@@ -147,14 +159,12 @@ body {
   bottom: var(--status-h);
   left: 0;
   width: var(--s2);
-  z-index: 9;
 }
 .sidebar {
   position: absolute;
   top: calc(var(--chrome-h) + var(--s2));
   bottom: calc(var(--status-h) + var(--s2));
   left: var(--s2);
-  z-index: 10;
 }
 .sidebar.hidden {
   pointer-events: none;
@@ -171,8 +181,7 @@ body {
 
 .scrim {
   position: absolute;
-  inset: 0;
-  z-index: 19;
+  inset: var(--chrome-h) 0 0;
 }
 .dialog {
   position: absolute;
@@ -181,7 +190,6 @@ body {
   transform: translateX(-50%);
   width: 560px;
   max-height: 60vh;
-  z-index: 20;
   display: flex;
   flex-direction: column;
   gap: var(--s2);

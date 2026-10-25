@@ -3,7 +3,7 @@ import { dragSource, dropTarget, isDragged, showsDropHint } from "./drag";
 import type { Column } from "./generated";
 import { Glyph, statusWord } from "./Glyph";
 import { dropHint, GroupHead } from "./Group";
-import { board, model, openTask } from "./state";
+import { model, openTask, ui } from "./state";
 
 function BoardColumn(props: { section: string; column: Column }) {
   const target = dropTarget(props.section, props.column.state);
@@ -44,7 +44,7 @@ function BoardColumn(props: { section: string; column: Column }) {
 }
 
 export function Board() {
-  const section = () => model.lists.sections.find((candidate) => candidate.name === board());
+  const section = () => model.lists.sections.find((candidate) => candidate.name === ui.prefs.board);
   return (
     <div class="pane">
       <Show when={section()} fallback={<div class="empty">Pick a section in the sidebar to see its tasks.</div>}>
