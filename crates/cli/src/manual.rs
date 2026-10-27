@@ -23,7 +23,7 @@ use crate::{attach, call, call_error, connect, print};
 pub enum ServerVerb {
     /// Run this machine's server in the foreground.
     Run(ServerRun),
-    /// Run the server at every login as a user service (launchd, systemd --user, or Task Scheduler).
+    /// Run the server at every login as a user service (launchd or systemd --user).
     Install {
         #[command(flatten)]
         run: ServerRun,

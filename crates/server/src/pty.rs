@@ -1,13 +1,11 @@
-use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use nix::unistd::Pid;
 use octopus_proto::Error;
-#[cfg(windows)]
-use portable_pty::Child;
 use portable_pty::{CommandBuilder, MasterPty, PtyPair, PtySize, native_pty_system};
 use tokio::sync::{broadcast, watch};
 
@@ -33,21 +31,13 @@ pub struct Attachment {
     pub live: Option<broadcast::Receiver<Chunk>>,
 }
 
-struct Process {
-    /// The process leads its own session and group, so signalling the group reaches everything it started.
-    #[cfg(unix)]
-    pid: nix::unistd::Pid,
-    #[cfg(windows)]
-    killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
-}
-
 /// A PTY and its process, owned by the terminal host.
 pub struct Pty {
     writer: Mutex<Box<dyn Write + Send>>,
-    /// Dropped once the process exits: a Windows pseudoconsole ends its output only when closed.
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
-    /// Dropped right after the reap, narrowing the window for a signal to reach a process that reuses the id.
-    process: Mutex<Option<Process>>,
+    /// Leads its own session and group, so signalling the group reaches everything it started. Dropped right after
+    /// the reap, narrowing the window for a signal to reach a process that reuses the id.
+    process: Mutex<Option<Pid>>,
     output: Mutex<Output>,
     exited: watch::Sender<bool>,
 }
@@ -72,7 +62,7 @@ impl Pty {
         let pty = Arc::new(Self {
             writer: Mutex::new(writer),
             master: Mutex::new(Some(pair.master)),
-            process: Mutex::new(Some(Process::of(&child))),
+            process: Mutex::new(Some(child)),
             output: Mutex::new(Output { scrollback: VecDeque::new(), live: Some(live) }),
             exited: watch::Sender::new(false),
         });
@@ -84,12 +74,11 @@ impl Pty {
 
     fn pump(&self, mut reader: Box<dyn Read + Send>) {
         let mut buffer = [0u8; READ_BYTES];
-        let mut cursor_query_answered = false;
         while let Ok(read) = reader.read(&mut buffer) {
             if read == 0 {
                 break;
             }
-            let chunk = self.answer_cursor_query(&buffer[..read], &mut cursor_query_answered);
+            let chunk = &buffer[..read];
             let mut output = lock(&self.output);
             output.scrollback.extend(chunk.iter());
             let excess = output.scrollback.len().saturating_sub(SCROLLBACK_BYTES);
@@ -101,29 +90,7 @@ impl Pty {
         lock(&self.output).live = None;
     }
 
-    /// A pseudoconsole asks its terminal for the cursor position and renders nothing until answered. The host is
-    /// that terminal whether or not a client is attached, and a fresh screen starts at the top left. The query is
-    /// kept out of the output, so no client attaching later answers it again.
-    #[cfg(windows)]
-    fn answer_cursor_query<'chunk>(&self, chunk: &'chunk [u8], answered: &mut bool) -> Cow<'chunk, [u8]> {
-        const QUERY: &[u8] = b"\x1b[6n";
-        const AT_TOP_LEFT: &[u8] = b"\x1b[1;1R";
-        let found = (!*answered).then(|| chunk.windows(QUERY.len()).position(|window| window == QUERY)).flatten();
-        let Some(at) = found else { return Cow::Borrowed(chunk) };
-        *answered = true;
-        if let Err(error) = self.write(AT_TOP_LEFT) {
-            report!("answer a terminal's cursor query: {error}");
-        }
-        Cow::Owned([&chunk[..at], &chunk[at + QUERY.len()..]].concat())
-    }
-
-    /// A Unix PTY asks nothing of its terminal before it runs.
-    #[cfg(unix)]
-    fn answer_cursor_query<'chunk>(&self, chunk: &'chunk [u8], _answered: &mut bool) -> Cow<'chunk, [u8]> {
-        Cow::Borrowed(chunk)
-    }
-
-    fn reap(&self, child: Started) {
+    fn reap(&self, child: Pid) {
         if let Err(error) = wait(child) {
             report!("waiting on a terminal's process: {error}");
         }
@@ -161,97 +128,40 @@ impl Pty {
         }
     }
 
-    /// The grace starts as the ask leaves: on Windows the ask is a write, which a full input buffer blocks.
     pub async fn terminate(self: Arc<Self>) {
-        let asking = Arc::clone(&self);
-        drop(tokio::task::spawn_blocking(move || asking.ask_to_exit()));
+        self.signal(nix::sys::signal::Signal::SIGTERM);
         if tokio::time::timeout(KILL_GRACE, self.exit()).await.is_err() {
             self.kill();
         }
     }
 
-    #[cfg(unix)]
     fn signal(&self, signal: nix::sys::signal::Signal) {
-        if let Some(process) = lock(&self.process).as_ref()
-            && let Err(error) = nix::sys::signal::killpg(process.pid, signal)
+        if let Some(pid) = *lock(&self.process)
+            && let Err(error) = nix::sys::signal::killpg(pid, signal)
         {
-            report!("send {signal} to {}: {error}", process.pid);
+            report!("send {signal} to {pid}: {error}");
         }
     }
 
-    #[cfg(unix)]
-    fn ask_to_exit(&self) {
-        self.signal(nix::sys::signal::Signal::SIGTERM);
-    }
-
-    #[cfg(unix)]
     pub fn kill(&self) {
         self.signal(nix::sys::signal::Signal::SIGKILL);
     }
-
-    /// Ctrl-C typed into the pseudoconsole: Windows' console processes take it as their interrupt.
-    #[cfg(windows)]
-    fn ask_to_exit(&self) {
-        const CTRL_C: u8 = 0x03;
-        if self.running()
-            && let Err(error) = self.write(&[CTRL_C])
-        {
-            report!("interrupt a terminal: {error}");
-        }
-    }
-
-    #[cfg(windows)]
-    pub fn kill(&self) {
-        if let Some(process) = lock(&self.process).as_mut()
-            && let Err(error) = process.killer.kill()
-        {
-            report!("kill a terminal: {error}");
-        }
-    }
 }
 
-#[cfg(unix)]
-type Started = nix::unistd::Pid;
-#[cfg(windows)]
-type Started = Box<dyn Child + Send + Sync>;
-
-#[cfg(all(unix, not(target_os = "macos")))]
-fn start(pair: &PtyPair, command: CommandBuilder) -> anyhow::Result<Started> {
+#[cfg(target_os = "linux")]
+fn start(pair: &PtyPair, command: CommandBuilder) -> anyhow::Result<Pid> {
     let pid = pair.slave.spawn_command(command)?.process_id().expect("a spawned unix child has a pid");
-    Ok(nix::unistd::Pid::from_raw(i32::try_from(pid)?))
+    Ok(Pid::from_raw(i32::try_from(pid)?))
 }
 
 #[cfg(target_os = "macos")]
-fn start(pair: &PtyPair, command: CommandBuilder) -> anyhow::Result<Started> {
+fn start(pair: &PtyPair, command: CommandBuilder) -> anyhow::Result<Pid> {
     let tty = pair.master.tty_name().expect("a macOS PTY has a device path");
     disclaimed::spawn(command, &tty)
 }
 
-#[cfg(windows)]
-fn start(pair: &PtyPair, command: CommandBuilder) -> anyhow::Result<Started> {
-    pair.slave.spawn_command(command)
-}
-
-#[cfg(unix)]
-fn wait(pid: Started) -> nix::Result<()> {
+fn wait(pid: Pid) -> nix::Result<()> {
     nix::sys::wait::waitpid(pid, None).map(drop)
-}
-
-#[cfg(windows)]
-fn wait(mut child: Started) -> std::io::Result<()> {
-    child.wait().map(drop)
-}
-
-impl Process {
-    #[cfg(unix)]
-    fn of(pid: &Started) -> Self {
-        Self { pid: *pid }
-    }
-
-    #[cfg(windows)]
-    fn of(child: &Started) -> Self {
-        Self { killer: child.clone_killer() }
-    }
 }
 
 /// macOS asks a process's responsible process for its privacy permissions, and a child inherits its parent's.

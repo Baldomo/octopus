@@ -255,7 +255,7 @@ Pair with a server on another machine using the code its `pairing offer` showed,
 Run this machine's server in the foreground.
 
 - `--name <name>`: The server's name, which agents in its terminals see as OCTOPUS_SERVER.
-- `--socket <socket>`: A Unix socket path, or a named pipe `\\.\pipe\<name>` on Windows.
+- `--socket <socket>`: The Unix socket clients on this machine connect to.
 - `--store <store>`: The SQLite file the server keeps its state in.
 - `--worktrees <worktrees>`: Where task worktrees live: <worktrees>/<workspace>/<task>.
 - `--terminal-host <terminal-host>`: Socket of the terminal host, the process that keeps this server's terminals running across restarts; started if nothing answers there.
@@ -263,10 +263,10 @@ Run this machine's server in the foreground.
 
 ## `octopus server install`
 
-Run the server at every login as a user service (launchd, systemd --user, or Task Scheduler).
+Run the server at every login as a user service (launchd or systemd --user).
 
 - `--name <name>`: The server's name, which agents in its terminals see as OCTOPUS_SERVER.
-- `--socket <socket>`: A Unix socket path, or a named pipe `\\.\pipe\<name>` on Windows.
+- `--socket <socket>`: The Unix socket clients on this machine connect to.
 - `--store <store>`: The SQLite file the server keeps its state in.
 - `--worktrees <worktrees>`: Where task worktrees live: <worktrees>/<workspace>/<task>.
 - `--terminal-host <terminal-host>`: Socket of the terminal host, the process that keeps this server's terminals running across restarts; started if nothing answers there.

@@ -12,7 +12,6 @@ pub fn search_path(environment: &[(String, String)]) -> Option<OsString> {
 }
 
 /// The account's login shell, which a shell panel runs.
-#[cfg(unix)]
 pub fn shell() -> Result<PathBuf, Error> {
     use nix::unistd::{User, getuid};
 
@@ -21,17 +20,10 @@ pub fn shell() -> Result<PathBuf, Error> {
     Ok(account.ok_or_else(|| Error::internal(format!("uid {uid} has no account")))?.shell)
 }
 
-/// The command interpreter Windows names for the account.
-#[cfg(windows)]
-pub fn shell() -> Result<PathBuf, Error> {
-    std::env::var_os("ComSpec").map(PathBuf::from).ok_or_else(|| Error::internal("ComSpec is unset"))
-}
-
 /// Runs the account's login shell interactively, as a terminal window does, in `directory`, so whatever the
 /// profile sets up per directory applies. The marker sets apart whatever the profile prints itself, and `exec`
 /// skips the logout files, which could print after. The output goes to files rather than pipes, so a daemon the
 /// profile leaves running cannot hold the read open.
-#[cfg(unix)]
 pub fn resolve(directory: &Path) -> Result<Vec<(String, String)>, Error> {
     use std::io::{Read, Seek};
     use std::process::{Command, Stdio};
@@ -63,10 +55,4 @@ pub fn resolve(directory: &Path) -> Result<Vec<(String, String)>, Error> {
     }
     let (_, variables) = stdout.split_once(MARKER).ok_or_else(|| failed(&"printed no environment"))?;
     Ok(variables.split('\0').filter_map(|pair| pair.split_once('=')).map(|(k, v)| (k.into(), v.into())).collect())
-}
-
-/// A logon task starts the server in the account's whole environment, which the terminal host passes down.
-#[cfg(windows)]
-pub fn resolve(_directory: &Path) -> Result<Vec<(String, String)>, Error> {
-    Ok(Vec::new())
 }

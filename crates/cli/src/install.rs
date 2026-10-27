@@ -14,7 +14,7 @@ pub struct ServerRun {
     /// The server's name, which agents in its terminals see as OCTOPUS_SERVER.
     #[arg(long)]
     pub name: String,
-    /// A Unix socket path, or a named pipe `\\.\pipe\<name>` on Windows.
+    /// The Unix socket clients on this machine connect to.
     #[arg(long)]
     pub socket: PathBuf,
     /// The SQLite file the server keeps its state in.
@@ -34,7 +34,7 @@ pub struct ServerRun {
 
 impl ServerRun {
     /// A server that dialled its own socket for its host would wait on itself forever. Compared without case,
-    /// as macOS and Windows resolve names.
+    /// as macOS resolves names.
     pub fn check(&self) -> anyhow::Result<()> {
         let (socket, host) = (self.socket.display().to_string(), self.terminal_host.display().to_string());
         if socket.eq_ignore_ascii_case(&host) {
@@ -111,7 +111,7 @@ impl Service {
     }
 }
 
-#[cfg(any(target_os = "macos", windows, test))]
+#[cfg(any(target_os = "macos", test))]
 fn xml(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
@@ -149,7 +149,7 @@ pub fn launchd_plist(service: &Service) -> String {
 }
 
 /// `KillMode=process` stops the server alone, so its terminal host and every agent outlive a restart.
-#[cfg(any(all(unix, not(target_os = "macos")), test))]
+#[cfg(any(target_os = "linux", test))]
 pub fn systemd_unit(service: &Service) -> String {
     let specifiers = |text: &str| text.replace('%', "%%");
     let word = |text: &String| {
@@ -175,69 +175,11 @@ WantedBy=default.target
     )
 }
 
-/// Quotes one argument for cmd: backslashes before the closing quote are doubled so they stay literal.
-#[cfg(any(windows, test))]
-fn windows_word(word: &str) -> anyhow::Result<String> {
-    if word.contains(['"', '%']) {
-        bail!("{word} holds a '\"' or '%', which a Windows command line cannot carry");
-    }
-    let trailing = word.len() - word.trim_end_matches('\\').len();
-    Ok(format!("\"{word}{}\"", "\\".repeat(trailing)))
-}
-
-/// Runs headless under conhost so no console window opens at logon; Task Scheduler has no output redirection,
-/// so cmd appends to the log.
-#[cfg(any(windows, test))]
-pub fn windows_task(service: &Service, user: &str) -> anyhow::Result<String> {
-    let words: Vec<String> = service.argv().iter().map(|word| windows_word(word)).collect::<anyhow::Result<_>>()?;
-    let log = windows_word(&service.log.display().to_string())?;
-    let arguments = xml(&format!("--headless cmd.exe /d /s /c \"{} >> {log} 2>&1\"", words.join(" ")));
-    let (name, user) = (xml(&service.run.name), xml(user));
-    Ok(format!(
-        r#"<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo>
-    <Description>octopus server {name}</Description>
-  </RegistrationInfo>
-  <Triggers>
-    <LogonTrigger>
-      <Enabled>true</Enabled>
-      <UserId>{user}</UserId>
-    </LogonTrigger>
-  </Triggers>
-  <Principals>
-    <Principal id="Author">
-      <UserId>{user}</UserId>
-      <LogonType>InteractiveToken</LogonType>
-      <RunLevel>LeastPrivilege</RunLevel>
-    </Principal>
-  </Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <RestartOnFailure>
-      <Interval>PT1M</Interval>
-      <Count>999</Count>
-    </RestartOnFailure>
-  </Settings>
-  <Actions Context="Author">
-    <Exec>
-      <Command>conhost.exe</Command>
-      <Arguments>{arguments}</Arguments>
-    </Exec>
-  </Actions>
-</Task>
-"#
-    ))
-}
-
 /// The name the user gave this computer, which names its server.
 fn machine_name() -> anyhow::Result<String> {
     #[cfg(target_os = "macos")]
     return run("scutil", &["--get", "ComputerName"]);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     Ok(octopus_client::servers::hostname())
 }
 
@@ -259,7 +201,7 @@ pub fn install(service: &Service) -> anyhow::Result<Registration> {
     for directory in [&unit, &service.log].map(|path| path.parent().expect("an absolute file path has a directory")) {
         std::fs::create_dir_all(directory).with_context(|| format!("create {}", directory.display()))?;
     }
-    std::fs::write(&unit, manager::unit(service)?).with_context(|| format!("write {}", unit.display()))?;
+    std::fs::write(&unit, manager::unit(service)).with_context(|| format!("write {}", unit.display()))?;
     manager::register(&service.id, &unit)?;
     Ok(Registration { service: service.id.clone(), unit })
 }
@@ -296,14 +238,8 @@ pub fn list_this_machine() -> anyhow::Result<()> {
     servers.save()
 }
 
-#[cfg(unix)]
 fn local_socket(home: &Path, name: &str) -> PathBuf {
     home.join(format!("{name}.sock"))
-}
-
-#[cfg(windows)]
-fn local_socket(_home: &Path, name: &str) -> PathBuf {
-    PathBuf::from(format!(r"\\.\pipe\octopus-{name}"))
 }
 
 #[cfg(target_os = "macos")]
@@ -315,8 +251,8 @@ mod manager {
         Ok(home.join("Library").join("LaunchAgents").join(format!("{id}.plist")))
     }
 
-    pub fn unit(service: &Service) -> anyhow::Result<Vec<u8>> {
-        Ok(launchd_plist(service).into_bytes())
+    pub fn unit(service: &Service) -> Vec<u8> {
+        launchd_plist(service).into_bytes()
     }
 
     fn domain() -> String {
@@ -342,7 +278,7 @@ mod manager {
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
 mod manager {
     use super::*;
 
@@ -351,8 +287,8 @@ mod manager {
         Ok(config.join("systemd").join("user").join(format!("{id}.service")))
     }
 
-    pub fn unit(service: &Service) -> anyhow::Result<Vec<u8>> {
-        Ok(systemd_unit(service).into_bytes())
+    pub fn unit(service: &Service) -> Vec<u8> {
+        systemd_unit(service).into_bytes()
     }
 
     fn systemctl(args: &[&str]) -> anyhow::Result<()> {
@@ -370,36 +306,6 @@ mod manager {
         systemctl(&["disable", "--now", &format!("{id}.service")])?;
         remove_unit(unit)?;
         systemctl(&["daemon-reload"])
-    }
-}
-
-#[cfg(windows)]
-mod manager {
-    use super::*;
-
-    pub fn unit_path(id: &str) -> anyhow::Result<PathBuf> {
-        let config = dirs::config_dir().ok_or_else(|| anyhow!("no config directory"))?;
-        Ok(config.join("octopus").join(format!("{id}.xml")))
-    }
-
-    /// Task Scheduler reads task XML as UTF-16.
-    pub fn unit(service: &Service) -> anyhow::Result<Vec<u8>> {
-        const BOM: u16 = 0xfeff;
-        let task = windows_task(service, &run("whoami", &[])?)?;
-        Ok(std::iter::once(BOM).chain(task.encode_utf16()).flat_map(u16::to_le_bytes).collect())
-    }
-
-    pub fn register(id: &str, unit: &Path) -> anyhow::Result<()> {
-        run("schtasks", &["/Create", "/TN", id, "/XML", &unit.display().to_string(), "/F"])?;
-        run("schtasks", &["/Run", "/TN", id]).map(drop)
-    }
-
-    pub fn unregister(id: &str, unit: &Path) -> anyhow::Result<()> {
-        if let Err(error) = run("schtasks", &["/End", "/TN", id]) {
-            eprintln!("octopus: {id} was not running: {error}");
-        }
-        run("schtasks", &["/Delete", "/TN", id, "/F"])?;
-        remove_unit(unit)
     }
 }
 
@@ -469,21 +375,6 @@ WantedBy=default.target
             exec.join(" ")
         );
         assert_eq!(systemd_unit(&service("/var/octopus/100%.log")), expected);
-    }
-
-    #[test]
-    fn a_windows_logon_task_runs_the_server_headless_for_its_user_without_a_time_limit() {
-        let task = windows_task(&service(r"C:\Users\ada\octopus.log"), r"pc\ada").expect("task");
-        let quoted: Vec<String> = ARGV.iter().map(|word| format!("\"{word}\"")).collect();
-        let command = format!(
-            r#"--headless cmd.exe /d /s /c "{} &gt;&gt; "C:\Users\ada\octopus.log" 2&gt;&amp;1""#,
-            quoted.join(" ")
-        );
-        assert!(task.contains(&format!("<Arguments>{command}</Arguments>")), "{task}");
-        assert!(task.contains("<LogonTrigger>\n      <Enabled>true</Enabled>\n      <UserId>pc\\ada</UserId>"));
-        assert!(task.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
-        assert_eq!(windows_word(r"C:\octopus\").expect("word"), r#""C:\octopus\\""#);
-        assert!(windows_task(&service("/var/octopus/100%.log"), r"pc\ada").is_err(), "'%' cannot be quoted");
     }
 
     #[test]

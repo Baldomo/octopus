@@ -93,17 +93,10 @@ pub struct Harness {
     pub hooks: bool,
 }
 
-#[cfg(unix)]
 fn owner_only(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     std::fs::OpenOptions::new().create(true).append(true).mode(0o600).open(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-}
-
-/// A Windows profile's files are its user's own.
-#[cfg(windows)]
-fn owner_only(_path: &Path) -> std::io::Result<()> {
-    Ok(())
 }
 
 pub struct Store {

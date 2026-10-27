@@ -26,21 +26,11 @@ pub struct Running {
     pub quic: SocketAddr,
 }
 
-/// The local socket `name` of the test in `dir`; on Windows a named pipe, which lives outside the filesystem.
-pub fn address(dir: &Path, name: &str) -> PathBuf {
-    if cfg!(windows) {
-        let test = dir.file_name().expect("a tempdir has a name").to_string_lossy();
-        PathBuf::from(format!(r"\\.\pipe\octopus-{test}-{name}"))
-    } else {
-        dir.join(name)
-    }
-}
-
 /// Serves `dir`'s store on `socket`, keeping terminals in the host at `host`. A second call on the same `dir` and
 /// `host` plays a server restart; a fresh `host` plays a machine restart: the server finds none of its terminals.
 pub fn start(dir: &Path, socket: &str, host: &str) -> Running {
-    let socket = address(dir, socket);
-    let host = TerminalHost { program: OCTOPUS.into(), address: address(dir, host) };
+    let socket = dir.join(socket);
+    let host = TerminalHost { program: OCTOPUS.into(), address: dir.join(host) };
     let server = Server::open(SERVER, &dir.join("store.db"), &dir.join("worktrees"), &host).expect("open server");
     let remote = quic::listen(([127, 0, 0, 1], 0).into(), server.device()).expect("listen on QUIC");
     let quic = remote.local_addr().expect("the QUIC address");
@@ -67,13 +57,13 @@ fn server_run(dir: &Path) -> Command {
     let mut command = Command::new(OCTOPUS);
     command
         .args(["server", "run", "--name", SERVER, "--socket"])
-        .arg(address(dir, "server.sock"))
+        .arg(dir.join("server.sock"))
         .arg("--store")
         .arg(dir.join("store.db"))
         .arg("--worktrees")
         .arg(dir.join("worktrees"))
         .arg("--terminal-host")
-        .arg(address(dir, "host.sock"))
+        .arg(dir.join("host.sock"))
         .args(["--quic", "127.0.0.1:0"]);
     command
 }
@@ -92,7 +82,7 @@ impl ServerProcess {
 
     async fn serve(dir: &Path, mut command: Command) -> Self {
         let child = command.spawn().expect("spawn octopus server run");
-        let process = Self { child, socket: address(dir, "server.sock") };
+        let process = Self { child, socket: dir.join("server.sock") };
         let probe = identity("probe");
         eventually("the server answering", async || Connection::connect(&local(&process.socket), &probe).await.is_ok())
             .await;
@@ -121,17 +111,9 @@ pub async fn connect(running: &Running, client: &str) -> Connection {
     Connection::connect(&local(&running.socket), &identity(client)).await.expect("connect")
 }
 
-pub fn shell_var(var: &str) -> String {
-    if cfg!(windows) { format!("%{var}%") } else { format!("${var}") }
-}
-
 /// An agent that prints `<line>`, then stays open reading input, which the terminal echoes.
 pub fn echo_agent(line: &str) -> Vec<String> {
-    if cfg!(windows) {
-        vec!["cmd".into(), "/q".into(), "/k".into(), format!("echo {line}")]
-    } else {
-        vec!["sh".into(), "-c".into(), format!("echo {line}; exec cat")]
-    }
+    vec!["sh".into(), "-c".into(), format!("echo {line}; exec cat")]
 }
 
 pub async fn workspace(connection: &Connection, root: &Path) -> WorkspaceId {

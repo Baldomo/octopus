@@ -2617,7 +2617,6 @@ name = "octopus-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "dunce",
  "fastrand",
  "ignore",
  "nix 0.31.3",

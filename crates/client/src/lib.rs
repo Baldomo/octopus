@@ -27,11 +27,7 @@ mod tests {
     use crate::{Connection, Identity};
 
     fn address(name: &str) -> PathBuf {
-        if cfg!(windows) {
-            PathBuf::from(format!(r"\\.\pipe\octopus-client-{}-{name}", std::process::id()))
-        } else {
-            std::env::temp_dir().join(format!("octopus-client-{}-{name}.sock", std::process::id()))
-        }
+        std::env::temp_dir().join(format!("octopus-client-{}-{name}.sock", std::process::id()))
     }
 
     #[test]

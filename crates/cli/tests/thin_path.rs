@@ -1,8 +1,6 @@
 mod common;
 
-use common::{
-    SERVER, ServerProcess, connect, create, echo_agent, eventually, read_until, shell_var, start, task, workspace,
-};
+use common::{SERVER, ServerProcess, connect, create, echo_agent, eventually, read_until, start, task, workspace};
 use octopus_client::{CallError, Connection};
 use octopus_proto::ops::{
     AgentReport, HarnessSet, TaskCreate, TaskFocus, TaskMove, TaskSetSession, TermClaim, TermClose, TermOpen,
@@ -38,8 +36,7 @@ async fn a_focused_task_runs_its_agent_terminal_end_to_end() {
     let running = start(dir.path(), "server.sock", "host.sock");
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
-    set_harness(&laptop, "echo", echo_agent(&format!("agent:{}@{}", shell_var(ENV_TASK), shell_var(ENV_SERVER))), true)
-        .await;
+    set_harness(&laptop, "echo", echo_agent(&format!("agent:${ENV_TASK}@${ENV_SERVER}")), true).await;
 
     let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
     assert_eq!(task(&laptop, &id).await.agent, Agent::NotStarted);
@@ -105,7 +102,7 @@ async fn a_shell_panel_follows_the_agent_until_its_shell_exits_or_it_closes() {
     assert_eq!(panels.iter().map(|panel| &panel.id).collect::<Vec<_>>()[1..], [&shell]);
     assert_eq!(panels[0].name, "agent");
     let mut live = laptop.open_data_stream(&Stream::Pty(shell.clone())).await.expect("attach the shell");
-    let echo = format!("echo shell:{}", shell_var(ENV_TASK));
+    let echo = format!("echo shell:${ENV_TASK}");
     let send = |text: &str| TermSend {
         task: id.clone(),
         panel: shell.0.clone(),
@@ -293,8 +290,6 @@ async fn an_agent_that_cannot_start_fails_the_focus_with_the_reason() {
     }
 }
 
-/// Unix only: Windows has no SIGTERM for an agent to ignore.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn an_agent_that_ignores_sigterm_and_sighup_is_killed_after_the_grace() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -314,11 +309,7 @@ async fn an_agent_that_ignores_sigterm_and_sighup_is_killed_after_the_grace() {
 
 /// Prints the agent's arguments after `args:`, then stays open.
 fn args_agent() -> Vec<String> {
-    if cfg!(windows) {
-        ["cmd", "/q", "/k", "echo args:"].map(String::from).to_vec()
-    } else {
-        ["sh", "-c", "echo args: \"$@\"; exec cat", "sh"].map(String::from).to_vec()
-    }
+    ["sh", "-c", "echo args: \"$@\"; exec cat", "sh"].map(String::from).to_vec()
 }
 
 async fn focus_prints(connection: &Connection, id: &TaskId, line: &str) {
@@ -370,8 +361,6 @@ async fn every_start_after_a_session_s_first_resumes_it() {
     focus_prints(&laptop, &imported, "args: --resume demo-session").await;
 }
 
-/// Unix only: a Windows logon task starts the server in the account's whole environment.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_launched_server_finds_and_runs_agents_in_the_login_environment() {
     use std::os::unix::fs::PermissionsExt;

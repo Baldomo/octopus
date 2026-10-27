@@ -202,18 +202,10 @@ pub fn hostname() -> String {
     gethostname::gethostname().to_string_lossy().into_owned()
 }
 
-#[cfg(unix)]
 fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?.write_all(bytes)
-}
-
-/// The config directory is the user's own on Windows.
-#[cfg(windows)]
-fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    std::fs::OpenOptions::new().write(true).create_new(true).open(path)?.write_all(bytes)
 }
 
 /// Pairs with the server at `endpoint` using a code it offered, and returns the entry that pins its key. Both sides

@@ -94,14 +94,8 @@ fn from_corner(rects: impl Iterator<Item = Bounds>, zoom: Zoom) -> Bounds {
 
 /// The float layer's rect and the rects in it that take the pointer, for the surfaces that are out.
 pub fn float_cover(surfaces: &[Floated], zoom: Zoom) -> (Bounds, Vec<Bounds>) {
-    let inputs = surfaces.iter().map(|surface| surface.input);
-    if host::SHAPES_INPUT {
-        let drawn = surfaces.iter().flat_map(|surface| [surface.input, surface.drawn]);
-        (from_corner(drawn, zoom), inputs.collect())
-    } else {
-        let float = from_corner(inputs, zoom);
-        (float, vec![float])
-    }
+    let drawn = surfaces.iter().flat_map(|surface| [surface.input, surface.drawn]);
+    (from_corner(drawn, zoom), surfaces.iter().map(|surface| surface.input).collect())
 }
 
 /// Gives the window `appearance`, the OS appearance when it names no theme.
@@ -297,26 +291,17 @@ impl Layers {
     }
 }
 
-/// macOS and Windows stack a window's webviews as native child views in the order they were added, and re-adding
-/// one raises it. macOS shapes a webview's input through its hit test; WebView2 takes every click in its window, so
-/// Windows cannot.
-#[cfg(not(target_os = "linux"))]
+/// macOS stacks a window's webviews as native child views in the order they were added, and re-adding one raises
+/// it. macOS shapes a webview's input through its hit test.
+#[cfg(target_os = "macos")]
 mod host {
     use tauri::{LogicalPosition, LogicalSize, Rect, Webview, Window};
 
     use super::Bounds;
 
-    pub const SHAPES_INPUT: bool = cfg!(target_os = "macos");
-
     /// The webview at `bounds` takes the pointer only in `input`, rects of the window.
-    #[cfg(target_os = "macos")]
     pub fn take_input(webview: &Webview, bounds: Bounds, input: Vec<Bounds>) -> tauri::Result<()> {
         webview.with_webview(move |_| super::pointer::take_input(bounds, input))
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    pub fn take_input(_: &Webview, _: Bounds, _: Vec<Bounds>) -> tauri::Result<()> {
-        Ok(())
     }
 
     pub fn adopt_base(_: &Webview) -> tauri::Result<()> {
@@ -417,8 +402,6 @@ mod host {
             overlay().queue_resize();
         })
     }
-
-    pub const SHAPES_INPUT: bool = true;
 
     /// The webview's window takes the pointer only in `input`, rects of the window, and the overlay passes every
     /// other point to the child beneath.
@@ -639,12 +622,7 @@ mod tests {
         let modal = Floated { input: scrim, drawn: scrim };
         let cover = |surfaces: &[Floated]| float_cover(surfaces, Zoom::default());
         assert_eq!(cover(&[]).0, Bounds { x: 0.0, y, width: 0.0, height: 0.0 });
-        if host::SHAPES_INPUT {
-            assert_eq!(cover(&[sidebar]), (Bounds { x: 0.0, y, width: 342.0, height: 922.0 - y }, vec![column]));
-            assert_eq!(cover(&[sidebar, modal]), (Bounds { height: 922.0 - y, ..scrim }, vec![column, scrim]));
-        } else {
-            assert_eq!(cover(&[sidebar]), (column, vec![column]));
-            assert_eq!(cover(&[sidebar, modal]), (scrim, vec![scrim]));
-        }
+        assert_eq!(cover(&[sidebar]), (Bounds { x: 0.0, y, width: 342.0, height: 922.0 - y }, vec![column]));
+        assert_eq!(cover(&[sidebar, modal]), (Bounds { height: 922.0 - y, ..scrim }, vec![column, scrim]));
     }
 }

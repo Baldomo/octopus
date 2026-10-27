@@ -117,7 +117,7 @@ fn directory(root: &str) -> Result<String, Error> {
     if !Path::new(root).is_absolute() {
         return Err(Error::invalid(format!("root {root} is not an absolute path")));
     }
-    let canonical = dunce::canonicalize(root).map_err(|error| Error::invalid(format!("root {root}: {error}")))?;
+    let canonical = std::fs::canonicalize(root).map_err(|error| Error::invalid(format!("root {root}: {error}")))?;
     if !canonical.is_dir() {
         return Err(Error::invalid(format!("root {root} is not a directory")));
     }
@@ -427,7 +427,6 @@ impl Server {
         if live > 0 {
             return Err(Error::conflict(format!("{} has {live} live tasks; end them first", workspace.name)));
         }
-        // A process still holding a worktree open would keep Windows from removing it.
         for task in &tasks {
             state.watchers.remove(&task.id);
             state.browsers.remove(&task.id);

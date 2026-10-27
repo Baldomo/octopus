@@ -397,9 +397,6 @@ const [adding, setAdding] = createSignal(false);
 /** The sidebar holds the keyboard while one of its menus or editors is open. */
 export const holdsKeyboard = () => anyMenuOpen() || renaming() !== null || adding();
 
-/** A root on any server's machine: a Unix path, a Windows drive path, or a UNC path. */
-const absolute = (root: string) => /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(root);
-
 export function AddWorkspace() {
   return (
     <Show
@@ -433,9 +430,11 @@ function WorkspaceCard() {
     const [chosen, named, rooted] = [server(), name().trim(), root().trim()];
     const [swatch, resolved] = [picked(), auto.state === "ready" ? auto() : undefined];
     const stored = swatch !== null && resolved !== undefined && same(swatch, resolved) ? null : swatch;
-    const needs = [chosen === "" && "a server", named === "" && "name", !absolute(rooted) && "an absolute root"].filter(
-      (field) => field !== false,
-    );
+    const needs = [
+      chosen === "" && "a server",
+      named === "" && "name",
+      !rooted.startsWith("/") && "an absolute root",
+    ].filter((field) => field !== false);
     if (needs.length > 0) return setError(`Needs ${needs.join(" and ")}.`);
     if (model.lists.workspaces.some((workspace) => workspace.server === chosen && workspace.name === named)) {
       return setError(`${serverLabel(chosen)} already has ${named}.`);

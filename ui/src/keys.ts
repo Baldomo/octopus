@@ -23,7 +23,7 @@ export const commands = {
   quit: { label: "Quit octopus", key: "Q", run: () => act(backend.quit()) },
 } satisfies Record<string, Command>;
 
-/** On Linux and Windows, ⌘ is Ctrl+Shift. */
+/** On Linux, ⌘ is Ctrl+Shift. */
 export const hint = (command: Command) =>
   command.key === null ? "" : mac ? `⌘${command.key}` : `Ctrl+Shift+${command.key}`;
 
@@ -32,7 +32,7 @@ const held = (event: KeyboardEvent) =>
     ? event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
     : event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey;
 
-/** The physical key under each command letter, so Shift on Linux and Windows changes nothing. */
+/** The physical key under each command letter, so Shift on Linux changes nothing. */
 const PUNCTUATION: Record<string, string> = {
   "\\": "Backslash",
   ",": "Comma",

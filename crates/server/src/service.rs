@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 use std::io::Write;
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -76,7 +78,7 @@ enum Then {
 /// Serves terminals at `address` until the address is gone, ending every terminal on the way out.
 pub async fn run_terminal_host(address: &Path) -> std::io::Result<()> {
     let listener = Listener::bind(address)?;
-    let unreachable = platform::unreachable(address)?;
+    let unreachable = unreachable(address)?;
     let terminals = Terminals::default();
     let serving = Arc::clone(&terminals);
     tokio::spawn(local::accept_forever(listener, move |stream| {
@@ -89,45 +91,26 @@ pub async fn run_terminal_host(address: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
-mod platform {
-    use std::os::unix::fs::MetadataExt;
-    use std::path::Path;
-    use std::time::Duration;
+const UNREACHABLE_CHECK: Duration = Duration::from_secs(1);
 
-    use crate::report;
-
-    const CHECK: Duration = Duration::from_secs(1);
-
-    fn identity(address: &Path) -> std::io::Result<(u64, u64)> {
-        std::fs::metadata(address).map(|metadata| (metadata.dev(), metadata.ino()))
-    }
-
-    /// Resolves once the socket file the host bound is gone or replaced: nothing can reach the host again.
-    pub fn unreachable(address: &Path) -> std::io::Result<impl Future<Output = ()> + use<'_>> {
-        let bound = identity(address)?;
-        Ok(async move {
-            loop {
-                tokio::time::sleep(CHECK).await;
-                match identity(address) {
-                    Ok(current) if current == bound => {}
-                    Ok(_) => return,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-                    Err(error) => report!("check {}: {error}", address.display()),
-                }
-            }
-        })
-    }
+fn identity(address: &Path) -> std::io::Result<(u64, u64)> {
+    std::fs::metadata(address).map(|metadata| (metadata.dev(), metadata.ino()))
 }
 
-#[cfg(windows)]
-mod platform {
-    use std::path::Path;
-
-    /// A named pipe lives exactly as long as the host that serves it.
-    pub fn unreachable(_address: &Path) -> std::io::Result<impl Future<Output = ()>> {
-        Ok(std::future::pending())
-    }
+/// Resolves once the socket file the host bound is gone or replaced: nothing can reach the host again.
+fn unreachable(address: &Path) -> std::io::Result<impl Future<Output = ()> + use<'_>> {
+    let bound = identity(address)?;
+    Ok(async move {
+        loop {
+            tokio::time::sleep(UNREACHABLE_CHECK).await;
+            match identity(address) {
+                Ok(current) if current == bound => {}
+                Ok(_) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(error) => report!("check {}: {error}", address.display()),
+            }
+        }
+    })
 }
 
 fn find(terminals: &Terminals, id: &PtyId) -> Result<Arc<Pty>, Error> {
@@ -257,21 +240,6 @@ fn host_error(address: &Path, error: impl std::fmt::Display) -> Error {
     Error::internal(format!("terminal host {}: {error}", address.display()))
 }
 
-/// Takes the host out of the server's process group, so a Ctrl-C or group signal aimed at the server spares it.
-#[cfg(unix)]
-fn detach(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-    command.process_group(0);
-}
-
-#[cfg(windows)]
-fn detach(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
-}
-
 impl HostClient {
     pub fn reach_or_start(host: &TerminalHost) -> Result<Self, Error> {
         let address = host.address.clone();
@@ -282,7 +250,8 @@ impl HostClient {
         command.args(["server", "terminal-host", "--address"]).arg(&address);
         // stderr stays inherited, so the host's diagnostics land in the server's log.
         command.stdin(Stdio::null()).stdout(Stdio::null());
-        detach(&mut command);
+        // Out of the server's process group, so a Ctrl-C or group signal aimed at the server spares the host.
+        command.process_group(0);
         let mut child = command.spawn().map_err(|error| host_error(&address, format!("start: {error}")))?;
         let deadline = Instant::now() + HOST_START;
         while local::connect_blocking(&address).is_err() {
