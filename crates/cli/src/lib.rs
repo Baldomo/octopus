@@ -55,7 +55,9 @@ pub fn main() -> ExitCode {
         },
     };
     let outcome = match matches.subcommand() {
-        Some(("app", _)) => octopus_app::run(),
+        Some(("app", _)) => octopus_app::run(
+            install::list_this_machine().err().map(|error| format!("list this machine's server: {error:#}")),
+        ),
         _ => tokio::runtime::Runtime::new()
             .context("start the runtime")
             .and_then(|runtime| runtime.block_on(commands::run(&matches))),

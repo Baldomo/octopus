@@ -20,6 +20,7 @@ import {
   Toast,
 } from "./SidebarControls";
 import {
+  isLocal,
   isOpen,
   model,
   openTask,
@@ -181,7 +182,7 @@ function ServerName(props: { name: string }) {
       onContextMenu={onRightClick(id, () => host, menu)}
     >
       <span class="dot" classList={{ off: !server()?.reachable }} />
-      <Show when={isRenaming("server", props.name)} fallback={props.name}>
+      <Show when={isRenaming("server", props.name)} fallback={isLocal(props.name) ? "local" : props.name}>
         <RenameInput value={props.name} apply={(name) => backend.serverRename(props.name, name)} />
       </Show>
     </span>

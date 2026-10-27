@@ -194,8 +194,12 @@ impl Identity {
             }
             Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
         };
-        Ok(Self { name: gethostname::gethostname().to_string_lossy().into_owned(), key })
+        Ok(Self { name: hostname(), key })
     }
+}
+
+pub fn hostname() -> String {
+    gethostname::gethostname().to_string_lossy().into_owned()
 }
 
 #[cfg(unix)]

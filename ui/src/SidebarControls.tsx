@@ -14,7 +14,7 @@ import {
 } from "./generated";
 import { commands, hint, mac } from "./keys";
 import { anyMenuOpen, closeMenu, Head, Item, Sep } from "./Menu";
-import { act, me, model, report, serverView, servers, setNewTaskSection, showBoard, showModal } from "./state";
+import { act, isLocal, me, model, report, serverView, servers, setNewTaskSection, showBoard, showModal } from "./state";
 import { swatchColor } from "./tokens";
 
 const TOAST_MS = 1800;
@@ -123,7 +123,6 @@ export function ServerMenu(props: { name: string }) {
     () => (server()?.reachable ? props.name : false),
     backend.serverClients,
   );
-  const local = () => server()?.endpoint === null;
   const showCode = () => backend.serverOffer(props.name).then(setMode, report);
   const left = (offered: Offer) => {
     const seconds = Math.max(0, Math.ceil((offered.expires_at - now()) / 1000));
@@ -186,7 +185,7 @@ export function ServerMenu(props: { name: string }) {
         <div class="confirm">
           <span>
             Forget {props.name}? Its tasks leave this client's lists; they keep running on {props.name}.{" "}
-            {local() ? "Adding it again takes octopus server add." : "Pairing again needs a new code."}
+            {isLocal(props.name) ? "It returns when the app next starts." : "Pairing again needs a new code."}
           </span>
           <div class="row">
             <button class="btn" onClick={() => setMode("main")}>

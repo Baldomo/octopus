@@ -97,6 +97,8 @@ export const openView = (): TaskView | undefined => {
 
 export const serverView = (name: string) => servers().find((server) => server.name === name);
 
+export const isLocal = (name: string) => serverView(name)?.endpoint === null;
+
 export function showTasks() {
   const section = openView()?.section ?? ui.prefs.board;
   if (section === null) showView("tasks");

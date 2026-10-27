@@ -2566,7 +2566,6 @@ dependencies = [
  "crossterm",
  "dirs",
  "futures",
- "gethostname",
  "nix 0.31.3",
  "octopus-app",
  "octopus-client",

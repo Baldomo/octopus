@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, anyhow, bail};
+use octopus_client::servers::{Address, Server, Servers};
+use octopus_proto::local;
 use serde::Serialize;
 
 #[derive(clap::Args)]
@@ -66,12 +68,13 @@ pub struct Registration {
     pub unit: PathBuf,
 }
 
+/// Every service manager accepts ASCII letters, digits, '-', '_' and '.', so each other character becomes '-'.
 fn service_id(name: &str) -> anyhow::Result<String> {
-    let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.');
-    if name.is_empty() || !name.chars().all(allowed) {
-        bail!("--name {name:?} must be letters, digits, '-', '_' or '.'");
+    if name.is_empty() {
+        bail!("--name must not be empty");
     }
-    Ok(format!("octopus-{name}"))
+    let safe = |c: char| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '-' };
+    Ok(format!("octopus-{}", name.chars().map(safe).collect::<String>()))
 }
 
 fn absolute(path: PathBuf) -> anyhow::Result<PathBuf> {
@@ -230,6 +233,14 @@ pub fn windows_task(service: &Service, user: &str) -> anyhow::Result<String> {
     ))
 }
 
+/// The name the user gave this computer, which names its server.
+fn machine_name() -> anyhow::Result<String> {
+    #[cfg(target_os = "macos")]
+    return run("scutil", &["--get", "ComputerName"]);
+    #[cfg(not(target_os = "macos"))]
+    Ok(octopus_client::servers::hostname())
+}
+
 /// Returns the command's trimmed stdout.
 fn run(program: &str, args: &[&str]) -> anyhow::Result<String> {
     let output = Command::new(program).args(args).output().with_context(|| format!("run {program}"))?;
@@ -259,6 +270,40 @@ pub fn uninstall(name: &str) -> anyhow::Result<Registration> {
     let unit = manager::unit_path(&id)?;
     manager::unregister(&id, &unit)?;
     Ok(Registration { service: id, unit })
+}
+
+/// Lists this machine's server when this client lists none on the local socket: the server already answering
+/// there, or else a fresh install named after the computer.
+pub fn list_this_machine() -> anyhow::Result<()> {
+    let mut servers = Servers::load()?;
+    if servers.servers.iter().any(|server| matches!(server.address, Address::Local { .. })) {
+        return Ok(());
+    }
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("no home directory"))?.join(".octopus");
+    let (name, socket) = (machine_name()?, local_socket(&home, "server"));
+    servers.add(Server { name: name.clone(), address: Address::Local { socket: socket.clone() } })?;
+    if local::connect_blocking(&socket).is_err() {
+        let run = ServerRun {
+            name,
+            socket,
+            store: home.join("store.db"),
+            worktrees: home.join("worktrees"),
+            terminal_host: local_socket(&home, "host"),
+            quic: ([0, 0, 0, 0], 7300).into(),
+        };
+        install(&Service::new(run, std::env::current_exe()?, home.join("server.log"))?)?;
+    }
+    servers.save()
+}
+
+#[cfg(unix)]
+fn local_socket(home: &Path, name: &str) -> PathBuf {
+    home.join(format!("{name}.sock"))
+}
+
+#[cfg(windows)]
+fn local_socket(_home: &Path, name: &str) -> PathBuf {
+    PathBuf::from(format!(r"\\.\pipe\octopus-{name}"))
 }
 
 #[cfg(target_os = "macos")]
@@ -444,7 +489,8 @@ WantedBy=default.target
     #[test]
     fn a_service_takes_one_safe_name_and_distinct_sockets() {
         assert_eq!(service_id("mac-mini.2").expect("id"), "octopus-mac-mini.2");
-        assert!(service_id("mac mini").is_err());
+        assert_eq!(service_id("Ada’s Mac").expect("id"), "octopus-Ada-s-Mac");
+        assert!(service_id("").is_err());
         let ServerRun { name, socket, store, worktrees, quic, .. } = service("/log").run;
         let host = PathBuf::from(socket.display().to_string().to_uppercase());
         let shared = ServerRun { name, terminal_host: host, socket, store, worktrees, quic };

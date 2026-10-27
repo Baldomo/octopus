@@ -247,11 +247,12 @@ fn save_prefs(prefs: &Prefs) -> anyhow::Result<()> {
 
 impl UiStore {
     /// Prefs written by an earlier build or by hand start the window from the defaults, and the status bar says so.
-    pub fn load(app: AppHandle) -> Arc<Self> {
-        let (prefs, problem) = match load_prefs() {
+    pub fn load(app: AppHandle, launch_problem: Option<String>) -> Arc<Self> {
+        let (prefs, prefs_problem) = match load_prefs() {
             Ok(prefs) => (prefs, None),
             Err(error) => (Prefs::default(), Some(format!("{error:#}; started from the default prefs"))),
         };
+        let problem = [launch_problem, prefs_problem].into_iter().flatten().reduce(|a, b| format!("{a}; {b}"));
         let store = Arc::new(Self {
             app,
             state: Mutex::new(State::starting(prefs)),

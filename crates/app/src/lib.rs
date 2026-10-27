@@ -42,7 +42,7 @@ pub(crate) fn emit(app: &AppHandle, event: &str, payload: impl Serialize + Clone
 }
 
 /// Opens the window and blocks until it closes.
-pub fn run() -> anyhow::Result<()> {
+pub fn run(launch_problem: Option<String>) -> anyhow::Result<()> {
     let launched = Instant::now();
     let servers = Servers::load()?.servers;
     let me = Identity::load()?;
@@ -86,7 +86,7 @@ pub fn run() -> anyhow::Result<()> {
         .setup(move |app| {
             app.manage(Launched(launched));
             app.manage(Terminals::default());
-            let ui = UiStore::load(app.handle().clone());
+            let ui = UiStore::load(app.handle().clone(), launch_problem);
             app.manage(Arc::clone(&ui));
             app.manage(Hub::start(app.handle().clone(), me, servers));
             app.manage(Browsers::new(Layers::open(app, ui)?));
