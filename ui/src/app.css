@@ -1,5 +1,11 @@
 /* Layout only: every component's look comes from DESIGN.html's #components block. */
 
+/* The zoom scales the whole UI but the title bar, which keeps its height in points. */
+:root {
+  --zoom: 1;
+  --title-h: calc(var(--chrome-h) / var(--zoom));
+}
+
 html,
 body {
   height: 100%;
@@ -10,7 +16,7 @@ body {
 .app {
   height: 100vh;
   display: grid;
-  grid-template-rows: var(--chrome-h) 1fr var(--status-h);
+  grid-template-rows: var(--title-h) 1fr var(--status-h);
   position: relative;
 }
 /* The float layer shows the window beneath wherever none of its surfaces draws. */
@@ -22,8 +28,12 @@ body {
    in a box that never scrolls. */
 .float-layer {
   position: fixed;
-  top: calc(-1 * var(--chrome-h));
+  top: calc(-1 * var(--title-h));
   left: 0;
+}
+
+.chrome {
+  zoom: calc(1 / var(--zoom));
 }
 
 .chrome .lights {
@@ -152,7 +162,7 @@ body {
 
 .edge {
   position: absolute;
-  top: var(--chrome-h);
+  top: var(--title-h);
   bottom: var(--status-h);
   left: 0;
   width: var(--s2);
@@ -161,8 +171,8 @@ body {
 .sidebar-column {
   display: flex;
   width: fit-content;
-  height: calc(100% - var(--chrome-h) - var(--status-h));
-  margin-top: var(--chrome-h);
+  height: calc(100% - var(--title-h) - var(--status-h));
+  margin-top: var(--title-h);
   padding: var(--s2) 0 0 var(--s2);
 }
 .sidebar {
@@ -177,11 +187,11 @@ body {
 
 .scrim {
   position: absolute;
-  inset: var(--chrome-h) 0 0;
+  inset: var(--title-h) 0 0;
 }
 .dialog {
   position: absolute;
-  top: calc(var(--chrome-h) + var(--s6) * 2);
+  top: calc(var(--title-h) + var(--s6) * 2);
   left: 50%;
   transform: translateX(-50%);
   width: 560px;
@@ -206,6 +216,16 @@ body {
   justify-content: flex-end;
   gap: var(--s2);
   margin-top: var(--s2);
+}
+.dialog.keys {
+  width: 440px;
+}
+.client-menu {
+  top: calc(var(--title-h) + var(--s1));
+  right: var(--s2);
+}
+.client-menu.hidden {
+  visibility: hidden;
 }
 .btn:disabled {
   opacity: 0.5;

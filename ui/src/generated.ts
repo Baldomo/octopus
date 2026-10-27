@@ -134,7 +134,13 @@ export type View = "task" | "tasks";
 
 export type Surface = "files" | "browser";
 
-export type Modal = "palette" | "new_task" | "pair_server";
+export type Modal = "palette" | "new_task" | "pair_server" | "shortcuts";
+
+export type Appearance = "system" | "light" | "dark";
+
+export type Zoom = number;
+
+export type ZoomStep = "in" | "out" | "reset";
 
 export type Prefs = { pinned: boolean, collapsed: Array<string>, surface: Surface, view: View, 
 /**
@@ -144,7 +150,7 @@ open: string | null,
 /**
  * The section the Tasks board shows.
  */
-board: string | null, };
+board: string | null, appearance: Appearance, zoom: Zoom, };
 
 export type Reveal = { 
 /**
@@ -164,13 +170,17 @@ version: number, prefs: Prefs,
 /**
  * The opened tasks' keys, newest first.
  */
-recent: Array<string>, sidebar: boolean, modal: Modal | null, reveal: Reveal | null, problem: string | null, viewport: Viewport, 
+recent: Array<string>, sidebar: boolean, client_menu: boolean, modal: Modal | null, reveal: Reveal | null, problem: string | null, 
+/**
+ * The window's size in the UI's CSS pixels, which the zoom scales.
+ */
+viewport: Viewport, 
 /**
  * Where the float layer takes the pointer over the layers beneath it.
  */
 float_input: Array<Bounds>, };
 
-export type UiAct = { "do": "open_task", key: string, } | { "do": "show_view", view: View, } | { "do": "show_board", section: string, } | { "do": "show_surface", surface: Surface, } | { "do": "toggle_pin" } | { "do": "toggle_collapsed", section: string, } | { "do": "show_sidebar", shown: boolean, } | { "do": "toggle_sidebar" } | { "do": "show_modal", modal: Modal | null, } | { "do": "float", surface: string, at: Floated, modal: boolean, } | { "do": "sink", surface: string, } | { "do": "reveal", task: string, path: string, } | { "do": "report", problem: string, };
+export type UiAct = { "do": "open_task", key: string, } | { "do": "show_view", view: View, } | { "do": "show_board", section: string, } | { "do": "show_surface", surface: Surface, } | { "do": "toggle_pin" } | { "do": "toggle_collapsed", section: string, } | { "do": "show_sidebar", shown: boolean, } | { "do": "toggle_sidebar" } | { "do": "show_client_menu", shown: boolean, } | { "do": "toggle_client_menu" } | { "do": "set_appearance", appearance: Appearance, } | { "do": "zoom", step: ZoomStep, } | { "do": "show_modal", modal: Modal | null, } | { "do": "float", surface: string, at: Floated, modal: boolean, } | { "do": "sink", surface: string, } | { "do": "reveal", task: string, path: string, } | { "do": "report", problem: string, };
 
 export type Viewport = { width: number, height: number, };
 
@@ -209,6 +219,8 @@ export const TONES = ["mist","soft","vivid","deep"] as const;
 export const AGENT_PANEL = "agent" as const;
 
 export const NEW_BROWSER_PANEL = "new" as const;
+
+export const VERSION = "0.0.0" as const;
 
 export const FLOAT_LAYER = "float" as const;
 

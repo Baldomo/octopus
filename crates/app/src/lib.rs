@@ -1,4 +1,5 @@
 mod browser;
+mod client_menu;
 mod commands;
 mod hub;
 mod layers;
@@ -52,6 +53,7 @@ pub fn run(launch_problem: Option<String>) -> anyhow::Result<()> {
             commands::ready,
             commands::ui_act,
             commands::title_bar_double_click,
+            commands::quit,
             commands::server_pair,
             commands::server_offer,
             commands::server_clients,

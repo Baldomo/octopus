@@ -29,6 +29,7 @@ export const backend = {
   ready: () => invoke<void>("ready"),
   uiAct: (act: UiAct) => invoke<void>("ui_act", { act }),
   titleBarDoubleClick: () => invoke<void>("title_bar_double_click"),
+  quit: () => invoke<void>("quit"),
   /** Resolves to the paired server's name. */
   serverPair: (address: string, code: string) => invoke<string>("server_pair", { address, code }),
   serverOffer: (server: string) => invoke<Offer>("server_offer", { server }),

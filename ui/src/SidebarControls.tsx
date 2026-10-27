@@ -26,6 +26,7 @@ import {
   setNewTaskSection,
   showBoard,
   showModal,
+  showSidebar,
 } from "./state";
 import { swatchColor } from "./tokens";
 
@@ -40,8 +41,10 @@ export function toast(message: JSX.Element) {
   setTimeout(() => said()?.nth === nth && setSaid(null), TOAST_MS);
 }
 
-export const Toast = () => (
-  <div class="toast" classList={{ on: said() !== null }}>
+export const toasting = () => said() !== null;
+
+export const Toast = (props: { ref?: (element: HTMLElement) => void }) => (
+  <div ref={props.ref} class="toast" classList={{ on: toasting() }}>
     {said()?.message}
   </div>
 );
@@ -250,7 +253,14 @@ export function ServerMenu(props: { name: string }) {
           </For>
         </Show>
         <Sep />
-        <Item run={closing(() => startRename("server", props.name))}>Rename…</Item>
+        <Item
+          run={closing(() => {
+            showSidebar(true);
+            startRename("server", props.name);
+          })}
+        >
+          Rename…
+        </Item>
         <Item danger run={() => setMode("forget")}>
           Forget server
         </Item>

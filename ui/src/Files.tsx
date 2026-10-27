@@ -44,6 +44,61 @@ function Tree(props: { files: TaskFiles; dir: string; depth: number }) {
   );
 }
 
+const dirsOf = (path: string) => path.split("/").slice(0, -1);
+const tail = (dirs: string[], depth: number) => dirs.slice(-depth).join("/");
+
+/** A tab names its file, and the fewest trailing directories that tell it from another open tab of the same name. */
+function EditorTabs(props: { files: TaskFiles }) {
+  let bar!: HTMLDivElement;
+  const where = createMemo(() => {
+    const tabs = props.files.state.tabs;
+    const hints: Record<string, string> = {};
+    for (const path of tabs) {
+      const rivals = tabs.filter((tab) => tab !== path && nameOf(tab) === nameOf(path)).map(dirsOf);
+      if (rivals.length === 0) continue;
+      const dirs = dirsOf(path);
+      let depth = 1;
+      while (depth < dirs.length && rivals.some((rival) => tail(rival, depth) === tail(dirs, depth))) depth++;
+      hints[path] = dirs.length === 0 ? "." : tail(dirs, depth);
+    }
+    return hints;
+  });
+  const scrollSideways = (event: WheelEvent) => {
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+    bar.scrollLeft += event.deltaY;
+    event.preventDefault();
+  };
+  return (
+    <div class="etabs" ref={bar} onWheel={scrollSideways}>
+      <For each={props.files.state.tabs}>
+        {(path) => {
+          const on = () => props.files.state.active === path;
+          const dirty = () => props.files.state.dirty[path] === true;
+          return (
+            <span
+              ref={(tab) => createEffect(() => on() && tab.scrollIntoView({ block: "nearest", inline: "nearest" }))}
+              classList={{ on: on(), mod: dirty() }}
+              title={path}
+              onClick={() => act(props.files.open(path))}
+              onAuxClick={(event) => event.button === 1 && props.files.close(path)}
+            >
+              {nameOf(path)}
+              <Show when={where()[path]}>{(hint) => <span class="where">{hint()}</span>}</Show>
+              <span
+                class="close"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.files.close(path);
+                }}
+              />
+            </span>
+          );
+        }}
+      </For>
+    </div>
+  );
+}
+
 export function Files() {
   let host!: HTMLDivElement;
   let editor: Editor | undefined;
@@ -94,24 +149,9 @@ export function Files() {
         <Show when={files()}>{(taskFiles) => <Tree files={taskFiles()} dir="." depth={0} />}</Show>
       </div>
       <div class="editor">
-        <div class="etabs">
-          <Show when={files()}>
-            {(taskFiles) => (
-              <For each={taskFiles().state.tabs}>
-                {(path) => (
-                  <span
-                    classList={{ on: taskFiles().state.active === path }}
-                    title={path}
-                    onClick={() => act(taskFiles().open(path))}
-                    onAuxClick={(event) => event.button === 1 && taskFiles().close(path)}
-                  >
-                    {nameOf(path)}
-                  </span>
-                )}
-              </For>
-            )}
-          </Show>
-        </div>
+        <Show when={files()} fallback={<div class="etabs" />}>
+          {(taskFiles) => <EditorTabs files={taskFiles()} />}
+        </Show>
         <div class="editor-body">
           <div class="editor-host" ref={host} />
           <Show when={files()?.state.active}>

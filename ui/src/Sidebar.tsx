@@ -1,7 +1,7 @@
 import { createEffect, For, on, onCleanup, Show } from "solid-js";
 import { backend } from "./backend";
 import { dragSource, dropTarget, isDragged, showsDropHint } from "./drag";
-import { FLOAT_TOP, type Column, type Section } from "./generated";
+import type { Column, Section } from "./generated";
 import { Glyph } from "./Glyph";
 import { dropHint, GroupHead } from "./Group";
 import { swatchColor } from "./tokens";
@@ -20,6 +20,7 @@ import {
   Toast,
 } from "./SidebarControls";
 import {
+  floatTop,
   isOpen,
   model,
   openTask,
@@ -204,7 +205,7 @@ function autohide(column: HTMLElement) {
   document.addEventListener("pointermove", track);
   onCleanup(() => document.removeEventListener("pointermove", track));
   const inColumn = ({ clientX, clientY }: PointerEvent) => {
-    const [x, y] = [clientX, clientY + FLOAT_TOP];
+    const [x, y] = [clientX, clientY + floatTop()];
     const { offsetLeft: left, offsetTop: top, offsetWidth: width, offsetHeight: height } = column;
     return x >= left && x < left + width && y >= top && y < top + height;
   };

@@ -2,12 +2,14 @@ import { createRoot, createSelector, createSignal } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { backend } from "./backend";
-import { FLOAT_LAYER } from "./generated";
+import { FLOAT_LAYER, FLOAT_TOP } from "./generated";
 import type {
+  Appearance,
   Boot,
   Floated,
   Model,
   Modal,
+  Prefs,
   ServerView,
   Surface,
   TaskRef,
@@ -16,6 +18,7 @@ import type {
   Ui,
   UiAct,
   View,
+  ZoomStep,
 } from "./generated";
 
 export type Dragged = { key: string; at: TaskRef; section: string; state: TaskState };
@@ -34,9 +37,19 @@ export const [me, setMe] = createSignal("");
 /** The state both layers render, owned by the app; every change goes through it and returns as a newer `Ui`. */
 const [ui, setUi] = createStore<Ui>({
   version: -1,
-  prefs: { pinned: false, collapsed: [], surface: "files", view: "task", open: null, board: null },
+  prefs: {
+    pinned: false,
+    collapsed: [],
+    surface: "files",
+    view: "task",
+    open: null,
+    board: null,
+    appearance: "system",
+    zoom: 100,
+  },
   recent: [],
   sidebar: false,
+  client_menu: false,
   modal: null,
   reveal: null,
   problem: null,
@@ -67,6 +80,10 @@ export const toggleSidebar = () => uiAct({ do: "toggle_sidebar" });
 export const floatSurface = (surface: string, at: Floated, modal: boolean) =>
   uiAct({ do: "float", surface, at, modal });
 export const sinkSurface = (surface: string) => uiAct({ do: "sink", surface });
+export const showClientMenu = (shown: boolean) => uiAct({ do: "show_client_menu", shown });
+export const toggleClientMenu = () => uiAct({ do: "toggle_client_menu" });
+export const setAppearance = (appearance: Appearance) => uiAct({ do: "set_appearance", appearance });
+export const zoom = (step: ZoomStep) => uiAct({ do: "zoom", step });
 export const showModal = (modal: Modal | null) => uiAct({ do: "show_modal", modal });
 export const reveal = (task: string, path: string) => uiAct({ do: "reveal", task, path });
 
@@ -79,9 +96,18 @@ export function applyModel(next: Model) {
   if (next.version > model.version) setModel(reconcile(next, { key: "key" }));
 }
 
+/** How many points one CSS pixel of the UI takes. */
+const scale = (prefs: Prefs) => prefs.zoom / 100;
+
+/** Zooms the layout before the state lands, so whatever the new state measures, it measures at the new zoom. */
 export function applyUi(next: Ui) {
-  if (next.version > ui.version) setUi(reconcile(next));
+  if (next.version <= ui.version) return;
+  document.documentElement.style.setProperty("--zoom", String(scale(next.prefs)));
+  setUi(reconcile(next));
 }
+
+/** The title bar's height in this layer's CSS pixels: it keeps its height in points at every zoom. */
+export const floatTop = () => FLOAT_TOP / scale(ui.prefs);
 
 export function applyBoot(boot: Boot) {
   setMe(boot.me);

@@ -10,6 +10,7 @@ use serde_json::json;
 use ts_rs::{Config, TS};
 
 use crate::browser::{Go, NAVIGATED_EVENT, Navigated, OnScreen};
+use crate::client_menu::{Appearance, Zoom, ZoomStep};
 use crate::commands::{Boot, NewTask};
 use crate::hub::{FILES_CHANGED_EVENT, FilesChanged, MODEL_EVENT, Model, SERVERS_EVENT, ServerView};
 use crate::layers::{Bounds, FLOAT, Floated, Viewport, title_bar_height};
@@ -68,6 +69,9 @@ pub fn render() -> String {
         View,
         Surface,
         Modal,
+        Appearance,
+        Zoom,
+        ZoomStep,
         Prefs,
         Reveal,
         Ui,
@@ -89,6 +93,7 @@ pub fn render() -> String {
         constant("TONES", &Tone::ALL),
         constant("AGENT_PANEL", &AGENT_PANEL),
         constant("NEW_BROWSER_PANEL", &NEW_BROWSER_PANEL),
+        constant("VERSION", &env!("CARGO_PKG_VERSION")),
         constant("FLOAT_LAYER", &FLOAT),
         constant("FLOAT_TOP", &title_bar_height()),
         constant(

@@ -2,19 +2,32 @@ import { createEffect, createMemo, createSignal, Match, on, onCleanup, Show, Swi
 import { backend } from "./backend";
 import { Board } from "./Board";
 import { Browser, forgetBrowsersExcept } from "./Browser";
+import { ClientMenu } from "./ClientMenu";
 import { Files } from "./Files";
 import { filesOf, forgetFilesExcept } from "./taskFiles";
 import { commands, hint } from "./keys";
 import { NewTask } from "./NewTask";
 import { PairServer } from "./PairServer";
 import { Palette } from "./Palette";
+import { Shortcuts } from "./Shortcuts";
 import { Sidebar } from "./Sidebar";
-import { holdsKeyboard } from "./SidebarControls";
-import { act, floatSurface, model, openView, serverView, showModal, showSidebar, sinkSurface, ui } from "./state";
+import { holdsKeyboard, Toast, toasting } from "./SidebarControls";
+import {
+  act,
+  floatSurface,
+  floatTop,
+  model,
+  openView,
+  serverView,
+  showModal,
+  showSidebar,
+  sinkSurface,
+  ui,
+} from "./state";
 import { StatusBar } from "./StatusBar";
 import { TerminalStacks } from "./Terminals";
 import { TitleBar } from "./TitleBar";
-import { FLOAT_TOP, type Bounds, type Modal as ModalName } from "./generated";
+import type { Bounds, Modal as ModalName } from "./generated";
 
 /** This webview's own size, which grows only once the app has placed it and its renderer has taken the new size. */
 const [webview, setWebview] = createSignal({ width: innerWidth, height: innerHeight });
@@ -48,6 +61,8 @@ function drawnBox(element: HTMLElement): Bounds {
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
+const NO_INPUT: Bounds = { x: 0, y: 0, width: 0, height: 0 };
+
 /**
  * A surface of the float layer: while it is `out`, and until its exit transition ends, the app covers what `element`
  * draws with the float layer, which takes the pointer in `input`, and a surface holds the keyboard while it is `modal`.
@@ -57,14 +72,16 @@ function floating(surface: { name: string; modal: () => boolean; out: () => bool
   const { name, modal, out } = surface;
   /** The surface's far corner in this webview's coordinates. */
   const [reach, setReach] = createSignal<{ right: number; bottom: number } | null>(null);
-  const ref = (element: HTMLElement, input: HTMLElement = element) => {
+  /** A null `input` takes no pointer. */
+  const ref = (element: HTMLElement, input: HTMLElement | null = element) => {
     createEffect(
       on(
         () => [out(), modal(), ui.viewport.width, ui.viewport.height] as const,
         ([isOut, isModal]) => {
           const rect = box(element);
-          setReach({ right: rect.x + rect.width, bottom: rect.y + rect.height - FLOAT_TOP });
-          if (isOut) floatSurface(name, { input: box(input), drawn: drawnBox(element) }, isModal);
+          setReach({ right: rect.x + rect.width, bottom: rect.y + rect.height - floatTop() });
+          if (isOut)
+            floatSurface(name, { input: input === null ? NO_INPUT : box(input), drawn: drawnBox(element) }, isModal);
           else if (element.getAnimations().length === 0) sinkSurface(name);
         },
       ),
@@ -149,6 +166,17 @@ export function Docked() {
   );
 }
 
+/** While the sidebar is hidden, its toasts show at the foot of the window. */
+function FloatingToast() {
+  const toast = floating({ name: "toast", modal: () => false, out: toasting });
+  return <Toast ref={(element) => toast.ref(element, null)} />;
+}
+
+function FloatingClientMenu() {
+  const menu = floating({ name: "client_menu", modal: () => true, out: () => true });
+  return <ClientMenu floats={menu.ref} shown={menu.shown()} />;
+}
+
 function Modal(props: { modal: ModalName }) {
   const scrim = floating({ name: "modal", modal: () => true, out: () => true });
   return (
@@ -165,6 +193,9 @@ function Modal(props: { modal: ModalName }) {
           <Match when={props.modal === "pair_server"}>
             <PairServer />
           </Match>
+          <Match when={props.modal === "shortcuts"}>
+            <Shortcuts />
+          </Match>
         </Switch>
       </Show>
     </>
@@ -180,6 +211,12 @@ export function Floating() {
   return (
     <div class="float-layer" style={{ width: `${ui.viewport.width}px`, height: `${ui.viewport.height}px` }}>
       <Sidebar floats={sidebar.ref} shown={sidebar.shown()} />
+      <Show when={!ui.sidebar}>
+        <FloatingToast />
+      </Show>
+      <Show when={ui.client_menu}>
+        <FloatingClientMenu />
+      </Show>
       <Show when={ui.modal}>{(modal) => <Modal modal={modal()} />}</Show>
     </div>
   );

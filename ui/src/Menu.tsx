@@ -1,4 +1,5 @@
 import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
+import { showClientMenu, ui } from "./state";
 
 type Point = { x: number; y: number };
 type Opened = { id: string; anchor: HTMLElement; point: Point | null; body: () => JSX.Element };
@@ -7,10 +8,16 @@ const [opened, setOpened] = createSignal<Opened | null>(null);
 
 export const isMenuOpen = (id: string) => opened()?.id === id;
 export const anyMenuOpen = () => opened() !== null;
-export const closeMenu = () => setOpened(null);
+export const closePopover = () => setOpened(null);
+/** Closes the popover and the client menu, as one menu is open at a time. */
+export function closeMenu() {
+  closePopover();
+  if (ui.client_menu) showClientMenu(false);
+}
 
 /** Toggles menu `id` below `anchor`, or opens it at `point` for a right-click. */
 function openMenu(id: string, anchor: HTMLElement, body: () => JSX.Element, point: Point | null = null) {
+  if (ui.client_menu) showClientMenu(false);
   setOpened(point === null && isMenuOpen(id) ? null : { id, anchor, point, body });
 }
 
@@ -44,32 +51,37 @@ function place(menu: HTMLElement, within: HTMLElement, { anchor, point }: Opened
 
 const BLUR_SETTLES_MS = 150;
 
-function Popover(props: { menu: Opened }) {
-  let element!: HTMLDivElement;
+/** Runs `close` on Esc, on a press outside `element` and every trigger, and when the layer loses the keyboard. */
+export function dismissible(element: HTMLElement, close: () => void) {
   const outside = (event: PointerEvent) => {
     const target = event.target as Element;
-    if (!element.contains(target) && target.closest("[data-menu-trigger]") === null) closeMenu();
+    if (!element.contains(target) && target.closest("[data-menu-trigger]") === null) close();
   };
   const escape = (event: KeyboardEvent) => {
     if (event.key !== "Escape") return;
     event.stopPropagation();
-    closeMenu();
+    close();
   };
+  document.addEventListener("pointerdown", outside, { capture: true });
+  document.addEventListener("keydown", escape, { capture: true });
+  // A click outside the float layer lands in another webview, which takes the keyboard from this one. The keyboard
+  // also passes through the base layer when one menu closes just before the next opens, so only a lasting loss counts.
+  const left = () => setTimeout(() => document.hasFocus() || close(), BLUR_SETTLES_MS);
+  window.addEventListener("blur", left);
+  onCleanup(() => {
+    document.removeEventListener("pointerdown", outside, { capture: true });
+    document.removeEventListener("keydown", escape, { capture: true });
+    window.removeEventListener("blur", left);
+  });
+}
+
+function Popover(props: { menu: Opened }) {
+  let element!: HTMLDivElement;
   onMount(() => {
     const replace = new ResizeObserver(() => place(element, element.parentElement!, props.menu));
     replace.observe(element);
-    document.addEventListener("pointerdown", outside, { capture: true });
-    document.addEventListener("keydown", escape, { capture: true });
-    // A click outside the float layer lands in another webview, which takes the keyboard from this one. The keyboard
-    // also passes through the base layer when one menu closes just before the next opens, so only a lasting loss counts.
-    const left = () => setTimeout(() => document.hasFocus() || closeMenu(), BLUR_SETTLES_MS);
-    window.addEventListener("blur", left);
-    onCleanup(() => {
-      replace.disconnect();
-      document.removeEventListener("pointerdown", outside, { capture: true });
-      document.removeEventListener("keydown", escape, { capture: true });
-      window.removeEventListener("blur", left);
-    });
+    onCleanup(() => replace.disconnect());
+    dismissible(element, closePopover);
   });
   return (
     <div ref={element} class="menu" role="menu">

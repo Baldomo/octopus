@@ -6,7 +6,7 @@ import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Sh
 import { backend, Channel } from "./backend";
 import { AGENT_PANEL, type Panel, type PtyId, type TaskRef, type TaskView } from "./generated";
 import { Glyph } from "./Glyph";
-import { commands, hint } from "./keys";
+import { commands, hint, mac } from "./keys";
 import { act, me, model, report, serverLabel, serverView, ui } from "./state";
 import { colors, px, type Scheme, scheme, token } from "./tokens";
 
@@ -36,6 +36,18 @@ function terminalTheme(current: Scheme): ITheme {
     brightWhite: color("--text"),
   });
 }
+
+/** Shift+Enter sends ESC CR, which agents read as a newline; on macOS ⌥←/⌥→ move by word as in Terminal.app. */
+const CHORD_INPUT: Record<string, string> = {
+  "shift+Enter": "\x1b\r",
+  ...(mac && { "alt+ArrowLeft": "\x1bb", "alt+ArrowRight": "\x1bf" }),
+};
+/** Keys an input method consumes carry this code, including the one that commits the composition. */
+const IME_KEY_CODE = 229;
+const chord = (event: KeyboardEvent) =>
+  [event.ctrlKey && "ctrl", event.altKey && "alt", event.metaKey && "meta", event.shiftKey && "shift", event.key]
+    .filter(Boolean)
+    .join("+");
 
 const SCROLLBACK_LINES = 10_000;
 /** A dropped stream retries after this, by which time a server that went away reads as unreachable. */
@@ -93,8 +105,17 @@ function Term(props: { at: TaskRef; panel: Panel; visible: boolean }) {
   };
   const resize = () => act(backend.termResize(props.at, props.panel.id, xterm.cols, xterm.rows));
 
+  xterm.attachCustomKeyEventHandler((event) => {
+    const input = CHORD_INPUT[chord(event)];
+    if (input === undefined || event.keyCode === IME_KEY_CODE) return true;
+    if (event.type === "keydown") {
+      event.preventDefault();
+      xterm.input(input);
+    }
+    return false;
+  });
   xterm.onData((keys) => {
-    if (attachment !== null && writable()) act(backend.termInput(attachment, keys));
+    if (attachment !== null) act(backend.termInput(attachment, keys));
   });
   xterm.onResize(() => {
     if (mine()) resize();

@@ -288,6 +288,12 @@ fn title_bar_action() -> &'static str {
     }
 }
 
+/// Closes the app; its servers run on as their own services.
+#[tauri::command]
+pub fn quit(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 #[tauri::command]
 pub fn title_bar_double_click(window: tauri::Window) -> Result<(), String> {
     let done = match title_bar_action() {

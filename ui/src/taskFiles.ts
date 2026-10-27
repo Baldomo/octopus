@@ -81,13 +81,20 @@ export class TaskFiles {
     );
   }
 
+  /** A dirty buffer outlives its tab, so reopening the file brings its edits back. */
   close(path: string) {
+    this.set(
+      produce((state) => {
+        const at = state.tabs.indexOf(path);
+        state.tabs = state.tabs.filter((tab) => tab !== path);
+        if (state.active === path) state.active = state.tabs[Math.min(at, state.tabs.length - 1)] ?? null;
+      }),
+    );
+    if (this.state.dirty[path]) return;
     this.opened.get(path)?.model.dispose();
     this.opened.delete(path);
     this.set(
       produce((state) => {
-        state.tabs = state.tabs.filter((tab) => tab !== path);
-        if (state.active === path) state.active = state.tabs.at(-1) ?? null;
         delete state.dirty[path];
         delete state.loaded[path];
       }),

@@ -1,4 +1,5 @@
-import { showModal, showSurface, showTasks, showView, toggleSidebar, ui } from "./state";
+import { backend } from "./backend";
+import { act, showModal, showSurface, showTasks, showView, toggleClientMenu, toggleSidebar, ui, zoom } from "./state";
 
 export const mac = navigator.userAgent.includes("Mac");
 
@@ -14,6 +15,12 @@ export const commands = {
   search: { label: "Search tasks, files, commands", key: "K", run: () => showModal("palette") },
   sidebar: { label: "Toggle sidebar", key: "\\", run: toggleSidebar },
   pairServer: { label: "Pair a server", key: null, run: () => showModal("pair_server") },
+  clientMenu: { label: "Client menu", key: ",", run: toggleClientMenu },
+  shortcuts: { label: "Keyboard shortcuts", key: "/", run: () => showModal("shortcuts") },
+  zoomIn: { label: "Zoom in", key: "=", run: () => zoom("in") },
+  zoomOut: { label: "Zoom out", key: "-", run: () => zoom("out") },
+  actualSize: { label: "Actual size", key: "0", run: () => zoom("reset") },
+  quit: { label: "Quit octopus", key: "Q", run: () => act(backend.quit()) },
 } satisfies Record<string, Command>;
 
 /** On Linux and Windows, ⌘ is Ctrl+Shift. */
@@ -26,7 +33,14 @@ const held = (event: KeyboardEvent) =>
     : event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey;
 
 /** The physical key under each command letter, so Shift on Linux and Windows changes nothing. */
-const codeOf = (key: string) => (key === "\\" ? "Backslash" : /\d/.test(key) ? `Digit${key}` : `Key${key}`);
+const PUNCTUATION: Record<string, string> = {
+  "\\": "Backslash",
+  ",": "Comma",
+  "/": "Slash",
+  "=": "Equal",
+  "-": "Minus",
+};
+const codeOf = (key: string) => PUNCTUATION[key] ?? (/\d/.test(key) ? `Digit${key}` : `Key${key}`);
 const byCode = new Map(
   Object.values(commands).flatMap((command: Command) => (command.key === null ? [] : [[codeOf(command.key), command]])),
 );

@@ -10,6 +10,9 @@
 //! the layer only grows and shrinks from that corner. It never hides either, because a hidden webview stops rendering
 //! and shows a stale frame when it returns; it collapses to nothing at its corner instead. The page layer swaps one
 //! page for another in a single turn of the main thread, so no frame shows both or neither.
+//!
+//! The zoom scales base and float but no page, and leaves the title bar at its height in points, so the traffic lights
+//! stay on its midline. The UI measures in its CSS pixels; every rect becomes points here, at the native boundary.
 
 use std::sync::{Arc, Mutex};
 
@@ -20,8 +23,9 @@ use tauri::webview::WebviewBuilder;
 use tauri::{LogicalPosition, LogicalSize, Theme, Webview, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent};
 use ts_rs::TS;
 
+use crate::client_menu::{Appearance, Zoom};
 use crate::lock;
-use crate::ui::{Cover, UiStore};
+use crate::ui::{Native, UiStore};
 
 /// The label of the window and of its base webview, as `tauri.conf.json` declares them.
 pub const BASE: &str = "main";
@@ -37,14 +41,21 @@ pub struct Bounds {
     pub height: f64,
 }
 
-/// The window's size in CSS pixels, which the float layer lays its surfaces out in.
+impl Bounds {
+    fn points(self, zoom: Zoom) -> Self {
+        let scale = zoom.scale();
+        Self { x: self.x * scale, y: self.y * scale, width: self.width * scale, height: self.height * scale }
+    }
+}
+
+/// A size of the window, which the float layer lays its surfaces out in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, TS)]
 pub struct Viewport {
     pub width: f64,
     pub height: f64,
 }
 
-/// The float layer's corner sits on the window's left edge at this height, just below the title bar.
+/// The float layer's corner sits on the window's left edge at this height in points, just below the title bar.
 pub fn title_bar_height() -> f64 {
     env!("OCTOPUS_CHROME_H").parse().expect("build.rs emits --chrome-h in px")
 }
@@ -67,9 +78,9 @@ pub struct Floated {
     pub drawn: Bounds,
 }
 
-/// From the float layer's corner to the far edges of every rect.
-fn from_corner(rects: impl Iterator<Item = Bounds>) -> Bounds {
-    let top = title_bar_height();
+/// From the float layer's corner to the far edges of every rect, in the UI's CSS pixels at `zoom`.
+fn from_corner(rects: impl Iterator<Item = Bounds>, zoom: Zoom) -> Bounds {
+    let top = title_bar_height() / zoom.scale();
     let (right, bottom) = rects.fold((0.0_f64, top), |(right, bottom), rect| {
         (right.max(rect.x + rect.width), bottom.max(rect.y + rect.height))
     });
@@ -77,18 +88,24 @@ fn from_corner(rects: impl Iterator<Item = Bounds>) -> Bounds {
 }
 
 /// The float layer's rect and the rects in it that take the pointer, for the surfaces that are out.
-pub fn float_cover(surfaces: &[Floated]) -> (Bounds, Vec<Bounds>) {
+pub fn float_cover(surfaces: &[Floated], zoom: Zoom) -> (Bounds, Vec<Bounds>) {
     let inputs = surfaces.iter().map(|surface| surface.input);
     if host::SHAPES_INPUT {
         let drawn = surfaces.iter().flat_map(|surface| [surface.input, surface.drawn]);
-        (from_corner(drawn), inputs.collect())
+        (from_corner(drawn, zoom), inputs.collect())
     } else {
-        let float = from_corner(inputs);
+        let float = from_corner(inputs, zoom);
         (float, vec![float])
     }
 }
 
-/// Paints DESIGN.html's `--bg` of the OS appearance under the UI, so no frame shows another color.
+/// Gives the window `appearance`, the OS appearance when it names no theme.
+fn appear(window: &Window, base: &Webview, appearance: Appearance) -> tauri::Result<()> {
+    window.set_theme(appearance.theme())?;
+    paint(window, base, appearance.theme().map_or_else(|| window.theme(), Ok)?)
+}
+
+/// Paints DESIGN.html's `--bg` of the window's appearance under the UI, so no frame shows another color.
 fn paint(window: &Window, base: &Webview, theme: Theme) -> tauri::Result<()> {
     let bg = if theme == Theme::Dark { env!("OCTOPUS_BG_DARK") } else { env!("OCTOPUS_BG_LIGHT") };
     let color: tauri::window::Color = bg.parse().expect("build.rs emits --bg as two hex colors");
@@ -101,7 +118,7 @@ pub struct Layers {
     base: Webview,
     float: Webview,
     ui: Arc<UiStore>,
-    /// The page on screen, at its rect.
+    /// The page on screen, at its rect in the UI's CSS pixels.
     page: Arc<Mutex<Option<(Webview, Bounds)>>>,
 }
 
@@ -141,11 +158,14 @@ impl Layers {
         let config = WindowConfig { traffic_light_position: Some(traffic_lights()), ..config.clone() };
         let base: Webview = WebviewWindowBuilder::from_config(app, &config)?.visible(false).build()?.as_ref().clone();
         let window = base.window();
-        paint(&window, &base, window.theme()?)?;
+        let native = ui.native();
+        appear(&window, &base, native.appearance)?;
+        base.set_zoom(native.zoom.scale())?;
         window.show()?;
         host::adopt_base(&base)?;
         let float = WebviewBuilder::new(FLOAT, WebviewUrl::App("index.html".into())).transparent(true);
-        let float = add_child(&window, float, Some(ui.cover().float))?;
+        let float = add_child(&window, float, Some(native.float.points(native.zoom)))?;
+        float.set_zoom(native.zoom.scale())?;
         #[cfg(target_os = "macos")]
         {
             let ui = Arc::clone(&ui);
@@ -158,7 +178,7 @@ impl Layers {
         let layers = Arc::new(Self { window: window.clone(), base, float, ui: Arc::clone(&ui), page: Arc::default() });
         let follower = Arc::clone(&layers);
         ui.follow(move |before, after| {
-            follower.track(before, after).map_err(|error| format!("place the float layer: {error}"))
+            follower.track(before, after).map_err(|error| format!("lay out the window: {error}"))
         });
         layers.resize()?;
         let watcher = Arc::clone(&layers);
@@ -180,12 +200,22 @@ impl Layers {
         Ok(layers)
     }
 
-    fn track(&self, before: &Cover, after: &Cover) -> tauri::Result<()> {
-        if after.float != before.float {
-            host::place(&self.float, Some(after.float))?;
+    fn track(&self, before: &Native, after: &Native) -> tauri::Result<()> {
+        let zoomed = after.zoom != before.zoom;
+        if zoomed {
+            self.base.set_zoom(after.zoom.scale())?;
+            self.float.set_zoom(after.zoom.scale())?;
+            self.place_page(after.zoom)?;
         }
-        if after.input != before.input {
-            host::take_input(&self.float, after.float, after.input.clone())?;
+        if zoomed || after.float != before.float {
+            host::place(&self.float, Some(after.float.points(after.zoom)))?;
+        }
+        if zoomed || after.input != before.input {
+            let input = after.input.iter().map(|input| input.points(after.zoom)).collect();
+            host::take_input(&self.float, after.float.points(after.zoom), input)?;
+        }
+        if after.appearance != before.appearance {
+            appear(&self.window, &self.base, after.appearance)?;
         }
         match (before.modal, after.modal) {
             (false, true) => self.float.set_focus(),
@@ -201,15 +231,20 @@ impl Layers {
 
     /// A webview takes its rect in device pixels, so a new scale re-applies every layer's rect.
     fn replace(&self) -> tauri::Result<()> {
-        host::place(&self.float, Some(self.ui.cover().float))?;
-        lock(&self.page).as_ref().map_or(Ok(()), |(page, bounds)| host::place(page, Some(*bounds)))
+        let native = self.ui.native();
+        host::place(&self.float, Some(native.float.points(native.zoom)))?;
+        self.place_page(native.zoom)
+    }
+
+    fn place_page(&self, zoom: Zoom) -> tauri::Result<()> {
+        lock(&self.page).as_ref().map_or(Ok(()), |(page, bounds)| host::place(page, Some(bounds.points(zoom))))
     }
 
     /// Adds a page webview, hidden until shown, beneath the float layer.
     pub fn add_page(&self, page: WebviewBuilder<tauri::Wry>) -> tauri::Result<Webview> {
         let page = add_child(&self.window, page, None)?;
         host::raise(&self.window, &self.float)?;
-        if self.ui.cover().modal {
+        if self.ui.native().modal {
             self.float.set_focus()?;
         }
         Ok(page)
@@ -218,11 +253,12 @@ impl Layers {
     /// Puts `next` on screen at its rect in place of the page there, or empties the page layer. The main thread
     /// serializes every swap, and a page that fails to land still lets the shown one leave.
     pub fn show_page(&self, next: Option<(Webview, Bounds)>) -> tauri::Result<()> {
-        let page = Arc::clone(&self.page);
+        let (page, ui) = (Arc::clone(&self.page), Arc::clone(&self.ui));
         on_main_thread(&self.window, move || {
+            let zoom = ui.native().zoom;
             let mut page = lock(&page);
             let shown = std::mem::replace(&mut *page, next.clone()).map(|(shown, _)| shown);
-            let landed = next.as_ref().map_or(Ok(()), |(next, bounds)| host::place(next, Some(*bounds)));
+            let landed = next.as_ref().map_or(Ok(()), |(next, bounds)| host::place(next, Some(bounds.points(zoom))));
             let stays = |shown: &Webview| next.as_ref().is_some_and(|(next, _)| next.label() == shown.label());
             let left = shown.filter(|shown| !stays(shown)).map_or(Ok(()), |shown| host::place(&shown, None));
             landed.and(left)
@@ -559,6 +595,14 @@ mod pointer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client_menu::ZOOMS;
+
+    #[test]
+    fn the_float_layer_hangs_from_the_title_bar_in_points_at_every_zoom() {
+        for zoom in ZOOMS.map(|percent| Zoom::try_from(percent).expect("a step")) {
+            assert_eq!(float_cover(&[], zoom).0.points(zoom).y, title_bar_height());
+        }
+    }
 
     #[test]
     fn the_float_layer_grows_from_a_fixed_corner_and_takes_the_pointer_only_where_its_surfaces_do() {
@@ -567,13 +611,14 @@ mod tests {
         let sidebar = Floated { input: column, drawn: Bounds { x: -40.0, y: 22.0, width: 382.0, height: 900.0 } };
         let scrim = Bounds { x: 0.0, y, width: 1440.0, height: 862.0 };
         let modal = Floated { input: scrim, drawn: scrim };
-        assert_eq!(float_cover(&[]).0, Bounds { x: 0.0, y, width: 0.0, height: 0.0 });
+        let cover = |surfaces: &[Floated]| float_cover(surfaces, Zoom::default());
+        assert_eq!(cover(&[]).0, Bounds { x: 0.0, y, width: 0.0, height: 0.0 });
         if host::SHAPES_INPUT {
-            assert_eq!(float_cover(&[sidebar]), (Bounds { x: 0.0, y, width: 342.0, height: 922.0 - y }, vec![column]));
-            assert_eq!(float_cover(&[sidebar, modal]), (Bounds { height: 922.0 - y, ..scrim }, vec![column, scrim]));
+            assert_eq!(cover(&[sidebar]), (Bounds { x: 0.0, y, width: 342.0, height: 922.0 - y }, vec![column]));
+            assert_eq!(cover(&[sidebar, modal]), (Bounds { height: 922.0 - y, ..scrim }, vec![column, scrim]));
         } else {
-            assert_eq!(float_cover(&[sidebar]), (column, vec![column]));
-            assert_eq!(float_cover(&[sidebar, modal]), (scrim, vec![scrim]));
+            assert_eq!(cover(&[sidebar]), (column, vec![column]));
+            assert_eq!(cover(&[sidebar, modal]), (scrim, vec![scrim]));
         }
     }
 }

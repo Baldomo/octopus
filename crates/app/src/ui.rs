@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use ts_rs::TS;
 
+use crate::client_menu::{Appearance, Zoom, ZoomStep};
 use crate::layers::{Bounds, Floated, Viewport, float_cover};
 use crate::{emit, lock};
 
@@ -44,6 +45,7 @@ pub enum Modal {
     Palette,
     NewTask,
     PairServer,
+    Shortcuts,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
@@ -57,6 +59,8 @@ pub struct Prefs {
     pub open: Option<String>,
     /// The section the Tasks board shows.
     pub board: Option<String>,
+    pub appearance: Appearance,
+    pub zoom: Zoom,
 }
 
 /// A file the palette opens in Files.
@@ -77,9 +81,11 @@ pub struct Ui {
     /// The opened tasks' keys, newest first.
     pub recent: Vec<String>,
     pub sidebar: bool,
+    pub client_menu: bool,
     pub modal: Option<Modal>,
     pub reveal: Option<Reveal>,
     pub problem: Option<String>,
+    /// The window's size in the UI's CSS pixels, which the zoom scales.
     pub viewport: Viewport,
     /// Where the float layer takes the pointer over the layers beneath it.
     pub float_input: Vec<Bounds>,
@@ -109,6 +115,17 @@ pub enum UiAct {
         shown: bool,
     },
     ToggleSidebar,
+    /// Showing the client menu closes a modal, and opening a modal closes the client menu.
+    ShowClientMenu {
+        shown: bool,
+    },
+    ToggleClientMenu,
+    SetAppearance {
+        appearance: Appearance,
+    },
+    Zoom {
+        step: ZoomStep,
+    },
     ShowModal {
         modal: Option<Modal>,
     },
@@ -138,19 +155,23 @@ struct Out {
     modal: bool,
 }
 
-/// What the float layer covers, where in it it takes the pointer, and whether a modal among it holds the keyboard.
+/// What the app applies to the native window. `float` and `input` are in the UI's CSS pixels at `zoom`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Cover {
+pub struct Native {
     pub float: Bounds,
     pub input: Vec<Bounds>,
     pub modal: bool,
+    pub zoom: Zoom,
+    pub appearance: Appearance,
 }
 
-/// The shared `Ui`, and what the app keeps beside it to derive the float layer's cover.
+/// The shared `Ui`, and what the app keeps beside it to derive what the window shows natively.
 struct State {
     ui: Ui,
     /// Each surface of the float layer that is out, by name.
     out: BTreeMap<String, Out>,
+    /// The window's size in points.
+    window: Viewport,
 }
 
 impl State {
@@ -159,6 +180,7 @@ impl State {
             version: 0,
             recent: prefs.open.iter().cloned().collect(),
             sidebar: prefs.pinned,
+            client_menu: false,
             prefs,
             modal: None,
             reveal: None,
@@ -166,11 +188,11 @@ impl State {
             viewport: Viewport::default(),
             float_input: Vec::new(),
         };
-        Self { ui, out: BTreeMap::new() }
+        Self { ui, out: BTreeMap::new(), window: Viewport::default() }
     }
 
     fn apply(&mut self, act: UiAct) {
-        let Self { ui, out } = self;
+        let Self { ui, out, .. } = self;
         match act {
             UiAct::OpenTask { key } => {
                 ui.recent.retain(|recent| *recent != key);
@@ -192,7 +214,11 @@ impl State {
             },
             UiAct::ShowSidebar { shown } => ui.sidebar = shown,
             UiAct::ToggleSidebar => ui.sidebar = !ui.sidebar,
-            UiAct::ShowModal { modal } => ui.modal = modal,
+            UiAct::ShowClientMenu { shown } => ui.show_client_menu(shown),
+            UiAct::ToggleClientMenu => ui.show_client_menu(!ui.client_menu),
+            UiAct::SetAppearance { appearance } => ui.prefs.appearance = appearance,
+            UiAct::Zoom { step } => ui.prefs.zoom = ui.prefs.zoom.step(step),
+            UiAct::ShowModal { modal } => ui.show_modal(modal),
             UiAct::Float { surface, at, modal } => drop(out.insert(surface, Out { at, modal })),
             UiAct::Sink { surface } => drop(out.remove(&surface)),
             UiAct::Reveal { task, path } => {
@@ -204,38 +230,68 @@ impl State {
         }
     }
 
-    fn cover(&self) -> Cover {
-        let (float, input) = float_cover(&self.out.values().map(|out| out.at).collect::<Vec<_>>());
-        Cover { float, input, modal: self.out.values().any(|out| out.modal) }
+    fn native(&self) -> Native {
+        let zoom = self.ui.prefs.zoom;
+        let (float, input) = float_cover(&self.out.values().map(|out| out.at).collect::<Vec<_>>(), zoom);
+        Native { float, input, modal: self.out.values().any(|out| out.modal), zoom, appearance: self.ui.prefs.appearance }
+    }
+
+    fn fit_viewport(&mut self) {
+        let scale = self.ui.prefs.zoom.scale();
+        self.ui.viewport = Viewport { width: self.window.width / scale, height: self.window.height / scale };
     }
 }
 
 impl Ui {
+    fn show_client_menu(&mut self, shown: bool) {
+        self.client_menu = shown;
+        if shown {
+            self.modal = None;
+        }
+    }
+
+    fn show_modal(&mut self, modal: Option<Modal>) {
+        self.client_menu &= modal.is_none();
+        self.modal = modal;
+    }
+
     fn show_surface(&mut self, surface: Surface) {
         self.prefs.surface = surface;
         self.prefs.view = View::Task;
     }
 }
 
-/// Places the float layer for its cover before and after a change, or names the problem it met.
-type Follower = Box<dyn Fn(&Cover, &Cover) -> Result<(), String> + Send + Sync>;
+/// Applies what the window shows natively before and after a change, or names the problem it met.
+type Follower = Box<dyn Fn(&Native, &Native) -> Result<(), String> + Send + Sync>;
 
 pub struct UiStore {
     app: AppHandle,
     state: Mutex<State>,
     /// Counts problems shown, so a problem's timer clears only the problem it showed.
     problems: AtomicU64,
-    /// Sees every change with the float layer's cover before and after it.
+    /// Sees every change with what the window shows natively before and after it.
     follower: OnceLock<Follower>,
 }
 
 fn load_prefs() -> anyhow::Result<Prefs> {
     let path = config(PREFS_FILE)?;
     match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text).with_context(|| format!("parse {}", path.display())),
+        Ok(text) => parse_prefs(&text).with_context(|| format!("parse {}", path.display())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Prefs::default()),
         Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
     }
+}
+
+/// A pref the file lacks, as one written before that pref existed does, takes its default.
+fn parse_prefs(text: &str) -> anyhow::Result<Prefs> {
+    let serde_json::Value::Object(saved) = serde_json::from_str(text)? else {
+        anyhow::bail!("prefs are not a JSON object");
+    };
+    let serde_json::Value::Object(mut prefs) = serde_json::to_value(Prefs::default())? else {
+        unreachable!("Prefs serializes as an object");
+    };
+    prefs.extend(saved);
+    Ok(serde_json::from_value(serde_json::Value::Object(prefs))?)
 }
 
 fn save_prefs(prefs: &Prefs) -> anyhow::Result<()> {
@@ -245,7 +301,7 @@ fn save_prefs(prefs: &Prefs) -> anyhow::Result<()> {
 }
 
 impl UiStore {
-    /// Prefs written by an earlier build or by hand start the window from the defaults, and the status bar says so.
+    /// Prefs the app cannot parse start the window from the defaults, and the status bar says so.
     pub fn load(app: AppHandle, launch_problem: Option<String>) -> Arc<Self> {
         let (prefs, prefs_problem) = match load_prefs() {
             Ok(prefs) => (prefs, None),
@@ -268,11 +324,11 @@ impl UiStore {
         lock(&self.state).ui.clone()
     }
 
-    pub fn cover(&self) -> Cover {
-        lock(&self.state).cover()
+    pub fn native(&self) -> Native {
+        lock(&self.state).native()
     }
 
-    pub fn follow(&self, follower: impl Fn(&Cover, &Cover) -> Result<(), String> + Send + Sync + 'static) {
+    pub fn follow(&self, follower: impl Fn(&Native, &Native) -> Result<(), String> + Send + Sync + 'static) {
         assert!(self.follower.set(Box::new(follower)).is_ok(), "one follower watches the ui");
     }
 
@@ -285,8 +341,9 @@ impl UiStore {
         save_prefs(&after.prefs).map_err(|error| format!("{error:#}"))
     }
 
-    pub fn resize(self: &Arc<Self>, viewport: Viewport) {
-        self.change(|state| state.ui.viewport = viewport);
+    /// Takes the window's size in points.
+    pub fn resize(self: &Arc<Self>, window: Viewport) {
+        self.change(|state| state.window = window);
     }
 
     pub fn report(self: &Arc<Self>, problem: String) {
@@ -300,12 +357,13 @@ impl UiStore {
     fn change(self: &Arc<Self>, change: impl FnOnce(&mut State)) -> (Ui, Ui) {
         let (before, after, placed) = {
             let mut state = lock(&self.state);
-            let (before, covered) = (state.ui.clone(), state.cover());
+            let (before, was) = (state.ui.clone(), state.native());
             change(&mut state);
-            let cover = state.cover();
-            state.ui.float_input.clone_from(&cover.input);
+            state.fit_viewport();
+            let native = state.native();
+            state.ui.float_input.clone_from(&native.input);
             state.ui.version += 1;
-            let placed = self.follower.get().map_or(Ok(()), |follower| follower(&covered, &cover));
+            let placed = self.follower.get().map_or(Ok(()), |follower| follower(&was, &native));
             let after = state.ui.clone();
             emit(&self.app, UI_EVENT, after.clone());
             (before, after, placed)
@@ -337,6 +395,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn prefs_saved_before_a_pref_existed_keep_theirs_and_take_its_default() {
+        let saved = r#"{"pinned":true,"collapsed":["octopus"],"surface":"files","view":"task","open":"local/tsk_1","board":null}"#;
+        let prefs = parse_prefs(saved).expect("parses");
+        assert_eq!((prefs.pinned, prefs.open.as_deref()), (true, Some("local/tsk_1")));
+        assert_eq!((prefs.appearance, prefs.zoom), (Appearance::System, Zoom::default()));
+        assert!(parse_prefs(r#"{"pinned":true,"retired":1}"#).is_err());
+    }
+
+    #[test]
     fn recent_tasks_keep_the_newest_eight_once_each() {
         let mut state = State::starting(Prefs::default());
         for key in ["a", "b", "c", "d", "e", "f", "g", "h", "i", "b"] {
@@ -354,12 +421,12 @@ mod tests {
         let mut state = State::starting(Prefs::default());
         let mut covered = |act| {
             state.apply(act);
-            state.cover()
+            state.native()
         };
         let float = |surface: &str, at, modal| UiAct::Float { surface: surface.into(), at, modal };
         let cover = |surfaces: &[Floated], modal| {
-            let (float, input) = float_cover(surfaces);
-            Cover { float, input, modal }
+            let (float, input) = float_cover(surfaces, Zoom::default());
+            Native { float, input, modal, zoom: Zoom::default(), appearance: Appearance::System }
         };
         assert_eq!(covered(float("sidebar", sidebar, false)), cover(&[sidebar], false));
         assert_eq!(covered(float("modal", popover, true)), cover(&[popover, sidebar], true));
