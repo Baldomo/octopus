@@ -3,6 +3,9 @@ import { dragSource, dropTarget, isDragged, showsDropHint } from "./drag";
 import type { Column } from "./generated";
 import { Glyph, statusWord } from "./Glyph";
 import { dropHint, GroupHead } from "./Group";
+import { isMenuOpen, MenuHost, menuTrigger, onRightClick } from "./Menu";
+import { backend } from "./backend";
+import { isLive, isRenaming, RenameInput, startRename, TaskMenu, Toast } from "./SidebarControls";
 import { model, openTask, ui } from "./state";
 
 function BoardColumn(props: { section: string; column: Column }) {
@@ -10,33 +13,53 @@ function BoardColumn(props: { section: string; column: Column }) {
   return (
     <Show when={props.column.rows.length > 0 || showsDropHint(props.section)}>
       <div class="col" classList={{ over: target.over() }} {...target.attributes}>
-        <GroupHead column={props.column} />
+        <GroupHead state={props.column.state} count={props.column.rows.length} />
         <Show when={props.column.rows.length === 0}>
           <div class="drophint">{dropHint(props.column.state)}</div>
         </Show>
         <For each={props.column.rows}>
-          {(row) => (
-            <div
-              class="tcard"
-              classList={{ done: !props.column.live, dragging: isDragged(row.key) }}
-              style={{ "--depth": row.depth }}
-              onClick={() => openTask(row.key)}
-              {...dragSource(row, props.section, props.column.state)}
-            >
-              <div class="tt">
-                <Glyph glyph={row.glyph} />
-                {row.title}
+          {(row) => {
+            let card!: HTMLDivElement;
+            const id = `task:${row.key}`;
+            const menu = () => <TaskMenu row={row} />;
+            return (
+              <div
+                ref={card}
+                class="tcard"
+                classList={{
+                  sub: row.depth > 0,
+                  done: !isLive(row.state),
+                  dragging: isDragged(row.key),
+                  "menu-open": isMenuOpen(id),
+                }}
+                style={{ "--depth": row.depth }}
+                tabindex="0"
+                onClick={() => openTask(row.key)}
+                onKeyDown={(event) => event.key === "F2" && startRename("task", row.key)}
+                onContextMenu={onRightClick(id, () => card, menu)}
+                {...dragSource(row, props.section, props.column.state)}
+              >
+                <div class="tt">
+                  <Glyph glyph={row.glyph} />
+                  <Show when={isRenaming("task", row.key)} fallback={row.title}>
+                    <RenameInput value={row.title} apply={(title) => backend.taskRename(row.at, title)} />
+                  </Show>
+                  <span class="acts">
+                    <button class="mini more" title="task menu" {...menuTrigger(id, () => card, menu)}>
+                      ⋯
+                    </button>
+                  </span>
+                </div>
+                <div class="meta">
+                  <span>{row.at.server}</span>
+                  <span>{statusWord[row.glyph]}</span>
+                  <Show when={row.state !== props.column.state && isLive(row.state)}>
+                    <span>{row.state}</span>
+                  </Show>
+                </div>
               </div>
-              <div class="meta">
-                <span>{row.at.server}</span>
-                <span>{statusWord[row.glyph]}</span>
-                <Show when={row.subtasks > 0}>
-                  <span>{row.subtasks} sub</span>
-                </Show>
-                <Show when={row.via}>{(via) => <span>↳ {via()}</span>}</Show>
-              </div>
-            </div>
-          )}
+            );
+          }}
         </For>
       </div>
     </Show>
@@ -54,6 +77,8 @@ export function Board() {
           </div>
         )}
       </Show>
+      <MenuHost />
+      <Toast />
     </div>
   );
 }

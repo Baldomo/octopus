@@ -4,6 +4,7 @@ import { dragSource, dropTarget, isDragged, showsDropHint } from "./drag";
 import { FLOAT_TOP, type Column, type Section } from "./generated";
 import { Glyph } from "./Glyph";
 import { dropHint, GroupHead } from "./Group";
+import { swatchColor } from "./tokens";
 import { commands, hint } from "./keys";
 import { isMenuOpen, MenuHost, menuTrigger, onRightClick } from "./Menu";
 import {
@@ -45,17 +46,22 @@ function Group(props: { section: string; column: Column }) {
       }
     >
       <div class="group" classList={{ over: target.over() }} {...target.attributes}>
-        <GroupHead column={props.column} />
+        <GroupHead state={props.column.state} />
         <For each={props.column.rows}>
           {(row) => {
             let element!: HTMLDivElement;
             const id = `task:${row.key}`;
-            const menu = () => <TaskMenu row={row} column={props.column} />;
+            const menu = () => <TaskMenu row={row} />;
             return (
               <div
                 ref={element}
                 class="task"
-                classList={{ active: isOpen(row.key), dragging: isDragged(row.key), "menu-open": isMenuOpen(id) }}
+                classList={{
+                  sub: row.depth > 0,
+                  active: isOpen(row.key),
+                  dragging: isDragged(row.key),
+                  "menu-open": isMenuOpen(id),
+                }}
                 style={{ "--depth": row.depth }}
                 tabindex="0"
                 onClick={() => openTask(row.key)}
@@ -74,8 +80,9 @@ function Group(props: { section: string; column: Column }) {
                 >
                   <RenameInput value={row.title} apply={(title) => backend.taskRename(row.at, title)} />
                 </Show>
-                <Show when={row.via}>{(via) => <span class="via">↳ {via()}</span>}</Show>
-                <span class="srv">{row.at.server}</span>
+                <Show when={row.state !== props.column.state}>
+                  <span class="st">{row.state}</span>
+                </Show>
                 <span class="acts">
                   <button class="mini more" title="task menu" {...menuTrigger(id, () => element, menu)}>
                     ⋯
@@ -94,10 +101,10 @@ function SectionGroups(props: { section: Section }) {
   let head!: HTMLDivElement;
   const name = () => props.section.name;
   const id = () => `section:${name()}`;
-  const menu = () => <SectionMenu section={props.section} />;
+  const menu = () => <SectionMenu name={name()} />;
   const collapsed = () => ui.prefs.collapsed.includes(name());
   return (
-    <div class="ws" classList={{ closed: collapsed() }}>
+    <div class="ws" classList={{ closed: collapsed() }} style={{ "--ws": swatchColor(props.section.swatch) }}>
       <div
         ref={head}
         class="wsh"
@@ -126,7 +133,12 @@ function SectionGroups(props: { section: Section }) {
         >
           <RenameInput value={name()} apply={(renamed) => backend.sectionRename(name(), renamed)} />
         </Show>
-        <span class="count">{props.section.live} live</span>
+        <span class="count">
+          <Show when={props.section.waiting}>
+            <span class="wait" title="waiting on you" />
+          </Show>
+          {props.section.live}
+        </span>
         <span class="acts">
           <button
             class="mini"
@@ -144,9 +156,7 @@ function SectionGroups(props: { section: Section }) {
         </span>
       </div>
       <div class="wsb">
-        <For each={props.section.columns.filter((column) => column.live)}>
-          {(column) => <Group section={name()} column={column} />}
-        </For>
+        <For each={props.section.groups}>{(column) => <Group section={name()} column={column} />}</For>
         <Show when={props.section.live === 0}>
           <div class="empty-state">No live tasks.</div>
         </Show>
@@ -156,19 +166,19 @@ function SectionGroups(props: { section: Section }) {
 }
 
 /** Keyed by name, as every round trip refreshes each server's view. */
-function ServerChip(props: { name: string }) {
-  let chip!: HTMLSpanElement;
+function ServerName(props: { name: string }) {
+  let host!: HTMLSpanElement;
   const server = () => serverView(props.name);
   const id = `server:${props.name}`;
   const menu = () => <ServerMenu name={props.name} />;
   return (
     <span
-      ref={chip}
-      class="chip"
-      classList={{ "menu-open": isMenuOpen(id) }}
+      ref={host}
+      class="host"
+      classList={{ off: !server()?.reachable, "menu-open": isMenuOpen(id) }}
       title={server()?.problem ?? undefined}
-      {...menuTrigger(id, () => chip, menu)}
-      onContextMenu={onRightClick(id, () => chip, menu)}
+      {...menuTrigger(id, () => host, menu)}
+      onContextMenu={onRightClick(id, () => host, menu)}
     >
       <span class="dot" classList={{ off: !server()?.reachable }} />
       <Show when={isRenaming("server", props.name)} fallback={props.name}>
@@ -227,7 +237,7 @@ export function Sidebar(props: { ref: (aside: HTMLElement) => void; shown: boole
     >
       <div class="sb-head">
         <div class="search" onClick={commands.search.run}>
-          <span>{commands.search.label}</span>
+          <span>Search</span>
           <kbd>{hint(commands.search)}</kbd>
         </div>
         <button class="icon" classList={{ on: ui.prefs.pinned }} title="pin" onClick={togglePin}>
@@ -235,18 +245,14 @@ export function Sidebar(props: { ref: (aside: HTMLElement) => void; shown: boole
         </button>
       </div>
       <div class="servers">
-        <For each={servers().map((server) => server.name)}>{(name) => <ServerChip name={name} />}</For>
-        <span class="chip add" onClick={commands.pairServer.run}>
-          + server
-        </span>
+        <For each={servers().map((server) => server.name)}>{(name) => <ServerName name={name} />}</For>
+        <button class="host add" title={commands.pairServer.label} onClick={commands.pairServer.run}>
+          +
+        </button>
       </div>
       <div class="groups">
         <For each={model.lists.sections}>{(section) => <SectionGroups section={section} />}</For>
         <AddWorkspace />
-      </div>
-      <div class="sb-foot">
-        <span>{hint(commands.newTask)} new task</span>
-        <span>{hint(commands.sidebar)} sidebar</span>
       </div>
       <MenuHost />
       <Toast />

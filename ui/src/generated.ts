@@ -16,6 +16,12 @@ export type Checkout = "root" | "worktree";
 
 export type AgentStatus = "working" | "waiting" | "idle";
 
+export type Hue = "red" | "orange" | "amber" | "lime" | "green" | "mint" | "teal" | "sky" | "blue" | "indigo" | "violet" | "pink";
+
+export type Tone = "mist" | "soft" | "vivid" | "deep";
+
+export type Swatch = { hue: Hue, tone: Tone, };
+
 export type Agent = { "kind": "not_started" } | { "kind": "running", status: AgentStatus, } | { "kind": "exited" } | { "kind": "harness_not_installed", install: string, } | { "kind": "harness_unknown" };
 
 export type Panel = { id: PtyId, name: string, running: boolean, lock_holder: string | null, };
@@ -52,19 +58,31 @@ export type Glyph = "working" | "waiting" | "idle" | "completed" | "cancelled";
 
 export type Row = { key: string, at: TaskRef, title: string, depth: number, 
 /**
- * The parent's title, for a subtask that sits apart from its parent.
+ * The task's own state, which a subtask's group or column may differ from.
  */
-via: string | null, glyph: Glyph, subtasks: number, };
+state: TaskState, glyph: Glyph, };
 
-export type Column = { state: TaskState, 
+export type Column = { state: TaskState, rows: Array<Row>, };
+
+export type Section = { name: string, 
 /**
- * Whether the column's state is live, which puts it in the sidebar too.
+ * The section's color, with auto resolved.
  */
-live: boolean, rows: Array<Row>, };
-
-export type Section = { name: string, live: number, 
+swatch: Swatch, 
 /**
- * One per state, in `TaskState::ALL` order, empty ones included.
+ * The color auto resolves to for the section's name.
+ */
+auto: Swatch, live: number, 
+/**
+ * Whether the agent of one of its live tasks is waiting on the user.
+ */
+waiting: boolean, 
+/**
+ * The sidebar's groups, one per live state, of the live tasks.
+ */
+groups: Array<Column>, 
+/**
+ * The board's columns, one per state in `TaskState::ALL` order, of the unarchived tasks.
  */
 columns: Array<Column>, };
 
@@ -174,7 +192,13 @@ task: string, panel: BrowserId, url: string, };
 
 export const TASK_STATES = ["pinned","temporary","completed","cancelled"] as const;
 
+export const LIVE_STATES = ["pinned","temporary"] as const;
+
 export const CHECKOUTS = ["root","worktree"] as const;
+
+export const HUES = ["red","orange","amber","lime","green","mint","teal","sky","blue","indigo","violet","pink"] as const;
+
+export const TONES = ["mist","soft","vivid","deep"] as const;
 
 export const AGENT_PANEL = "agent" as const;
 

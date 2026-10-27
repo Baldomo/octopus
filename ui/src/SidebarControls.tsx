@@ -1,23 +1,27 @@
 import { batch, createResource, createSignal, For, onCleanup, Show, type JSX } from "solid-js";
 import { backend } from "./backend";
 import {
+  HUES,
+  LIVE_STATES,
   TASK_STATES,
-  type Column,
+  TONES,
   type Offer,
   type PairedClient,
   type Row,
   type Section,
+  type Swatch,
   type TaskState,
 } from "./generated";
-import { mac } from "./keys";
+import { commands, hint, mac } from "./keys";
 import { anyMenuOpen, closeMenu, Head, Item, Sep } from "./Menu";
 import { act, me, model, report, serverView, servers, setNewTaskSection, showBoard, showModal } from "./state";
+import { swatchColor } from "./tokens";
 
 const TOAST_MS = 1800;
 
 const [said, setSaid] = createSignal<{ message: JSX.Element; nth: number } | null>(null);
 
-/** Confirms what an action did, briefly, at the foot of the sidebar. */
+/** Confirms what an action did, briefly, at the foot of the sidebar or the board. */
 export function toast(message: JSX.Element) {
   const nth = (said()?.nth ?? 0) + 1;
   setSaid({ message, nth });
@@ -250,50 +254,91 @@ export function newTaskIn(section: string) {
 }
 
 const liveOn = (section: Section, server: string) =>
-  section.columns
-    .filter((column) => column.live)
-    .reduce((count, column) => count + column.rows.filter((row) => row.at.server === server).length, 0);
+  section.groups.reduce((count, group) => count + group.rows.filter((row) => row.at.server === server).length, 0);
 
-export function SectionMenu(props: { section: Section }) {
-  const name = () => props.section.name;
-  const workspaces = () => model.lists.workspaces.filter((workspace) => workspace.name === name());
+export const isLive = (state: TaskState) => LIVE_STATES.some((live) => live === state);
+
+const same = (a: Swatch, b: Swatch) => a.hue === b.hue && a.tone === b.tone;
+
+const MATRIX: Swatch[] = TONES.flatMap((tone) => HUES.map((hue) => ({ hue, tone })));
+
+/** The color matrix, `current` ringed and `auto` dotted; picking `auto` picks null, the auto color. */
+function Matrix(props: { current: Swatch; auto: Swatch; pick: (swatch: Swatch | null) => void }) {
   return (
-    <>
-      <Head title={name()} lines={workspaces().map((workspace) => `${workspace.server}  ${workspace.root}`)} />
-      <Item run={closing(() => newTaskIn(name()))}>New task here</Item>
-      <Item run={closing(() => showBoard(name()))}>Open board</Item>
-      <Item run={closing(() => startRename("section", name()))}>Rename…</Item>
-      <Sep />
-      <For each={workspaces()}>
-        {(workspace) => {
-          const live = () => liveOn(props.section, workspace.server);
-          const why = () =>
-            !serverView(workspace.server)?.reachable ? "unreachable" : live() > 0 ? `${live()} live` : undefined;
-          const remove = () =>
-            backend.workspaceRemove(workspace.server, workspace.workspace).then(
-              () =>
-                toast(
-                  <>
-                    Removed <b>{workspace.name}</b> from {workspace.server} · branches kept
-                  </>,
-                ),
-              report,
-            );
-          return (
-            <Item danger why={why()} run={closing(remove)}>
-              Remove from {workspace.server}
-            </Item>
-          );
-        }}
+    <div class="matrix">
+      <For each={MATRIX}>
+        {(swatch) => (
+          <button
+            type="button"
+            class="swatch"
+            classList={{ on: same(swatch, props.current), auto: same(swatch, props.auto) }}
+            style={{ "--c": swatchColor(swatch) }}
+            title={`${swatch.hue} ${swatch.tone}${same(swatch, props.auto) ? " · auto" : ""}`}
+            onClick={() => props.pick(same(swatch, props.auto) ? null : swatch)}
+          />
+        )}
       </For>
-    </>
+    </div>
   );
 }
 
-export function TaskMenu(props: { row: Row; column: Column }) {
+/** Finds its section by name on every model, so it follows changes made while it is open. */
+export function SectionMenu(props: { name: string }) {
+  const section = () => model.lists.sections.find((candidate) => candidate.name === props.name);
+  const workspaces = () => model.lists.workspaces.filter((workspace) => workspace.name === props.name);
+  return (
+    <Show when={section()}>
+      {(section) => (
+        <>
+          <Head
+            title={props.name}
+            color={swatchColor(section().swatch)}
+            lines={workspaces().map((workspace) => `${workspace.server}  ${workspace.root}`)}
+          />
+          <Item kbd={hint(commands.newTask)} run={closing(() => newTaskIn(props.name))}>
+            New task here
+          </Item>
+          <Item run={closing(() => showBoard(props.name))}>Open board</Item>
+          <Item run={closing(() => startRename("section", props.name))}>Rename…</Item>
+          <div class="mlabel">Color</div>
+          <Matrix
+            current={section().swatch}
+            auto={section().auto}
+            pick={(swatch) => backend.sectionColor(props.name, swatch).catch(report)}
+          />
+          <Sep />
+          <For each={workspaces()}>
+            {(workspace) => {
+              const live = () => liveOn(section(), workspace.server);
+              const why = () =>
+                !serverView(workspace.server)?.reachable ? "unreachable" : live() > 0 ? `${live()} live` : undefined;
+              const remove = () =>
+                backend.workspaceRemove(workspace.server, workspace.workspace).then(
+                  () =>
+                    toast(
+                      <>
+                        Removed <b>{workspace.name}</b> from {workspace.server} · branches kept
+                      </>,
+                    ),
+                  report,
+                );
+              return (
+                <Item danger why={why()} run={closing(remove)}>
+                  Remove from {workspace.server}
+                </Item>
+              );
+            }}
+          </For>
+        </>
+      )}
+    </Show>
+  );
+}
+
+export function TaskMenu(props: { row: Row }) {
   const move = (state: TaskState) =>
     closing(() => {
-      if (state === props.column.state) return;
+      if (state === props.row.state) return;
       act(backend.taskMove(props.row.at, state));
       toast(
         <>
@@ -310,7 +355,7 @@ export function TaskMenu(props: { row: Row; column: Column }) {
       <Sep />
       <For each={TASK_STATES}>
         {(state) => (
-          <Item check={state === props.column.state} run={move(state)}>
+          <Item check={state === props.row.state} run={move(state)}>
             {state}
           </Item>
         )}
@@ -318,7 +363,7 @@ export function TaskMenu(props: { row: Row; column: Column }) {
       <Sep />
       <Item run={() => copy(props.row.at.task, <b>{props.row.at.task}</b>).then(closeMenu, report)}>Copy task id</Item>
       <Item
-        why={props.column.live ? "end it first" : undefined}
+        why={isLive(props.row.state) ? "end it first" : undefined}
         run={closing(() => act(backend.taskArchive(props.row.at)))}
       >
         Archive
@@ -354,11 +399,20 @@ function WorkspaceCard() {
   const [server, setServer] = createSignal(servers().find((server) => server.reachable)?.name ?? "");
   const [name, setName] = createSignal("");
   const [root, setRoot] = createSignal("");
+  /** Null until the user picks a color other than auto. */
+  const [picked, setPicked] = createSignal<Swatch | null>(null);
+  const [auto] = createResource(() => name().trim(), backend.autoColor);
+  const color = () => {
+    const swatch = picked() ?? auto();
+    return swatch && swatchColor(swatch);
+  };
   const [error, setError] = createSignal<string | null>(null);
   const [sending, setSending] = createSignal(false);
   const submit = () => {
     if (sending()) return;
     const [chosen, named, rooted] = [server(), name().trim(), root().trim()];
+    const [swatch, resolved] = [picked(), auto.state === "ready" ? auto() : undefined];
+    const stored = swatch !== null && resolved !== undefined && same(swatch, resolved) ? null : swatch;
     const needs = [chosen === "" && "a server", named === "" && "name", !absolute(rooted) && "an absolute root"].filter(
       (field) => field !== false,
     );
@@ -368,7 +422,7 @@ function WorkspaceCard() {
     }
     setSending(true);
     backend
-      .workspaceAdd(chosen, named, rooted)
+      .workspaceAdd(chosen, named, rooted, stored)
       .then(
         () => {
           setAdding(false);
@@ -387,15 +441,18 @@ function WorkspaceCard() {
     if (event.key === "Escape") setAdding(false);
   };
   return (
-    <div class="card" onKeyDown={keys}>
-      <div class="ttl">Add a workspace</div>
+    <div class="card" style={{ "--ws": color() }} onKeyDown={keys}>
+      <div class="ttl">
+        <i />
+        Add a workspace
+      </div>
       <div class="field">
         <span>Server</span>
         <div class="pick">
           <For each={servers()}>
             {(option) => (
               <button
-                class="chip"
+                class="host"
                 classList={{ on: server() === option.name }}
                 disabled={!option.reachable}
                 title={option.reachable ? undefined : "unreachable"}
@@ -428,12 +485,20 @@ function WorkspaceCard() {
           onInput={(event) => setRoot(event.currentTarget.value)}
         />
       </label>
+      <Show when={auto()}>
+        {(auto) => (
+          <div class="field">
+            <span>Color</span>
+            <Matrix current={picked() ?? auto()} auto={auto()} pick={setPicked} />
+          </div>
+        )}
+      </Show>
       <Show when={error()}>{(message) => <div class="err">{message()}</div>}</Show>
       <div class="row">
         <button class="btn" onClick={() => setAdding(false)}>
           Cancel
         </button>
-        <button class="btn live" onClick={submit}>
+        <button class="btn go" onClick={submit}>
           Add
         </button>
       </div>

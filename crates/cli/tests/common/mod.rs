@@ -12,7 +12,7 @@ use octopus_proto::device::DeviceKey;
 use octopus_proto::local::Listener;
 use octopus_proto::ops::{TaskCreate, TaskGet, WorkspaceAdd};
 use octopus_proto::quic;
-use octopus_proto::types::{Checkout, Task, TaskId, TaskState, WorkspaceId};
+use octopus_proto::types::{Checkout, Color, Task, TaskId, TaskState, WorkspaceId};
 use octopus_server::{Server, TerminalHost, serve};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -135,7 +135,7 @@ pub fn echo_agent(line: &str) -> Vec<String> {
 }
 
 pub async fn workspace(connection: &Connection, root: &Path) -> WorkspaceId {
-    let add = WorkspaceAdd { name: "octopus".into(), root: root.to_string_lossy().to_string() };
+    let add = WorkspaceAdd { name: "octopus".into(), root: root.to_string_lossy().to_string(), color: Color::Auto };
     connection.call(&add).await.expect("workspace.add").workspace
 }
 

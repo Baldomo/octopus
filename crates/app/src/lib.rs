@@ -61,6 +61,8 @@ pub fn run() -> anyhow::Result<()> {
             commands::workspace_add,
             commands::workspace_remove,
             commands::section_rename,
+            commands::section_color,
+            commands::auto_color,
             commands::task_focus,
             commands::task_move,
             commands::task_rename,

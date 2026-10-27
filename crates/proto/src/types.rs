@@ -136,9 +136,10 @@ pub enum TaskState {
 
 impl TaskState {
     pub const ALL: [Self; 4] = [Self::Pinned, Self::Temporary, Self::Completed, Self::Cancelled];
+    pub const LIVE: [Self; 2] = [Self::Pinned, Self::Temporary];
 
     pub fn is_live(self) -> bool {
-        matches!(self, Self::Pinned | Self::Temporary)
+        Self::LIVE.contains(&self)
     }
 }
 
@@ -165,12 +166,111 @@ impl Arg for Checkout {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum Hue {
+    Red,
+    Orange,
+    Amber,
+    Lime,
+    Green,
+    Mint,
+    Teal,
+    Sky,
+    Blue,
+    Indigo,
+    Violet,
+    Pink,
+}
+
+impl Hue {
+    pub const ALL: [Self; 12] = [
+        Self::Red,
+        Self::Orange,
+        Self::Amber,
+        Self::Lime,
+        Self::Green,
+        Self::Mint,
+        Self::Teal,
+        Self::Sky,
+        Self::Blue,
+        Self::Indigo,
+        Self::Violet,
+        Self::Pink,
+    ];
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum Tone {
+    Mist,
+    Soft,
+    Vivid,
+    Deep,
+}
+
+impl Tone {
+    pub const ALL: [Self; 4] = [Self::Mist, Self::Soft, Self::Vivid, Self::Deep];
+}
+
+/// One cell of the color matrix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct Swatch {
+    pub hue: Hue,
+    pub tone: Tone,
+}
+
+/// A workspace's color: `auto`, which each client resolves from the name, or one swatch, spelled `violet-vivid`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Color {
+    Auto,
+    Picked(Swatch),
+}
+
+impl Color {
+    pub fn all() -> impl Iterator<Item = Self> {
+        let swatches = Tone::ALL.into_iter().flat_map(|tone| Hue::ALL.into_iter().map(move |hue| Swatch { hue, tone }));
+        std::iter::once(Self::Auto).chain(swatches.map(Self::Picked))
+    }
+
+    pub fn name(self) -> String {
+        match self {
+            Self::Auto => "auto".into(),
+            Self::Picked(Swatch { hue, tone }) => format!("{}-{}", to_wire(&hue), to_wire(&tone)),
+        }
+    }
+
+    pub fn parse(text: &str) -> Result<Self, String> {
+        Self::all().find(|color| color.name() == text).ok_or_else(|| format!("{text:?} is not auto or a <hue>-<tone>"))
+    }
+}
+
+impl Serialize for Color {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.name())
+    }
+}
+
+impl<'de> Deserialize<'de> for Color {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::parse(&String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Arg for Color {
+    fn shape() -> Shape {
+        Shape::Choice(Self::all().map(Self::name).collect())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Workspace {
     pub id: WorkspaceId,
     pub name: String,
     pub root: String,
+    pub color: Color,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

@@ -1,5 +1,9 @@
 /** Values from DESIGN.html, read back from the stylesheet it compiles into. */
 
+import type { Swatch } from "./generated";
+
+export const swatchColor = (swatch: Swatch) => `var(--ws-${swatch.hue}-${swatch.tone})`;
+
 export const token = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 /** A computed style of an element nested under the given class chain, e.g. `["code-ed", "ln"]`. */

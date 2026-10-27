@@ -20,7 +20,7 @@ use octopus_proto::ops::{
     Paired, PairedClient, PairingForget, PairingList, PairingOffer, PairingPair, Revised, SessionHello, SessionPing,
     SessionSync, Shown, Snapshot, TaskArchive, TaskCreate, TaskCreated, TaskFocus, TaskGet, TaskMove, TaskRename,
     TaskSetSession, TermResize, TermSend, TermTakeLock, Welcome, WorkspaceAdd, WorkspaceCreated, WorkspaceList,
-    WorkspaceRemove, WorkspaceRename, Workspaces, Written,
+    WorkspaceRemove, WorkspaceRename, WorkspaceSetColor, Workspaces, Written,
 };
 use octopus_proto::pairing::Side;
 use octopus_proto::types::{
@@ -273,6 +273,7 @@ impl Server {
                 call::<WorkspaceList>(args, |_| Ok(Workspaces { workspaces: lock(&self.state).store.workspaces()? }))
             }
             WorkspaceRename::NAME => call::<WorkspaceRename>(args, |op| self.workspace_rename(op)),
+            WorkspaceSetColor::NAME => call::<WorkspaceSetColor>(args, |op| self.workspace_set_color(op)),
             WorkspaceRemove::NAME => call::<WorkspaceRemove>(args, |op| self.workspace_remove(op)),
             HarnessSet::NAME => call::<HarnessSet>(args, |op| self.harness_set(op)),
             AgentReport::NAME => call::<AgentReport>(args, |op| self.agent_report(op)),
@@ -332,7 +333,7 @@ impl Server {
         nonempty("a workspace name", &op.name)?;
         let root = directory(&op.root)?;
         let mut state = lock(&self.state);
-        let (workspace, rev) = state.store.add_workspace(&op.name, &root)?;
+        let (workspace, rev) = state.store.add_workspace(&op.name, &root, op.color)?;
         let id = workspace.id.clone();
         self.publish(&state, rev, Event::WorkspaceUpdated { workspace });
         Ok(WorkspaceCreated { workspace: id, rev })
@@ -342,6 +343,13 @@ impl Server {
         nonempty("a workspace name", &op.name)?;
         let mut state = lock(&self.state);
         let (workspace, rev) = state.store.rename_workspace(&op.workspace, &op.name)?;
+        self.publish(&state, rev, Event::WorkspaceUpdated { workspace });
+        Ok(Revised { rev })
+    }
+
+    fn workspace_set_color(&self, op: WorkspaceSetColor) -> Result<Revised, Error> {
+        let mut state = lock(&self.state);
+        let (workspace, rev) = state.store.color_workspace(&op.workspace, op.color)?;
         self.publish(&state, rev, Event::WorkspaceUpdated { workspace });
         Ok(Revised { rev })
     }

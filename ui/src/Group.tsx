@@ -1,9 +1,12 @@
-import type { Column, TaskState } from "./generated";
+import { Show } from "solid-js";
+import type { TaskState } from "./generated";
 
-export const GroupHead = (props: { column: Column }) => (
+export const GroupHead = (props: { state: TaskState; count?: number }) => (
   <div class="gh">
-    {props.column.state}
-    <span class="count">{props.column.rows.length}</span>
+    {props.state}
+    <Show when={props.count !== undefined}>
+      <span class="count">{props.count}</span>
+    </Show>
   </div>
 );
 

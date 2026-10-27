@@ -8,7 +8,9 @@ use octopus_proto::ops::{
     WorkspaceRemove,
 };
 use octopus_proto::pairing::Code;
-use octopus_proto::types::{BrowserId, BrowserTarget, Checkout, PtyId, Stream, TaskId, TaskState, WorkspaceId};
+use octopus_proto::types::{
+    BrowserId, BrowserTarget, Checkout, Color, PtyId, Stream, Swatch, TaskId, TaskState, WorkspaceId,
+};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, State};
@@ -17,7 +19,7 @@ use ts_rs::TS;
 
 use crate::browser::{Browsers, Go, OnScreen};
 use crate::hub::{Hub, Model, ServerView, failure};
-use crate::task_lists::TaskRef;
+use crate::task_lists::{TaskRef, auto_swatch};
 use crate::terminal::Terminals;
 use crate::ui::{Ui, UiAct, UiStore};
 
@@ -86,9 +88,24 @@ pub fn server_forget(hub: Hubbed, server: String) -> Result<(), String> {
     hub.forget_server(&server).map_err(|error| format!("{error:#}"))
 }
 
+fn picked(swatch: Option<Swatch>) -> Color {
+    swatch.map_or(Color::Auto, Color::Picked)
+}
+
 #[tauri::command]
-pub async fn workspace_add(hub: Hubbed<'_>, server: String, name: String, root: String) -> Result<(), String> {
-    hub.call(&server, &WorkspaceAdd { name, root }).await.map(drop)
+pub fn auto_color(name: String) -> Swatch {
+    auto_swatch(&name)
+}
+
+#[tauri::command]
+pub async fn workspace_add(
+    hub: Hubbed<'_>,
+    server: String,
+    name: String,
+    root: String,
+    swatch: Option<Swatch>,
+) -> Result<(), String> {
+    hub.call(&server, &WorkspaceAdd { name, root, color: picked(swatch) }).await.map(drop)
 }
 
 #[tauri::command]
@@ -99,6 +116,11 @@ pub async fn workspace_remove(hub: Hubbed<'_>, server: String, workspace: Worksp
 #[tauri::command]
 pub async fn section_rename(hub: Hubbed<'_>, section: String, name: String) -> Result<(), String> {
     hub.rename_section(&section, &name).await
+}
+
+#[tauri::command]
+pub async fn section_color(hub: Hubbed<'_>, section: String, swatch: Option<Swatch>) -> Result<(), String> {
+    hub.color_section(&section, picked(swatch)).await
 }
 
 #[tauri::command]

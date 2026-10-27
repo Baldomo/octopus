@@ -16,6 +16,7 @@ import type {
   PairedClient,
   PtyId,
   ServerView,
+  Swatch,
   TaskRef,
   TaskState,
   Ui,
@@ -37,10 +38,15 @@ export const backend = {
   serverRename: (server: string, name: string) => invoke<void>("server_rename", { server, name }),
   /** Forgets the server in this client's list only. */
   serverForget: (server: string) => invoke<void>("server_forget", { server }),
-  workspaceAdd: (server: string, name: string, root: string) => invoke<void>("workspace_add", { server, name, root }),
+  /** A null swatch adds the workspace with the auto color. */
+  workspaceAdd: (server: string, name: string, root: string, swatch: Swatch | null) =>
+    invoke<void>("workspace_add", { server, name, root, swatch }),
+  autoColor: (name: string) => invoke<Swatch>("auto_color", { name }),
   workspaceRemove: (server: string, workspace: WorkspaceId) => invoke<void>("workspace_remove", { server, workspace }),
   /** Renames the section's workspace on every server of the section. */
   sectionRename: (section: string, name: string) => invoke<void>("section_rename", { section, name }),
+  /** Colors the section's workspace on every server of the section; a null swatch sets auto. */
+  sectionColor: (section: string, swatch: Swatch | null) => invoke<void>("section_color", { section, swatch }),
   taskFocus: (at: TaskRef) => invoke<void>("task_focus", { at }),
   taskMove: (at: TaskRef, state: TaskState) => invoke<void>("task_move", { at, state }),
   taskRename: (at: TaskRef, title: string) => invoke<void>("task_rename", { at, title }),

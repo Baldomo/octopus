@@ -2,8 +2,8 @@
 
 use octopus_proto::ops::{Entry, EntryKind, Match, Offer, PairedClient};
 use octopus_proto::types::{
-    AGENT_PANEL, Agent, AgentStatus, BrowserId, BrowserPanel, Checkout, NEW_BROWSER_PANEL, Panel, PtyId, SessionId,
-    Task, TaskId, TaskState, WorkspaceId,
+    AGENT_PANEL, Agent, AgentStatus, BrowserId, BrowserPanel, Checkout, Hue, NEW_BROWSER_PANEL, Panel, PtyId,
+    SessionId, Swatch, Task, TaskId, TaskState, Tone, WorkspaceId,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -42,6 +42,9 @@ pub fn render() -> String {
         TaskState,
         Checkout,
         AgentStatus,
+        Hue,
+        Tone,
+        Swatch,
         Agent,
         Panel,
         BrowserPanel,
@@ -79,7 +82,10 @@ pub fn render() -> String {
     );
     let constants = [
         constant("TASK_STATES", &TaskState::ALL),
+        constant("LIVE_STATES", &TaskState::LIVE),
         constant("CHECKOUTS", &Checkout::ALL),
+        constant("HUES", &Hue::ALL),
+        constant("TONES", &Tone::ALL),
         constant("AGENT_PANEL", &AGENT_PANEL),
         constant("NEW_BROWSER_PANEL", &NEW_BROWSER_PANEL),
         constant("FLOAT_LAYER", &FLOAT),

@@ -1,10 +1,5 @@
 /* Layout only: every component's look comes from DESIGN.html's #components block. */
 
-:root {
-  /* DESIGN: a nested row or card indents 14px per level. */
-  --nest: 14px;
-}
-
 html,
 body {
   height: 100%;
@@ -74,8 +69,10 @@ body {
   text-align: center;
 }
 
+/* The board's menus place themselves within its pane. */
 .tasks-view .pane {
   overflow: auto;
+  position: relative;
 }
 .tasks-view .board {
   padding: var(--s3);
@@ -171,12 +168,6 @@ body {
 }
 .sidebar .search {
   cursor: pointer;
-}
-.groups .task {
-  padding-left: calc(var(--s2) + var(--nest) * var(--depth));
-}
-.tcard {
-  margin-left: calc(var(--nest) * var(--depth));
 }
 
 .scrim {

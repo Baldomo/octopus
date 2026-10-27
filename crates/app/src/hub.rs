@@ -6,7 +6,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use octopus_client::cache::{Cache, PushEffect};
 use octopus_client::servers::{Address, Server, Servers};
 use octopus_client::{CallError, Connection, Identity};
-use octopus_proto::ops::{SessionSync, WorkspaceRename};
+use octopus_proto::ops::{SessionSync, WorkspaceRename, WorkspaceSetColor};
+use octopus_proto::types::{Color, WorkspaceId};
 use octopus_proto::{Event, Op, Push};
 use serde::Serialize;
 use tauri::AppHandle;
@@ -254,32 +255,57 @@ impl Hub {
     /// Renames the section's workspace on every server of the section, refusing before any rename when a server
     /// would split the section: one that is unreachable, or one that already holds a workspace named `to`.
     pub async fn rename_section(&self, from: &str, to: &str) -> Result<(), String> {
-        let renames = {
+        let taken = |server: &str, cache: &Cache| {
+            (from != to && cache.workspaces.values().any(|workspace| workspace.name == to))
+                .then(|| format!("{server} already has {to}"))
+        };
+        let rename = |workspace: WorkspaceId| WorkspaceRename { workspace, name: to.into() };
+        self.across_section(from, &format!("renamed {from} to {to}"), taken, rename).await
+    }
+
+    /// Colors the section's workspace on every server of the section, refusing before any while one is unreachable.
+    pub async fn color_section(&self, section: &str, color: Color) -> Result<(), String> {
+        let recolor = |workspace: WorkspaceId| WorkspaceSetColor { workspace, color };
+        self.across_section(section, &format!("colored {section} {}", color.name()), |_, _| None, recolor).await
+    }
+
+    /// Sends `op` for the section's workspace on each of its servers, refusing before any when one is unreachable or
+    /// `refuses` its cache, saying why; a failure partway names the servers that already `did` it.
+    async fn across_section<O: Op>(
+        &self,
+        section: &str,
+        did: &str,
+        refuses: impl Fn(&str, &Cache) -> Option<String>,
+        op: impl Fn(WorkspaceId) -> O,
+    ) -> Result<(), String> {
+        let ops = {
             let state = lock(&self.state);
-            let mut renames = Vec::new();
+            let mut ops = Vec::new();
             for (server, cache) in &state.caches {
-                let Some(workspace) = cache.workspaces.values().find(|workspace| workspace.name == from) else {
+                let Some(workspace) = cache.workspaces.values().find(|workspace| workspace.name == section) else {
                     continue;
                 };
                 if state.links.get(server).is_none_or(|link| link.connection.is_none()) {
-                    return Err(format!("{server} is unreachable, so {from} would split"));
+                    return Err(format!(
+                        "{server} is unreachable, so {section} would change on only some of its servers"
+                    ));
                 }
-                if from != to && cache.workspaces.values().any(|workspace| workspace.name == to) {
-                    return Err(format!("{server} already has {to}"));
+                if let Some(refusal) = refuses(server, cache) {
+                    return Err(refusal);
                 }
-                renames.push((server.clone(), WorkspaceRename { workspace: workspace.id.clone(), name: to.into() }));
+                ops.push((server.clone(), op(workspace.id.clone())));
             }
-            renames
+            ops
         };
-        let mut renamed = Vec::new();
-        for (server, rename) in renames {
-            if let Err(error) = self.call(&server, &rename).await {
-                return Err(match renamed.as_slice() {
+        let mut done = Vec::new();
+        for (server, op) in ops {
+            if let Err(error) = self.call(&server, &op).await {
+                return Err(match done.as_slice() {
                     [] => error,
-                    done => format!("{error}; {} already renamed {from} to {to}", done.join(", ")),
+                    done => format!("{error}; {} already {did}", done.join(", ")),
                 });
             }
-            renamed.push(server);
+            done.push(server);
         }
         Ok(())
     }

@@ -22,10 +22,10 @@ function targetAt(x: number, y: number, section: string): Target | null {
   return element?.dataset.dropSection === section && state !== undefined ? { section, state } : null;
 }
 
-/** Drags run on pointer events, so every platform's webview behaves the same. */
+/** Only a top-level task drags. Drags run on pointer events, so every platform's webview behaves the same. */
 export const dragSource = (row: Row, section: string, state: TaskState) => ({
   onPointerDown: (down: PointerEvent) => {
-    if (down.button !== 0) return;
+    if (down.button !== 0 || row.depth > 0) return;
     const move = (event: PointerEvent) => {
       if (dragged() === null) {
         if (Math.hypot(event.clientX - down.clientX, event.clientY - down.clientY) < DRAG_PX) return;

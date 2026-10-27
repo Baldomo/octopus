@@ -3,7 +3,6 @@ import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js"
 type Point = { x: number; y: number };
 type Opened = { id: string; anchor: HTMLElement; point: Point | null; body: () => JSX.Element };
 
-/** The one open menu of the sidebar. */
 const [opened, setOpened] = createSignal<Opened | null>(null);
 
 export const isMenuOpen = (id: string) => opened()?.id === id;
@@ -31,7 +30,7 @@ export const onRightClick = (id: string, anchor: () => HTMLElement, body: () => 
   openMenu(id, anchor(), body, { x: event.clientX, y: event.clientY });
 };
 
-/** Keeps a margin from the sidebar's edges, flipping above the anchor when there is no room below. */
+/** Keeps a margin from its host's edges, flipping above the anchor when there is no room below. */
 function place(menu: HTMLElement, within: HTMLElement, { anchor, point }: Opened) {
   const s = within.getBoundingClientRect();
   const a = anchor.getBoundingClientRect();
@@ -79,7 +78,7 @@ function Popover(props: { menu: Opened }) {
   );
 }
 
-/** Renders the open menu, placed within the element that holds the host: the sidebar. */
+/** Renders the open menu, placed within the element that holds the host. */
 export function MenuHost() {
   return (
     <Show when={opened()} keyed>
@@ -88,10 +87,14 @@ export function MenuHost() {
   );
 }
 
-export function Head(props: { title: string; lines: string[] }) {
+/** A section's menu leads its title with a dot of the section's `color`. */
+export function Head(props: { title: string; lines: string[]; color?: string }) {
   return (
     <div class="mh">
-      <b>{props.title}</b>
+      <b>
+        <Show when={props.color}>{(color) => <i style={{ background: color() }} />}</Show>
+        {props.title}
+      </b>
       <For each={props.lines}>{(line) => <span class="mono">{line}</span>}</For>
     </div>
   );

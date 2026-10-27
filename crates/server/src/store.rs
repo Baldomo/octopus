@@ -4,7 +4,8 @@ use std::path::Path;
 use octopus_proto::Error;
 use octopus_proto::device::{DeviceKey, PublicKey};
 use octopus_proto::types::{
-    BrowserId, BrowserPanel, Checkout, PtyId, SessionId, TaskId, TaskState, Workspace, WorkspaceId, from_wire, to_wire,
+    BrowserId, BrowserPanel, Checkout, Color, PtyId, SessionId, TaskId, TaskState, Workspace, WorkspaceId, from_wire,
+    to_wire,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
@@ -53,6 +54,7 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("clients", "seen_at", "INTEGER"),
     ("harnesses", "start", "TEXT NOT NULL DEFAULT '[]'"),
     ("harnesses", "resume", "TEXT NOT NULL DEFAULT '[]'"),
+    ("workspaces", "color", "TEXT NOT NULL DEFAULT 'auto'"),
 ];
 
 /// A task's agent terminal, the one panel a task has.
@@ -153,7 +155,12 @@ fn add_missing_columns(db: &Connection) -> rusqlite::Result<()> {
 }
 
 fn workspace_row(row: &Row) -> rusqlite::Result<Workspace> {
-    Ok(Workspace { id: WorkspaceId(row.get("id")?), name: row.get("name")?, root: row.get("root")? })
+    Ok(Workspace {
+        id: WorkspaceId(row.get("id")?),
+        name: row.get("name")?,
+        root: row.get("root")?,
+        color: wire_column(row, "color")?,
+    })
 }
 
 impl Store {
@@ -244,7 +251,7 @@ impl Store {
             .map_err(Error::internal)
     }
 
-    pub fn add_workspace(&mut self, name: &str, root: &str) -> Result<(Workspace, u64), Error> {
+    pub fn add_workspace(&mut self, name: &str, root: &str, color: Color) -> Result<(Workspace, u64), Error> {
         let tx = self.db.transaction().map_err(Error::internal)?;
         let taken: bool = tx
             .query_row(
@@ -256,10 +263,10 @@ impl Store {
         if taken {
             return Err(Error::conflict(format!("a workspace named {name} or rooted at {root} exists")));
         }
-        let workspace = Workspace { id: WorkspaceId::random(), name: name.to_string(), root: root.to_string() };
+        let workspace = Workspace { id: WorkspaceId::random(), name: name.to_string(), root: root.to_string(), color };
         tx.execute(
-            "INSERT INTO workspaces (id, name, root) VALUES (?1, ?2, ?3)",
-            params![workspace.id.0, workspace.name, workspace.root],
+            "INSERT INTO workspaces (id, name, root, color) VALUES (?1, ?2, ?3, ?4)",
+            params![workspace.id.0, workspace.name, workspace.root, to_wire(&color)],
         )
         .map_err(Error::internal)?;
         let rev = bump_rev(&tx)?;
@@ -295,6 +302,22 @@ impl Store {
         }
         let workspace = tx
             .query_row("UPDATE workspaces SET name = ?2 WHERE id = ?1 RETURNING *", params![id.0, name], workspace_row)
+            .optional()
+            .map_err(Error::internal)?
+            .ok_or_else(|| Error::not_found(id))?;
+        let rev = bump_rev(&tx)?;
+        tx.commit().map_err(Error::internal)?;
+        Ok((workspace, rev))
+    }
+
+    pub fn color_workspace(&mut self, id: &WorkspaceId, color: Color) -> Result<(Workspace, u64), Error> {
+        let tx = self.db.transaction().map_err(Error::internal)?;
+        let workspace = tx
+            .query_row(
+                "UPDATE workspaces SET color = ?2 WHERE id = ?1 RETURNING *",
+                params![id.0, to_wire(&color)],
+                workspace_row,
+            )
             .optional()
             .map_err(Error::internal)?
             .ok_or_else(|| Error::not_found(id))?;

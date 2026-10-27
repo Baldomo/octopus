@@ -18,6 +18,7 @@ Add a workspace: a directory this server runs tasks in.
 - `--server <server>`: The paired server's name.
 - `--name <name>`: The workspace's name, unique on its server.
 - `--root <root>`: The directory on the server's machine, as an absolute path.
+- `--color auto|red-mist|orange-mist|amber-mist|lime-mist|green-mist|mint-mist|teal-mist|sky-mist|blue-mist|indigo-mist|violet-mist|pink-mist|red-soft|orange-soft|amber-soft|lime-soft|green-soft|mint-soft|teal-soft|sky-soft|blue-soft|indigo-soft|violet-soft|pink-soft|red-vivid|orange-vivid|amber-vivid|lime-vivid|green-vivid|mint-vivid|teal-vivid|sky-vivid|blue-vivid|indigo-vivid|violet-vivid|pink-vivid|red-deep|orange-deep|amber-deep|lime-deep|green-deep|mint-deep|teal-deep|sky-deep|blue-deep|indigo-deep|violet-deep|pink-deep`: The workspace's color: auto, or a <hue>-<tone> of the matrix.
 
 ## `octopus workspace list`
 
@@ -32,6 +33,14 @@ Rename a workspace; it keeps its root and its tasks.
 - `--server <server>`: The paired server's name.
 - `--workspace <workspace>`: The workspace, by name.
 - `--name <name>`: Its new name, unique on its server.
+
+## `octopus workspace set-color`
+
+Set a workspace's color; it keeps its name, root and tasks.
+
+- `--server <server>`: The paired server's name.
+- `--workspace <workspace>`: The workspace, by name.
+- `--color auto|red-mist|orange-mist|amber-mist|lime-mist|green-mist|mint-mist|teal-mist|sky-mist|blue-mist|indigo-mist|violet-mist|pink-mist|red-soft|orange-soft|amber-soft|lime-soft|green-soft|mint-soft|teal-soft|sky-soft|blue-soft|indigo-soft|violet-soft|pink-soft|red-vivid|orange-vivid|amber-vivid|lime-vivid|green-vivid|mint-vivid|teal-vivid|sky-vivid|blue-vivid|indigo-vivid|violet-vivid|pink-vivid|red-deep|orange-deep|amber-deep|lime-deep|green-deep|mint-deep|teal-deep|sky-deep|blue-deep|indigo-deep|violet-deep|pink-deep`: Its new color: auto, or a <hue>-<tone> of the matrix.
 
 ## `octopus workspace remove`
 

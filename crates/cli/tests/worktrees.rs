@@ -5,13 +5,14 @@ use std::process::Command;
 
 use common::{connect, create, start, task, workspace};
 use octopus_client::CallError;
-use octopus_proto::Error;
 use octopus_proto::ops::{
     SessionSync, TaskArchive, TaskCreate, TaskMove, TaskRename, WorkspaceAdd, WorkspaceList, WorkspaceRemove,
-    WorkspaceRename,
+    WorkspaceRename, WorkspaceSetColor,
 };
-use octopus_proto::types::{Checkout, TaskState};
+use octopus_proto::types::{Checkout, Color, Hue, Swatch, TaskState, Tone};
+use octopus_proto::{Error, Op, Outcome};
 use octopus_server::WORKTREE_LIFETIME_MS;
+use serde_json::json;
 
 fn git(repo: &Path, args: &[&str]) -> String {
     let output = Command::new("git").arg("-C").arg(repo).args(args).output().expect("run git");
@@ -59,7 +60,7 @@ fn refused<T: std::fmt::Debug>(result: Result<T, CallError>) -> Error {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_workspace_renames_in_place_and_goes_with_its_tasks_once_none_is_live() {
+async fn a_workspace_renames_and_recolors_in_place_and_goes_with_its_tasks_once_none_is_live() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = dir.path().join("repo");
     std::fs::create_dir(&repo).expect("mkdir repo");
@@ -67,7 +68,9 @@ async fn a_workspace_renames_in_place_and_goes_with_its_tasks_once_none_is_live(
     git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "root"]);
     let running = start(dir.path(), "server.sock", "host.sock");
     let laptop = connect(&running, "laptop").await;
-    let add = |name: &str, root: &Path| WorkspaceAdd { name: name.into(), root: root.to_string_lossy().into() };
+    let teal = Color::Picked(Swatch { hue: Hue::Teal, tone: Tone::Deep });
+    let add =
+        |name: &str, root: &Path| WorkspaceAdd { name: name.into(), root: root.to_string_lossy().into(), color: teal };
     assert!(matches!(refused(laptop.call(&add("x", Path::new("repo"))).await), Error::InvalidArgs { .. }));
     assert!(matches!(refused(laptop.call(&add(" ", &repo)).await), Error::InvalidArgs { .. }));
     let doomed = workspace(&laptop, &repo).await;
@@ -82,6 +85,14 @@ async fn a_workspace_renames_in_place_and_goes_with_its_tasks_once_none_is_live(
     let names: Vec<String> =
         laptop.call(&WorkspaceList {}).await.expect("list").workspaces.into_iter().map(|w| w.name).collect();
     assert_eq!(names, ["acme", "dotfiles"]);
+
+    let violet = Color::Picked(Swatch { hue: Hue::Violet, tone: Tone::Vivid });
+    laptop.call(&WorkspaceSetColor { workspace: doomed.clone(), color: violet }).await.expect("workspace.set_color");
+    let colors: Vec<(String, Color)> =
+        laptop.call(&WorkspaceList {}).await.expect("list").workspaces.into_iter().map(|w| (w.name, w.color)).collect();
+    assert_eq!(colors, [("acme".into(), violet), ("dotfiles".into(), teal)]);
+    let plaid = laptop.call_raw(WorkspaceSetColor::NAME, json!({"workspace": doomed, "color": "plaid"})).await;
+    assert!(matches!(plaid.expect("call"), Outcome::Err(Error::InvalidArgs { .. })));
 
     let id = create(&laptop, &doomed, Checkout::Worktree, "none").await;
     laptop.call(&TaskRename { task: id.clone(), title: "Renamed".into() }).await.expect("task.rename");

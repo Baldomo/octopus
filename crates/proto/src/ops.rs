@@ -5,7 +5,7 @@ use crate::frames::Op;
 use crate::pairing::{Code, Proof};
 use crate::schema::{Field, record};
 use crate::types::{
-    AgentStatus, BrowserId, BrowserTarget, Checkout, SessionId, Task, TaskId, TaskState, Workspace, WorkspaceId,
+    AgentStatus, BrowserId, BrowserTarget, Checkout, Color, SessionId, Task, TaskId, TaskState, Workspace, WorkspaceId,
 };
 
 /// Declares an op: its args as a `record!`, its wire name, and the type of its result.
@@ -151,6 +151,8 @@ op!(
         name: String,
         /// The directory on the server's machine, as an absolute path.
         root: String,
+        /// The workspace's color: auto, or a <hue>-<tone> of the matrix.
+        color: Color,
     }
 );
 op!(
@@ -164,6 +166,15 @@ op!(
         workspace: WorkspaceId,
         /// Its new name, unique on its server.
         name: String,
+    }
+);
+op!(
+    /// Set a workspace's color; it keeps its name, root and tasks.
+    WorkspaceSetColor = "workspace.set_color" -> Revised {
+        /// The workspace.
+        workspace: WorkspaceId,
+        /// Its new color: auto, or a <hue>-<tone> of the matrix.
+        color: Color,
     }
 );
 op!(
@@ -413,6 +424,7 @@ pub fn commands() -> Vec<Command> {
         command::<WorkspaceAdd>(),
         command::<WorkspaceList>(),
         command::<WorkspaceRename>(),
+        command::<WorkspaceSetColor>(),
         command::<WorkspaceRemove>(),
         command::<HarnessSet>(),
         command::<AgentReport>(),
