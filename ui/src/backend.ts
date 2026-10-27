@@ -61,7 +61,10 @@ export const backend = {
   /** Resolves to the id of the shell panel it opens. */
   termOpen: (at: TaskRef) => invoke<PtyId>("term_open", { at }),
   termClose: (at: TaskRef, panel: PtyId) => invoke<void>("term_close", { at, panel }),
-  termTakeLock: (at: TaskRef, panel: PtyId) => invoke<void>("term_take_lock", { at, panel }),
+  termClaim: (at: TaskRef, panel: PtyId, cols: number, rows: number) =>
+    invoke<void>("term_claim", { at, panel, cols, rows }),
+  termTakeLock: (at: TaskRef, panel: PtyId, cols: number, rows: number) =>
+    invoke<void>("term_take_lock", { at, panel, cols, rows }),
   termResize: (at: TaskRef, panel: PtyId, cols: number, rows: number) =>
     invoke<void>("term_resize", { at, panel, cols, rows }),
   fileList: (at: TaskRef, path: string) => invoke<Entry[]>("file_list", { at, path }),
@@ -89,6 +92,8 @@ export const events = {
   browserNavigated: (handle: (navigated: Navigated) => void) =>
     listen<Navigated>(EVENTS.browserNavigated, (event) => handle(event.payload)),
   ui: (handle: (ui: Ui) => void) => listen<Ui>(EVENTS.ui, (event) => handle(event.payload)),
+  windowShown: (handle: (shown: boolean) => void) =>
+    listen<boolean>(EVENTS.windowShown, (event) => handle(event.payload)),
 };
 
 export { Channel };

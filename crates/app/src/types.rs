@@ -13,7 +13,7 @@ use crate::browser::{Go, NAVIGATED_EVENT, Navigated, OnScreen};
 use crate::client_menu::{Appearance, Zoom, ZoomStep};
 use crate::commands::{Boot, NewTask};
 use crate::hub::{FILES_CHANGED_EVENT, FilesChanged, MODEL_EVENT, Model, SERVERS_EVENT, ServerView};
-use crate::layers::{Bounds, FLOAT, Floated, Viewport, title_bar_height};
+use crate::layers::{Bounds, FLOAT, Floated, SHOWN_EVENT, Viewport, title_bar_height};
 use crate::task_lists::{Column, Glyph, Lists, Row, Section, TaskRef, WorkspaceRef};
 use crate::ui::{Modal, Prefs, Reveal, Surface, UI_EVENT, Ui, UiAct, View};
 use crate::window::TaskView;
@@ -104,6 +104,7 @@ pub fn render() -> String {
                 "filesChanged": FILES_CHANGED_EVENT,
                 "browserNavigated": NAVIGATED_EVENT,
                 "ui": UI_EVENT,
+                "windowShown": SHOWN_EVENT,
             }),
         ),
     ];

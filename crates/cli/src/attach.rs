@@ -24,6 +24,7 @@ impl Drop for RawMode {
     }
 }
 
+/// Finishes the stream on the way out, so the server reads a detach, not a lost connection.
 pub async fn run(connection: &Connection, stream: &Stream) -> anyhow::Result<()> {
     let opened = connection.open_data_stream(stream).await.map_err(crate::call_error)?;
     let (mut from_pty, mut to_pty) = tokio::io::split(opened);
@@ -56,5 +57,6 @@ pub async fn run(connection: &Connection, stream: &Stream) -> anyhow::Result<()>
             },
         }
     }
+    let _server_gone = to_pty.shutdown().await;
     Ok(())
 }

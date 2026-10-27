@@ -319,12 +319,30 @@ op!(
     }
 );
 op!(
-    /// Take a terminal panel's write lock from its holder.
+    /// Take a terminal panel's write lock if it is free and resize it to this client's screen; fails pty_locked
+    /// when another client holds it.
+    TermClaim = "term.claim" -> Revised {
+        /// The task's id.
+        task: TaskId,
+        /// The panel's name or id, e.g. agent.
+        panel: String,
+        /// Columns.
+        cols: u16,
+        /// Rows.
+        rows: u16,
+    }
+);
+op!(
+    /// Take a terminal panel's write lock from its holder and resize it to this client's screen.
     TermTakeLock = "term.take_lock" -> Revised {
         /// The task's id.
         task: TaskId,
         /// The panel's name or id, e.g. agent.
         panel: String,
+        /// Columns.
+        cols: u16,
+        /// Rows.
+        rows: u16,
     }
 );
 op!(

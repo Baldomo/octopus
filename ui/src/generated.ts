@@ -24,7 +24,7 @@ export type Swatch = { hue: Hue, tone: Tone, };
 
 export type Agent = { "kind": "not_started" } | { "kind": "running", status: AgentStatus, } | { "kind": "exited" } | { "kind": "harness_not_installed", install: string, } | { "kind": "harness_unknown" };
 
-export type Panel = { id: PtyId, name: string, running: boolean, lock_holder: string | null, };
+export type Panel = { id: PtyId, name: string, running: boolean, lock_holder: string | null, cols: number, rows: number, };
 
 export type BrowserPanel = { panel: BrowserId, url: string, };
 
@@ -226,4 +226,4 @@ export const FLOAT_LAYER = "float" as const;
 
 export const FLOAT_TOP = 38.0 as const;
 
-export const EVENTS = {"browserNavigated":"browser_navigated","filesChanged":"files_changed","model":"model","servers":"servers","ui":"ui"} as const;
+export const EVENTS = {"browserNavigated":"browser_navigated","filesChanged":"files_changed","model":"model","servers":"servers","ui":"ui","windowShown":"window-shown"} as const;

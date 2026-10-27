@@ -64,6 +64,7 @@ impl Terminals {
                 }
             }
             lock(&inputs).remove(&attachment);
+            let _server_gone = to_pty.shutdown().await;
             let _ui_gone = output.send(InvokeResponseBody::Raw(Vec::new()));
         });
         Ok(attachment)
@@ -76,7 +77,8 @@ impl Terminals {
             .ok_or_else(|| format!("terminal attachment {attachment} has ended"))
     }
 
-    /// Dropping the input ends the attachment's task, which closes its data stream.
+    /// Dropping the input ends the attachment's task, which finishes its data stream: the server reads that as this
+    /// client no longer showing the terminal.
     pub fn detach(&self, attachment: u64) {
         lock(&self.inputs).remove(&attachment);
     }

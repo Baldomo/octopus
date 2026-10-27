@@ -224,16 +224,14 @@ export function ServerMenu(props: { name: string }) {
         <Show
           when={server()?.reachable && !clients.error && (clients() ?? []).length > 0}
           fallback={
-            <div class="client">
-              <span class="mono">
-                {!server()?.reachable
-                  ? "unknown while unreachable"
-                  : clients.error
-                    ? String(clients.error)
-                    : clients.loading
-                      ? "listing…"
-                      : "only this client, over the local socket"}
-              </span>
+            <div class="mh label">
+              {!server()?.reachable
+                ? "unknown while unreachable"
+                : clients.error
+                  ? String(clients.error)
+                  : clients.loading
+                    ? "listing…"
+                    : "only this client, over the local socket"}
             </div>
           }
         >
@@ -241,7 +239,7 @@ export function ServerMenu(props: { name: string }) {
             {(client) => (
               <div class="client">
                 <span class="dot" classList={{ idle: !client.connected }} />
-                {client.name}
+                <span class="name">{client.name}</span>
                 <span class="mono">{status(client)}</span>
                 <Show when={client.name !== me()}>
                   <button class="mini" onClick={() => revoke(client.name)}>
@@ -346,7 +344,7 @@ export function SectionMenu(props: { name: string }) {
                 );
               return (
                 <Item danger why={why()} run={closing(remove)}>
-                  Remove from {serverLabel(workspace.server)}
+                  <span class="name">Remove from {serverLabel(workspace.server)}</span>
                 </Item>
               );
             }}
@@ -481,7 +479,7 @@ function WorkspaceCard() {
                 onClick={() => setServer(option.name)}
               >
                 <span class="dot" classList={{ off: !option.reachable }} />
-                {option.label}
+                <span class="name">{option.label}</span>
               </button>
             )}
           </For>

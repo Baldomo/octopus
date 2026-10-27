@@ -17,8 +17,8 @@ const SCROLLBACK_BYTES: usize = 1 << 20;
 const LIVE_CHUNKS: usize = 1024;
 const READ_BYTES: usize = 8192;
 const KILL_GRACE: Duration = Duration::from_secs(5);
-const INITIAL_COLS: u16 = 80;
-const INITIAL_ROWS: u16 = 24;
+/// Every terminal starts at this size, and a restarted server puts every terminal it adopts back to it.
+pub const INITIAL_SIZE: (u16, u16) = (80, 24);
 
 pub type Chunk = Arc<[u8]>;
 
@@ -58,7 +58,7 @@ fn size(cols: u16, rows: u16) -> PtySize {
 
 impl Pty {
     pub fn spawn(argv: &[String], cwd: &Path, env: &[(String, String)]) -> Result<Arc<Self>, Error> {
-        let pair = native_pty_system().openpty(size(INITIAL_COLS, INITIAL_ROWS)).map_err(Error::internal)?;
+        let pair = native_pty_system().openpty(size(INITIAL_SIZE.0, INITIAL_SIZE.1)).map_err(Error::internal)?;
         let mut command = CommandBuilder::from_argv(argv.iter().map(Into::into).collect());
         command.cwd(cwd);
         for (key, value) in env {

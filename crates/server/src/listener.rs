@@ -4,7 +4,7 @@ use std::time::Duration;
 use octopus_proto::device::PublicKey;
 use octopus_proto::local::{self, Listener};
 use octopus_proto::ops::{Paired, PairingPair, SessionHello, SessionPing};
-use octopus_proto::types::{PtyId, Stream};
+use octopus_proto::types::Stream;
 use octopus_proto::{
     Error, Op, Outcome, Request, Response, ServerFrame, StreamHeader, line, parse_args, parse_request, quic,
     request_from,
@@ -13,6 +13,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{Semaphore, broadcast, mpsc};
 
+use crate::service::Terminal;
 use crate::{Server, report};
 
 const SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
@@ -264,7 +265,7 @@ where
 
 enum Opened {
     File(Vec<u8>),
-    Pty(PtyId, local::Stream),
+    Pty(Arc<Terminal>, local::Stream),
     Tunnel(tokio::net::TcpStream),
 }
 
@@ -278,7 +279,8 @@ async fn open(server: &Arc<Server>, name: &str) -> Result<Opened, Error> {
             let terminal =
                 blocking(server, move |server| server.terminal(&lookup).ok_or_else(|| Error::not_found(&lookup)))
                     .await?;
-            Ok(Opened::Pty(id, terminal.attach().await?))
+            let output = terminal.attach().await?;
+            Ok(Opened::Pty(terminal, output))
         }
         Stream::Tunnel(port) => Ok(Opened::Tunnel(crate::browser::dial(port).await?)),
     }
@@ -290,8 +292,16 @@ where
     W: AsyncWrite + Unpin + Send + 'static,
 {
     let opened = open(&server, &header.open).await;
+    // The client counts as showing a terminal before it hears the stream opened, so a claim it sends next always
+    // finds it showing.
+    if let Ok(Opened::Pty(terminal, _)) = &opened {
+        terminal.show(&header.client);
+    }
     let reply = line(&Outcome::from(opened.as_ref().map(drop).map_err(Error::clone)));
     if write.write_all(reply.as_bytes()).await.is_err() {
+        if let Ok(Opened::Pty(terminal, _)) = opened {
+            blocking(&server, move |server| server.stopped_showing(&header.client, terminal, true)).await;
+        }
         return;
     }
     let Ok(opened) = opened else { return };
@@ -301,7 +311,7 @@ where
                 let _peer_gone = write.shutdown().await;
             }
         }
-        Opened::Pty(id, output) => relay_terminal(server, header.client, id, output, input, write).await,
+        Opened::Pty(terminal, output) => relay_terminal(server, header.client, terminal, output, input, write).await,
         Opened::Tunnel(mut port) => {
             let _either_side_closed =
                 tokio::io::copy_bidirectional(&mut tokio::io::join(input, write), &mut port).await;
@@ -309,10 +319,13 @@ where
     }
 }
 
+/// Input from a client without the lock is dropped: only the holder types. A stream the client finishes stops it
+/// showing the terminal; one that breaks went with its connection. Input is read first, so a finish that arrives
+/// with the client's hang-up still reads as a finish.
 async fn relay_terminal<R, W>(
     server: Arc<Server>,
     client: String,
-    id: PtyId,
+    terminal: Arc<Terminal>,
     mut terminal_output: local::Stream,
     mut input: BufReader<R>,
     mut write: W,
@@ -326,23 +339,30 @@ async fn relay_terminal<R, W>(
         write.shutdown().await
     });
     let mut buffer = [0u8; INPUT_BYTES];
-    loop {
+    let closed_cleanly = loop {
         tokio::select! {
+            biased;
             read = input.read(&mut buffer) => match read {
-                Ok(0) | Err(_) => break,
+                Ok(0) => break true,
+                Err(_) => break false,
                 Ok(read) => {
-                    let (from, to, bytes) = (client.clone(), id.clone(), buffer[..read].to_vec());
-                    match blocking(&server, move |server| server.pty_input(&from, &to, &bytes)).await {
-                        Ok(()) | Err(Error::PtyLocked { .. }) => {}
-                        Err(error) => report!("input from {client} to {id}: {error}"),
+                    let (from, to, bytes) = (client.clone(), Arc::clone(&terminal), buffer[..read].to_vec());
+                    match tokio::task::spawn_blocking(move || to.write_as(&from, &bytes)).await {
+                        Ok(Ok(()) | Err(Error::PtyLocked { .. } | Error::Conflict { .. })) => {}
+                        Ok(Err(error)) => report!("input from {client} to {}: {error}", terminal.id),
+                        Err(error) => report!("input from {client} to {} panicked: {error}", terminal.id),
                     }
                 }
             },
-            _ = &mut output => break,
+            _ = &mut output => break false,
         }
-    }
+    };
     output.abort();
-    blocking(&server, move |server| server.client_disconnected(&client)).await;
+    blocking(&server, move |server| {
+        server.stopped_showing(&client, terminal, closed_cleanly);
+        server.client_disconnected(&client);
+    })
+    .await;
 }
 
 async fn blocking<T: Send + 'static>(server: &Arc<Server>, work: impl FnOnce(&Server) -> T + Send + 'static) -> T {

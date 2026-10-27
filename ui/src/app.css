@@ -17,6 +17,7 @@ body {
   height: 100vh;
   display: grid;
   grid-template-rows: var(--title-h) 1fr var(--status-h);
+  grid-template-columns: minmax(0, 1fr);
   position: relative;
 }
 /* The float layer shows the window beneath wherever none of its surfaces draws. */
@@ -86,6 +87,8 @@ body {
 }
 .tasks-view .board {
   padding: var(--s3);
+  width: fit-content;
+  min-width: 100%;
 }
 
 .term-panel {
@@ -99,6 +102,26 @@ body {
 }
 .term-host {
   height: 100%;
+}
+.term.cropped .term-host {
+  overflow: auto;
+}
+.xterm:not(:hover) .xterm-scrollable-element > .scrollbar.vertical {
+  opacity: 0;
+}
+.term .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
+  background: none;
+}
+.term .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider::before {
+  content: "";
+  position: absolute;
+  inset: var(--s1) 0;
+  border: var(--scrollbar-gap) solid transparent;
+  border-radius: var(--scrollbar-r);
+  background: var(--line2) padding-box;
+}
+.term.cropped .xterm-scrollable-element > .scrollbar {
+  display: none;
 }
 
 .tree {
@@ -210,6 +233,10 @@ body {
 .dialog .results {
   overflow: auto;
   min-height: 0;
+}
+.dialog .results .srv {
+  flex-shrink: 1;
+  max-width: 50%;
 }
 .dialog .actions {
   display: flex;

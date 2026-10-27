@@ -92,7 +92,7 @@ async fn a_task_runs_over_quic_and_a_stalled_file_transfer_never_blocks_its_term
     let mut transfer = laptop.open_data_stream(&Stream::File { task: id.clone(), path: "large.bin".into() }).await;
     let mut terminal = laptop.open_data_stream(&agent).await.expect("attach");
     read_until(&mut terminal, "agent:up").await;
-    let send = TermSend { task: id, panel: "agent".into(), text: "over-quic".into(), enter: true, take_lock: false };
+    let send = TermSend { task: id, panel: "agent".into(), text: "over-quic".into(), enter: true, take_lock: true };
     laptop.call(&send).await.expect("term.send");
     read_until(&mut terminal, "over-quic").await;
 

@@ -280,6 +280,8 @@ pub struct Panel {
     pub name: String,
     pub running: bool,
     pub lock_holder: Option<String>,
+    pub cols: u16,
+    pub rows: u16,
 }
 
 impl Panel {

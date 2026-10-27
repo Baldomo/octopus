@@ -1,4 +1,5 @@
 import { createEffect, createMemo, For, on, Show } from "solid-js";
+import { keepInView } from "./keepInView";
 import { filesOf, join, loadMonaco, nameOf, type TaskFiles } from "./taskFiles";
 import { act, openView, report } from "./state";
 
@@ -18,7 +19,7 @@ function Tree(props: { files: TaskFiles; dir: string; depth: number }) {
           const expanded = () => props.files.state.expanded[path] === true;
           return (
             <>
-              <div class="dir" onClick={() => props.files.toggle(path)}>
+              <div class="dir" title={path} onClick={() => props.files.toggle(path)}>
                 {indent(props.depth)}
                 {expanded() ? "▾" : "▸"} {entry.name}
               </div>
@@ -31,6 +32,7 @@ function Tree(props: { files: TaskFiles; dir: string; depth: number }) {
         const dirty = () => props.files.state.dirty[path] === true;
         return (
           <div
+            title={path}
             classList={{ on: props.files.state.active === path, mod: dirty() }}
             onClick={() => act(props.files.open(path))}
           >
@@ -48,7 +50,7 @@ const dirsOf = (path: string) => path.split("/").slice(0, -1);
 const tail = (dirs: string[], depth: number) => dirs.slice(-depth).join("/");
 
 /** A tab names its file, and the fewest trailing directories that tell it from another open tab of the same name. */
-function EditorTabs(props: { files: TaskFiles }) {
+function EditorTabs(props: { files: TaskFiles; visible: boolean }) {
   let bar!: HTMLDivElement;
   const where = createMemo(() => {
     const tabs = props.files.state.tabs;
@@ -76,7 +78,7 @@ function EditorTabs(props: { files: TaskFiles }) {
           const dirty = () => props.files.state.dirty[path] === true;
           return (
             <span
-              ref={(tab) => createEffect(() => on() && tab.scrollIntoView({ block: "nearest", inline: "nearest" }))}
+              ref={keepInView(() => props.visible && on())}
               classList={{ on: on(), mod: dirty() }}
               title={path}
               onClick={() => act(props.files.open(path))}
@@ -99,7 +101,7 @@ function EditorTabs(props: { files: TaskFiles }) {
   );
 }
 
-export function Files() {
+export function Files(props: { visible: boolean }) {
   let host!: HTMLDivElement;
   let editor: Editor | undefined;
   let showing: Shown;
@@ -150,7 +152,7 @@ export function Files() {
       </div>
       <div class="editor">
         <Show when={files()} fallback={<div class="etabs" />}>
-          {(taskFiles) => <EditorTabs files={taskFiles()} />}
+          {(taskFiles) => <EditorTabs files={taskFiles()} visible={props.visible} />}
         </Show>
         <div class="editor-body">
           <div class="editor-host" ref={host} />

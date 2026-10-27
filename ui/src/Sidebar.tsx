@@ -183,7 +183,7 @@ function ServerName(props: { name: string }) {
       onContextMenu={onRightClick(id, () => host, menu)}
     >
       <span class="dot" classList={{ off: !server()?.reachable }} />
-      <Show when={isRenaming("server", props.name)} fallback={serverLabel(props.name)}>
+      <Show when={isRenaming("server", props.name)} fallback={<span class="name">{serverLabel(props.name)}</span>}>
         <RenameInput value={props.name} apply={(name) => backend.serverRename(props.name, name)} />
       </Show>
     </span>

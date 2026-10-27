@@ -9,18 +9,20 @@ export function Shortcuts() {
       <div class="title">
         Keyboard shortcuts<kbd>esc</kbd>
       </div>
-      <table class="keytable">
-        <For each={keyed}>
-          {(command) => (
-            <tr>
-              <td>{command.label}</td>
-              <td>
-                <kbd>{hint(command)}</kbd>
-              </td>
-            </tr>
-          )}
-        </For>
-      </table>
+      <div class="results">
+        <table class="keytable">
+          <For each={keyed}>
+            {(command) => (
+              <tr>
+                <td>{command.label}</td>
+                <td>
+                  <kbd>{hint(command)}</kbd>
+                </td>
+              </tr>
+            )}
+          </For>
+        </table>
+      </div>
     </div>
   );
 }

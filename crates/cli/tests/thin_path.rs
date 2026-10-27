@@ -5,7 +5,8 @@ use common::{
 };
 use octopus_client::{CallError, Connection};
 use octopus_proto::ops::{
-    AgentReport, HarnessSet, TaskCreate, TaskFocus, TaskMove, TaskSetSession, TermClose, TermOpen, TermSend,
+    AgentReport, HarnessSet, TaskCreate, TaskFocus, TaskMove, TaskSetSession, TermClaim, TermClose, TermOpen,
+    TermResize, TermSend, TermTakeLock,
 };
 use octopus_proto::types::{Agent, AgentStatus, Checkout, ENV_SERVER, ENV_TASK, SessionId, Stream, TaskId, TaskState};
 use octopus_proto::{Error, Op, Outcome};
@@ -17,7 +18,18 @@ async fn set_harness(connection: &Connection, id: &str, argv: Vec<String>, hooks
 }
 
 fn send(task: &TaskId, text: &str) -> TermSend {
-    TermSend { task: task.clone(), panel: "agent".into(), text: text.into(), enter: true, take_lock: false }
+    TermSend { task: task.clone(), panel: "agent".into(), text: text.into(), enter: true, take_lock: true }
+}
+
+fn claim(task: &TaskId, cols: u16, rows: u16) -> TermClaim {
+    TermClaim { task: task.clone(), panel: "agent".into(), cols, rows }
+}
+
+fn locked<T: std::fmt::Debug>(outcome: Result<T, CallError>, holder: &str) {
+    match outcome {
+        Err(CallError::Server(error)) => assert_eq!(error, Error::PtyLocked { holder: holder.into() }),
+        other => panic!("expected pty_locked by {holder}, got {other:?}"),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -40,17 +52,26 @@ async fn a_focused_task_runs_its_agent_terminal_end_to_end() {
 
     let mut live = laptop.open_data_stream(&agent).await.expect("attach");
     read_until(&mut live, &format!("agent:{id}@{SERVER}")).await;
-    laptop.call(&send(&id, "ping")).await.expect("term.send");
+    laptop.call(&claim(&id, 80, 24)).await.expect("claim the free terminal");
+    let write = TermSend { take_lock: false, ..send(&id, "ping") };
+    laptop.call(&write).await.expect("term.send");
     read_until(&mut live, "ping").await;
     assert_eq!(task(&laptop, &id).await.panels[0].lock_holder.as_deref(), Some("laptop"));
 
     let desk = connect(&running, "desk").await;
     let mut replay = desk.open_data_stream(&agent).await.expect("reattach");
     read_until(&mut replay, "ping").await;
-    match desk.call(&send(&id, "ping")).await {
-        Err(CallError::Server(error)) => assert_eq!(error, Error::PtyLocked { holder: "laptop".into() }),
-        other => panic!("expected pty_locked, got {other:?}"),
-    }
+    locked(desk.call(&claim(&id, 90, 20)).await, "laptop");
+    locked(desk.call(&write).await, "laptop");
+    locked(desk.call(&TermResize { task: id.clone(), panel: "agent".into(), cols: 90, rows: 20 }).await, "laptop");
+    desk.call(&TermTakeLock { task: id.clone(), panel: "agent".into(), cols: 100, rows: 30 }).await.expect("take");
+    let panel = task(&laptop, &id).await.panels.remove(0);
+    assert_eq!((panel.lock_holder.as_deref(), panel.cols, panel.rows), (Some("desk"), 100, 30));
+    drop(replay);
+    eventually("a holder that stops showing the terminal freeing its lock", async || {
+        task(&laptop, &id).await.panels[0].lock_holder.is_none()
+    })
+    .await;
 
     let partial = desk.call_raw(TaskCreate::NAME, json!({ "workspace": workspace, "title": "x" })).await.expect("call");
     let missing = ["parent", "state", "checkout", "harness", "session"].map(String::from).to_vec();
@@ -90,7 +111,7 @@ async fn a_shell_panel_follows_the_agent_until_its_shell_exits_or_it_closes() {
         panel: shell.0.clone(),
         text: text.into(),
         enter: true,
-        take_lock: false,
+        take_lock: true,
     };
     laptop.call(&send(&echo)).await.expect("type into the shell");
     read_until(&mut live, &format!("shell:{id}")).await;
@@ -216,8 +237,6 @@ async fn after_a_machine_restart_the_next_focus_starts_the_agent_again() {
 #[allow(unsafe_code, reason = "libSystem's responsibility call has no safe binding")]
 #[tokio::test(flavor = "multi_thread")]
 async fn an_agent_owns_its_terminal_and_answers_for_its_own_privacy_permissions() {
-    use octopus_proto::ops::TermResize;
-
     unsafe extern "C" {
         fn responsibility_get_pid_responsible_for_pid(pid: i32) -> i32;
     }

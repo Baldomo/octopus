@@ -3,9 +3,10 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { type ITheme, Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
-import { backend, Channel } from "./backend";
+import { backend, Channel, events } from "./backend";
 import { AGENT_PANEL, type Panel, type PtyId, type TaskRef, type TaskView } from "./generated";
 import { Glyph } from "./Glyph";
+import { keepInView } from "./keepInView";
 import { commands, hint, mac } from "./keys";
 import { act, me, model, report, serverLabel, serverView, ui } from "./state";
 import { colors, px, type Scheme, scheme, token } from "./tokens";
@@ -18,6 +19,7 @@ function terminalTheme(current: Scheme): ITheme {
     foreground: color("--term-text"),
     cursor: color("--text"),
     selectionBackground: color("--line2"),
+    overviewRulerBorder: "#00000000",
     black: color("--ansi-black"),
     red: color("--err"),
     green: color("--working"),
@@ -50,26 +52,34 @@ const chord = (event: KeyboardEvent) =>
     .join("+");
 
 const SCROLLBACK_LINES = 10_000;
+/** A minimized or hidden window shows no terminal; one behind other windows still does. */
+const [windowShown, setWindowShown] = createSignal(true);
+events.windowShown(setWindowShown).catch(report);
 /** A dropped stream retries after this, by which time a server that went away reads as unreachable. */
 const REATTACH_MS = 500;
 
 /**
  * A terminal keeps its screen while its task stays mounted, and holds a data stream only while on screen and its
- * server is reachable. Keys on a free lock go straight to the server, which gives the lock to the first writer.
+ * window shows it and its server is reachable; the server reads that stream as this client showing the terminal.
+ * A shown terminal with a free lock is claimed at the pane's size. The holder fits the PTY to its pane; every other
+ * client draws it at the holder's size, cropped and scrollable.
  */
 function Term(props: { at: TaskRef; panel: Panel; visible: boolean }) {
   let host!: HTMLDivElement;
   const mine = () => props.panel.lock_holder === me();
-  const writable = () => props.panel.running && (props.panel.lock_holder === null || mine());
+  const writable = () => props.panel.running && mine();
   const xterm = new Terminal({
     fontFamily: token("--mono-terminal"),
     fontSize: px("--fs-mono"),
     cursorBlink: true,
     scrollback: SCROLLBACK_LINES,
+    overviewRuler: { width: px("--scrollbar-w") },
   });
   const fit = new FitAddon();
   xterm.loadAddon(fit);
   let attachment: number | null = null;
+  /** Whether the server has this client's stream open, so a claim always reaches it showing the terminal. */
+  const [attached, setAttached] = createSignal(false);
   let generation = 0;
   /** Counts streams that ended under a running PTY, each of which calls for a fresh attachment. */
   const [drops, setDrops] = createSignal(0);
@@ -85,6 +95,7 @@ function Term(props: { at: TaskRef; panel: Panel; visible: boolean }) {
       if (bytes.byteLength === 0) {
         ended = true;
         attachment = null;
+        setAttached(false);
         if (props.panel.running) setTimeout(() => setDrops((count) => count + 1), REATTACH_MS);
         return;
       }
@@ -95,15 +106,30 @@ function Term(props: { at: TaskRef; panel: Panel; visible: boolean }) {
       xterm.write(new Uint8Array(bytes));
     };
     const opened = await backend.termAttach(props.at, props.panel.id, output);
-    if (current === generation && !ended) attachment = opened;
-    else if (current !== generation) act(backend.termDetach(opened));
+    if (current === generation && !ended) {
+      attachment = opened;
+      setAttached(true);
+    } else if (current !== generation) act(backend.termDetach(opened));
   };
   const detach = () => {
     generation++;
     if (attachment !== null) act(backend.termDetach(attachment));
     attachment = null;
+    setAttached(false);
   };
-  const resize = () => act(backend.termResize(props.at, props.panel.id, xterm.cols, xterm.rows));
+  /** A drag of the window resizes once per frame, since every resize the server takes is published. */
+  let resizing = 0;
+  const resize = () => {
+    cancelAnimationFrame(resizing);
+    resizing = requestAnimationFrame(() => {
+      if (mine()) act(backend.termResize(props.at, props.panel.id, xterm.cols, xterm.rows));
+    });
+  };
+  const take = () => {
+    const size = fit.proposeDimensions();
+    if (size) act(backend.termTakeLock(props.at, props.panel.id, size.cols, size.rows));
+    else report("the terminal's pane has no size to take the terminal at yet");
+  };
 
   xterm.attachCustomKeyEventHandler((event) => {
     const input = CHORD_INPUT[chord(event)];
@@ -131,16 +157,15 @@ function Term(props: { at: TaskRef; panel: Panel; visible: boolean }) {
       report(`WebGL is unavailable, so terminals draw through the DOM: ${error}`);
     }
     const observer = new ResizeObserver(() => {
-      if (props.visible) fit.fit();
+      if (props.visible && mine()) fit.fit();
     });
     observer.observe(host);
     onCleanup(() => observer.disconnect());
   });
-  const streaming = createMemo(() => props.visible && serverView(props.at.server)?.reachable === true);
+  const streaming = createMemo(() => props.visible && windowShown() && serverView(props.at.server)?.reachable === true);
   createEffect(
     on([streaming, drops], ([stream]) => {
       if (!stream) return;
-      fit.fit();
       xterm.focus();
       attach().catch(report);
       onCleanup(detach);
@@ -152,22 +177,46 @@ function Term(props: { at: TaskRef; panel: Panel; visible: boolean }) {
   createEffect(() => {
     xterm.options.theme = terminalTheme(scheme());
   });
-  createEffect(on(mine, (holding) => holding && resize(), { defer: true }));
+  createEffect(
+    on([attached, () => props.panel.lock_holder === null && props.panel.running], ([showing, free]) => {
+      if (!showing || !free) return;
+      const size = fit.proposeDimensions();
+      if (size) act(backend.termClaim(props.at, props.panel.id, size.cols, size.rows));
+      else report("the terminal's pane has no size to claim the terminal at yet");
+    }),
+  );
+  createEffect(
+    on([mine, () => props.visible], ([holding, visible]) => {
+      if (!visible || !holding) return;
+      fit.fit();
+      resize();
+    }),
+  );
+  createEffect(
+    on([mine, () => props.visible, () => props.panel.cols, () => props.panel.rows], ([holding, visible]) => {
+      if (visible && !holding) xterm.resize(props.panel.cols, props.panel.rows);
+    }),
+  );
   onCleanup(() => {
+    cancelAnimationFrame(resizing);
     detach();
     xterm.dispose();
   });
 
   return (
     <div class="term-panel" style={{ display: props.visible ? "" : "none" }}>
-      <div class="term">
+      <div class="term" classList={{ cropped: !mine() }}>
         <div class="term-host" ref={host} />
       </div>
-      <Show when={props.panel.lock_holder !== null && !mine()}>
+      <Show when={props.panel.running && !mine()}>
         <div class="readonly">
-          <span>read-only · held by {props.panel.lock_holder}</span>
+          <span>
+            {props.panel.lock_holder === null
+              ? "read-only · lock free"
+              : `read-only · held by ${props.panel.lock_holder}`}
+          </span>
           <span class="spacer" />
-          <button class="btn live" onClick={() => act(backend.termTakeLock(props.at, props.panel.id))}>
+          <button class="btn live" onClick={take}>
             Take over
           </button>
         </div>
@@ -201,9 +250,14 @@ function Missing(props: { open: TaskView }) {
 }
 
 /** The agent's tab carries the task's glyph and names the harness it runs. */
-function AgentTab(props: { open: TaskView; on: boolean; choose: () => void }) {
+function AgentTab(props: { open: TaskView; on: boolean; shown: boolean; choose: () => void }) {
   return (
-    <button class="tab agent" classList={{ on: props.on }} onClick={() => props.choose()}>
+    <button
+      ref={keepInView(() => props.shown && props.on)}
+      class="tab agent"
+      classList={{ on: props.on }}
+      onClick={() => props.choose()}
+    >
       <Glyph glyph={props.open.glyph} />
       {props.open.task.harness}
       <span class="kind">agent</span>
@@ -231,26 +285,30 @@ function Stack(props: { key: string }) {
         {(open) => (
           <>
             <div class="tabs">
-              <AgentTab open={open()} on={agentOn()} choose={() => setChosen(null)} />
+              <AgentTab open={open()} on={agentOn()} shown={shown()} choose={() => setChosen(null)} />
               <For each={shells()}>
-                {(panel) => (
-                  <button
-                    class="tab"
-                    classList={{ on: selected()?.id === panel.id }}
-                    onClick={() => setChosen(panel.id)}
-                  >
-                    {panel.name}
-                    <span
-                      class="close"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        act(backend.termClose(open().at, panel.id));
-                      }}
+                {(panel) => {
+                  const on = () => selected()?.id === panel.id;
+                  return (
+                    <button
+                      ref={keepInView(() => shown() && on())}
+                      class="tab"
+                      classList={{ on: on() }}
+                      onClick={() => setChosen(panel.id)}
                     >
-                      ×
-                    </span>
-                  </button>
-                )}
+                      {panel.name}
+                      <span
+                        class="close"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          act(backend.termClose(open().at, panel.id));
+                        }}
+                      >
+                        ×
+                      </span>
+                    </button>
+                  );
+                }}
               </For>
               <button class="tab plus" onClick={() => act(backend.termOpen(open().at).then(setChosen))}>
                 +

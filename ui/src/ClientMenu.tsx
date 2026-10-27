@@ -17,7 +17,7 @@ function ServerRow(props: { server: ServerView; open: () => void }) {
   return (
     <button class="mi" role="menuitem" onClick={props.open}>
       <span class="dot" classList={{ off: !props.server.reachable }} />
-      {props.server.label}
+      <span class="name">{props.server.label}</span>
       <span class="rtt">{props.server.reachable ? `${props.server.rtt_ms ?? "–"} ms` : "unreachable"}</span>
     </button>
   );

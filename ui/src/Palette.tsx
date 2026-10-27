@@ -104,7 +104,7 @@ export function Palette() {
                     onClick={() => run(item)}
                   >
                     <span class="tt">{item.label}</span>
-                    <span class="srv">{item.detail}</span>
+                    <span class="srv name">{item.detail}</span>
                   </div>
                 )}
               </For>

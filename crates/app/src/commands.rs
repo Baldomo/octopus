@@ -1,10 +1,11 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use octopus_client::servers;
+use octopus_client::{CallError, servers};
+use octopus_proto::Error;
 use octopus_proto::ops::{
     BrowserOpen, Entry, FileList, FileSearch, FileWrite, Match, Offer, PairedClient, PairingForget, PairingList,
-    PairingOffer, TaskArchive, TaskCreate, TaskFocus, TaskMove, TaskRename, TermClose, TermOpen, TermResize,
+    PairingOffer, TaskArchive, TaskCreate, TaskFocus, TaskMove, TaskRename, TermClaim, TermClose, TermOpen, TermResize,
     TermTakeLock, WorkspaceAdd, WorkspaceRemove,
 };
 use octopus_proto::pairing::Code;
@@ -198,9 +199,20 @@ pub async fn term_close(hub: Hubbed<'_>, at: TaskRef, panel: PtyId) -> Result<()
     hub.call(&at.server, &TermClose { task: at.task, panel: panel.0 }).await.map(drop)
 }
 
+/// A claim that loses the race to another client is no failure: that client holds the terminal, and this one draws
+/// it cropped.
 #[tauri::command]
-pub async fn term_take_lock(hub: Hubbed<'_>, at: TaskRef, panel: PtyId) -> Result<(), String> {
-    hub.call(&at.server, &TermTakeLock { task: at.task, panel: panel.0 }).await.map(drop)
+pub async fn term_claim(hub: Hubbed<'_>, at: TaskRef, panel: PtyId, cols: u16, rows: u16) -> Result<(), String> {
+    let connection = hub.connection(&at.server)?;
+    match connection.call(&TermClaim { task: at.task, panel: panel.0, cols, rows }).await {
+        Ok(_) | Err(CallError::Server(Error::PtyLocked { .. })) => Ok(()),
+        Err(error) => Err(hub.failure(&at.server, error)),
+    }
+}
+
+#[tauri::command]
+pub async fn term_take_lock(hub: Hubbed<'_>, at: TaskRef, panel: PtyId, cols: u16, rows: u16) -> Result<(), String> {
+    hub.call(&at.server, &TermTakeLock { task: at.task, panel: panel.0, cols, rows }).await.map(drop)
 }
 
 #[tauri::command]

@@ -2,6 +2,7 @@ import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "s
 import { createStore, produce } from "solid-js/store";
 import { backend, events } from "./backend";
 import { NEW_BROWSER_PANEL } from "./generated";
+import { keepInView } from "./keepInView";
 import type { BrowserId, BrowserPanel, Go, OnScreen, TaskRef } from "./generated";
 import { act, openView, report, ui } from "./state";
 
@@ -57,10 +58,10 @@ function Address(props: { url: string }) {
     }
   };
   return (
-    <>
+    <span class="name">
       <b>{parsed().host}</b>
       {parsed().rest}
-    </>
+    </span>
   );
 }
 
@@ -156,11 +157,19 @@ export function Browser(props: { visible: boolean }) {
       <Show when={panels().length > 1}>
         <div class="tabs">
           <For each={panels()}>
-            {(panel) => (
-              <button class="tab" classList={{ on: target() === panel.panel }} onClick={() => choose(panel.panel)}>
-                {hostOf(panel.url)}
-              </button>
-            )}
+            {(panel) => {
+              const on = () => target() === panel.panel;
+              return (
+                <button
+                  ref={keepInView(() => props.visible && on())}
+                  class="tab"
+                  classList={{ on: on() }}
+                  onClick={() => choose(panel.panel)}
+                >
+                  {hostOf(panel.url)}
+                </button>
+              );
+            }}
           </For>
         </div>
       </Show>
@@ -191,12 +200,9 @@ export function Browser(props: { visible: boolean }) {
           </Show>
           <Show when={tunnel()}>
             {(port) => (
-              <>
-                <span class="spacer" />
-                <span class="tag live">
-                  ⇄ {openView()?.at.server}:{port()}
-                </span>
-              </>
+              <span class="tag live">
+                ⇄ {openView()?.at.server}:{port()}
+              </span>
             )}
           </Show>
         </div>

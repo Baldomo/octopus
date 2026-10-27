@@ -20,7 +20,9 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use tauri::utils::config::{LogicalPosition as ConfigPosition, WindowConfig};
 use tauri::webview::WebviewBuilder;
-use tauri::{LogicalPosition, LogicalSize, Theme, Webview, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent};
+use tauri::{
+    LogicalPosition, LogicalSize, Manager, Theme, Webview, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent,
+};
 use ts_rs::TS;
 
 use crate::client_menu::{Appearance, Zoom};
@@ -29,6 +31,9 @@ use crate::ui::{Native, UiStore};
 
 /// The label of the window and of its base webview, as `tauri.conf.json` declares them.
 pub const BASE: &str = "main";
+pub const SHOWN_EVENT: &str = "window-shown";
+/// How often the window is asked whether it is minimized or hidden; macOS sends no event for either.
+const SHOWN_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 pub const FLOAT: &str = "float";
 
 /// A rect of the window, in the UI's CSS pixels.
@@ -150,6 +155,26 @@ fn add_child(window: &Window, webview: WebviewBuilder<tauri::Wry>, at: Option<Bo
     })
 }
 
+/// Tells the UI whether the window shows anything: not when minimized or hidden, still when behind other windows.
+fn watch_shown(window: Window) {
+    std::thread::spawn(move || {
+        let mut shown = true;
+        loop {
+            std::thread::sleep(SHOWN_POLL);
+            let (minimized, visible) = match (window.is_minimized(), window.is_visible()) {
+                (Ok(minimized), Ok(visible)) => (minimized, visible),
+                (Err(error), _) | (_, Err(error)) => {
+                    return eprintln!("octopus app: stop watching whether the window is shown: {error}");
+                }
+            };
+            if shown != (visible && !minimized) {
+                shown = !shown;
+                crate::emit(window.app_handle(), SHOWN_EVENT, shown);
+            }
+        }
+    });
+}
+
 impl Layers {
     /// Opens the window with its base and float layers; from then on the float layer follows the shared state.
     pub fn open(app: &tauri::App, ui: Arc<UiStore>) -> anyhow::Result<Arc<Self>> {
@@ -181,6 +206,7 @@ impl Layers {
             follower.track(before, after).map_err(|error| format!("lay out the window: {error}"))
         });
         layers.resize()?;
+        watch_shown(window.clone());
         let watcher = Arc::clone(&layers);
         window.on_window_event(move |event| {
             let handled = match event {

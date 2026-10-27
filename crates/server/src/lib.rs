@@ -12,15 +12,16 @@ mod tasks;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, Weak, mpsc};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use octopus_proto::device::{DeviceKey, PublicKey};
 use octopus_proto::ops::{
     AgentReport, BrowserOpen, Clients, Done, Entries, FileList, FileSearch, FileWrite, HarnessSet, Matches, Offer,
     Opened, Paired, PairedClient, PairingForget, PairingList, PairingOffer, PairingPair, Revised, SessionHello,
     SessionPing, SessionSync, Shown, Snapshot, TaskArchive, TaskCreate, TaskCreated, TaskFocus, TaskGet, TaskMove,
-    TaskRename, TaskSetSession, TermClose, TermOpen, TermResize, TermSend, TermTakeLock, Welcome, WorkspaceAdd,
-    WorkspaceCreated, WorkspaceList, WorkspaceRemove, WorkspaceRename, WorkspaceSetColor, Workspaces, Written,
+    TaskRename, TaskSetSession, TermClaim, TermClose, TermOpen, TermResize, TermSend, TermTakeLock, Welcome,
+    WorkspaceAdd, WorkspaceCreated, WorkspaceList, WorkspaceRemove, WorkspaceRename, WorkspaceSetColor, Workspaces,
+    Written,
 };
 use octopus_proto::pairing::Side;
 use octopus_proto::types::{
@@ -39,6 +40,8 @@ use store::{Harness, PanelRow, Store, TaskRow};
 use tasks::{MoveEffect, apply_move};
 
 const PUSH_BACKLOG: usize = 4096;
+/// How long a holder whose connection dropped keeps its locks.
+const HOLDER_GRACE: Duration = Duration::from_secs(10);
 /// Stands for the task's session id in a harness's start and resume args.
 const SESSION: &str = "{session}";
 
@@ -167,11 +170,16 @@ impl State {
 
     fn panels(&self, task: &TaskId) -> Vec<Panel> {
         self.terminals(task)
-            .map(|(name, terminal)| Panel {
-                id: terminal.id.clone(),
-                name: name.to_string(),
-                running: terminal.running(),
-                lock_holder: terminal.holder(),
+            .map(|(name, terminal)| {
+                let screen = terminal.screen();
+                Panel {
+                    id: terminal.id.clone(),
+                    name: name.to_string(),
+                    running: terminal.running(),
+                    lock_holder: screen.holder,
+                    cols: screen.cols,
+                    rows: screen.rows,
+                }
             })
             .collect()
     }
@@ -259,6 +267,9 @@ impl Server {
         for row in recorded {
             let running = hosted.remove(&row.id).expect("reattach keeps only hosted terminals");
             let terminal = server.adopt(&row.task, row.id, running);
+            if running && let Err(error) = terminal.reset_size() {
+                report!("reset the size of {}: {error}", terminal.id);
+            }
             if row.name == AGENT_PANEL {
                 state.agents.insert(row.task, AgentSlot::Running { terminal, status: AgentStatus::Idle });
             } else {
@@ -340,6 +351,7 @@ impl Server {
             TermOpen::NAME => call::<TermOpen>(args, |op| self.term_open(op)),
             TermClose::NAME => call::<TermClose>(args, |op| self.term_close(op)),
             TermSend::NAME => call::<TermSend>(args, |op| self.term_send(client, op)),
+            TermClaim::NAME => call::<TermClaim>(args, |op| self.term_claim(client, op)),
             TermTakeLock::NAME => call::<TermTakeLock>(args, |op| self.term_take_lock(client, op)),
             TermResize::NAME => call::<TermResize>(args, |op| self.term_resize(client, op)),
             FileList::NAME => call::<FileList>(args, |op| {
@@ -818,58 +830,93 @@ impl Server {
         Ok(sweep)
     }
 
+    /// Writes happen after the state lock is released: a full pty buffer blocks them. A take keeps the size.
     fn term_send(&self, client: &str, op: TermSend) -> Result<Revised, Error> {
         let mut bytes = op.text.into_bytes();
         if op.enter {
             bytes.push(b'\r');
         }
-        let (terminal, rev) = self.claim_terminal(client, &op.task, &op.panel, op.take_lock)?;
+        let (terminal, rev) = self.on_screen(client, &op.task, &op.panel, |terminal| {
+            let screen = terminal.screen();
+            if op.take_lock { terminal.take(client, screen.cols, screen.rows) } else { Ok(false) }
+        })?;
         terminal.write_as(client, &bytes)?;
         Ok(Revised { rev })
     }
 
-    fn term_take_lock(&self, client: &str, op: TermTakeLock) -> Result<Revised, Error> {
-        Ok(Revised { rev: self.claim_terminal(client, &op.task, &op.panel, true)?.1 })
+    fn term_claim(&self, client: &str, op: TermClaim) -> Result<Revised, Error> {
+        let (_, rev) =
+            self.on_screen(client, &op.task, &op.panel, |terminal| terminal.claim(client, op.cols, op.rows))?;
+        Ok(Revised { rev })
     }
 
-    /// Writes happen after the state lock is released: a full pty buffer blocks them.
-    fn claim_terminal(
+    fn term_take_lock(&self, client: &str, op: TermTakeLock) -> Result<Revised, Error> {
+        let (_, rev) =
+            self.on_screen(client, &op.task, &op.panel, |terminal| terminal.take(client, op.cols, op.rows))?;
+        Ok(Revised { rev })
+    }
+
+    fn term_resize(&self, client: &str, op: TermResize) -> Result<Revised, Error> {
+        let (_, rev) =
+            self.on_screen(client, &op.task, &op.panel, |terminal| terminal.resize(client, op.cols, op.rows))?;
+        Ok(Revised { rev })
+    }
+
+    /// Runs `change` on a panel's screen outside the state lock, since it may call the terminal host, then publishes
+    /// the task when the holder or size moved. A lock `client` now holds without showing the terminal, as the CLI's,
+    /// frees after the grace.
+    fn on_screen(
         &self,
         client: &str,
         task: &TaskId,
         panel: &str,
-        steal: bool,
+        change: impl FnOnce(&Terminal) -> Result<bool, Error>,
     ) -> Result<(Arc<Terminal>, u64), Error> {
-        let mut state = lock(&self.state);
-        let terminal = state.find_terminal(task, panel)?;
-        let rev =
-            if terminal.claim(client, steal)? { self.touch_task(&mut state, task)? } else { state.store.rev()? };
+        let terminal = lock(&self.state).find_terminal(task, panel)?;
+        let changed = change(&terminal)?;
+        let rev = {
+            let mut state = lock(&self.state);
+            if changed { self.touch_task(&mut state, task)? } else { state.store.rev()? }
+        };
+        if terminal.held_unshown(client) {
+            self.free_after_grace(client, Arc::clone(&terminal));
+        }
         Ok((terminal, rev))
     }
 
-    pub(crate) fn pty_input(&self, client: &str, id: &PtyId, bytes: &[u8]) -> Result<(), Error> {
-        let terminal = {
-            let mut state = lock(&self.state);
-            let (task, terminal) = state.terminal_by_id(id).ok_or_else(|| Error::not_found(id))?;
-            if terminal.claim(client, false)? {
-                self.touch_task(&mut state, &task)?;
+    /// A client shows a terminal while one of its data streams of it is open. Closing the last one frees the lock it
+    /// holds there at once; losing it with the connection frees the lock after the grace.
+    pub(crate) fn stopped_showing(&self, client: &str, terminal: Arc<Terminal>, closed_cleanly: bool) {
+        terminal.unshow(client);
+        if closed_cleanly {
+            self.free_if_unshown(client, &terminal, terminal.shows(client));
+        } else {
+            self.free_after_grace(client, terminal);
+        }
+    }
+
+    fn free_if_unshown(&self, client: &str, terminal: &Terminal, shows: u64) {
+        let mut state = lock(&self.state);
+        let Some((task, _)) = state.terminal_by_id(&terminal.id) else { return };
+        if terminal.free_if_unshown(client, shows)
+            && let Err(error) = self.touch_task(&mut state, &task)
+        {
+            report!("free {client}'s lock on {}: {error}", terminal.id);
+        }
+    }
+
+    fn free_after_grace(&self, client: &str, terminal: Arc<Terminal>) {
+        let (server, client, shows) = (Weak::clone(&self.me), client.to_string(), terminal.shows(client));
+        std::thread::spawn(move || {
+            std::thread::sleep(HOLDER_GRACE);
+            if let Some(server) = server.upgrade() {
+                server.free_if_unshown(&client, &terminal, shows);
             }
-            terminal
-        };
-        terminal.write_as(client, bytes)
+        });
     }
 
     pub(crate) fn terminal(&self, id: &PtyId) -> Option<Arc<Terminal>> {
         lock(&self.state).terminal_by_id(id).map(|(_, terminal)| terminal)
-    }
-
-    fn term_resize(&self, client: &str, op: TermResize) -> Result<Revised, Error> {
-        let (terminal, rev) = {
-            let state = lock(&self.state);
-            (state.find_terminal(&op.task, &op.panel)?, state.store.rev()?)
-        };
-        terminal.resize(client, op.cols, op.rows)?;
-        Ok(Revised { rev })
     }
 
     fn saw(&self, client: &str) {
@@ -883,6 +930,8 @@ impl Server {
         *lock(&self.clients).entry(client.to_string()).or_default() += 1;
     }
 
+    /// A holder that disconnects keeps its locks through the grace, so a dropped connection that comes back in time
+    /// and shows its terminals again keeps them.
     pub(crate) fn client_disconnected(&self, client: &str) {
         self.saw(client);
         {
@@ -894,16 +943,13 @@ impl Server {
             }
             clients.remove(client);
         }
-        let mut state = lock(&self.state);
-        let released: HashSet<TaskId> = state
+        let held: Vec<Arc<Terminal>> = lock(&self.state)
             .every_terminal()
-            .filter(|(_, terminal)| terminal.release(client))
-            .map(|(task, _)| task.clone())
+            .filter(|(_, terminal)| terminal.holds(client))
+            .map(|(_, terminal)| Arc::clone(terminal))
             .collect();
-        for task in released {
-            if let Err(error) = self.touch_task(&mut state, &task) {
-                report!("release {client}'s lock on {task}: {error}");
-            }
+        for terminal in held {
+            self.free_after_grace(client, terminal);
         }
     }
 }

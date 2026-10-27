@@ -8,7 +8,7 @@ use clap::{ArgAction, Subcommand};
 use octopus_client::Identity;
 use octopus_client::servers::{self, Address, Server as KnownServer, Servers};
 use octopus_proto::local::Listener;
-use octopus_proto::ops::{TaskGet, TermResize, TermTakeLock};
+use octopus_proto::ops::{TaskGet, TermTakeLock};
 use octopus_proto::pairing::Code;
 use octopus_proto::quic;
 use octopus_proto::types::{Stream, TaskId};
@@ -140,9 +140,8 @@ impl TermVerb {
             .id
             .clone();
         if take_lock {
-            call(&connection, &TermTakeLock { task: task.clone(), panel: panel.clone() }).await?;
             let (cols, rows) = crossterm::terminal::size()?;
-            call(&connection, &TermResize { task, panel, cols, rows }).await?;
+            call(&connection, &TermTakeLock { task, panel, cols, rows }).await?;
         }
         attach::run(&connection, &Stream::Pty(pty)).await
     }

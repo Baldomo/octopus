@@ -22,8 +22,8 @@ function Crumbs(props: { crumbs: string[] }) {
     <div class="crumbs">
       <For each={props.crumbs}>
         {(crumb, index) => (
-          <Show when={index() < props.crumbs.length - 1} fallback={<b>{crumb}</b>}>
-            <span>{crumb}</span>
+          <Show when={index() < props.crumbs.length - 1} fallback={<b class="name">{crumb}</b>}>
+            <span class="name">{crumb}</span>
             <span class="sep">/</span>
           </Show>
         )}
@@ -55,7 +55,7 @@ export function TitleBar() {
           <>
             <span class="server">
               <span class="dot" classList={{ off: !serverView(open().at.server)?.reachable }} />
-              {serverLabel(open().at.server)}
+              <span class="name">{serverLabel(open().at.server)}</span>
             </span>
             <span
               class="pill"

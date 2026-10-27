@@ -45,8 +45,8 @@ function place(menu: HTMLElement, within: HTMLElement, { anchor, point }: Opened
   const x = Math.min(point ? point.x - s.left : a.left - s.left, s.width - m.width - 8);
   let y = point ? point.y - s.top : a.bottom - s.top + 4;
   if (y + m.height > s.height - 8) y = (point ? point.y - s.top : a.top - s.top - 4) - m.height;
-  menu.style.left = `${Math.max(8, x)}px`;
-  menu.style.top = `${Math.max(8, y)}px`;
+  menu.style.left = `${within.scrollLeft + Math.max(8, x)}px`;
+  menu.style.top = `${within.scrollTop + Math.max(8, y)}px`;
 }
 
 const BLUR_SETTLES_MS = 150;

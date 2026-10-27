@@ -148,7 +148,7 @@ export function Docked() {
           </div>
           <Show when={openView()} fallback={<div class="empty">No task is open.</div>}>
             <div class="surface" style={{ display: ui.prefs.surface === "files" ? "" : "none" }}>
-              <Files />
+              <Files visible={ui.prefs.view === "task" && ui.prefs.surface === "files"} />
             </div>
             <div class="surface" style={{ display: ui.prefs.surface === "browser" ? "" : "none" }}>
               <Browser visible={ui.prefs.view === "task" && ui.prefs.surface === "browser"} />

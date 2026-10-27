@@ -155,11 +155,13 @@ Type text into a terminal panel.
 
 ## `octopus term take-lock`
 
-Take a terminal panel's write lock from its holder.
+Take a terminal panel's write lock from its holder and resize it to this client's screen.
 
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
 - `--panel <panel>`: The panel's name or id, e.g. agent.
+- `--cols <cols>`: Columns.
+- `--rows <rows>`: Rows.
 
 ## `octopus term resize`
 
