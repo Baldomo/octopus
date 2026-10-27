@@ -27,7 +27,7 @@ body {
 }
 
 .chrome .lights {
-  width: 52px;
+  width: 53px;
   height: 100%;
 }
 .chrome .seg button kbd {
@@ -160,7 +160,7 @@ body {
 .sidebar {
   position: absolute;
   top: calc(var(--chrome-h) + var(--s2));
-  bottom: calc(var(--status-h) + var(--s2));
+  bottom: var(--status-h);
   left: var(--s2);
 }
 .sidebar.hidden {

@@ -2546,6 +2546,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "gtk",
+ "objc2",
+ "objc2-app-kit",
  "octopus-client",
  "octopus-proto",
  "serde",

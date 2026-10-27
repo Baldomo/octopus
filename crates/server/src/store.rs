@@ -4,8 +4,8 @@ use std::path::Path;
 use octopus_proto::Error;
 use octopus_proto::device::{DeviceKey, PublicKey};
 use octopus_proto::types::{
-    BrowserId, BrowserPanel, Checkout, Color, PtyId, SessionId, TaskId, TaskState, Workspace, WorkspaceId, from_wire,
-    to_wire,
+    AGENT_PANEL, BrowserId, BrowserPanel, Checkout, Color, PtyId, SessionId, TaskId, TaskState, Workspace, WorkspaceId,
+    from_wire, to_wire,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
@@ -32,9 +32,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     ended_at INTEGER,
     rev INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS terminals (
-    task TEXT PRIMARY KEY REFERENCES tasks(id),
-    id TEXT NOT NULL UNIQUE
+CREATE TABLE IF NOT EXISTS panels (
+    id TEXT PRIMARY KEY,
+    task TEXT NOT NULL REFERENCES tasks(id),
+    name TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS browsers (
     task TEXT NOT NULL REFERENCES tasks(id),
@@ -57,11 +58,12 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("workspaces", "color", "TEXT NOT NULL DEFAULT 'auto'"),
 ];
 
-/// A task's agent terminal, the one panel a task has.
+/// A task's terminal panel: its agent's, named `agent`, or a shell's.
 #[derive(Debug, Clone, PartialEq)]
-pub struct TerminalRow {
+pub struct PanelRow {
     pub id: PtyId,
     pub task: TaskId,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -154,6 +156,22 @@ fn add_missing_columns(db: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// A store from a build that kept one agent terminal per task gains each as the task's agent panel.
+fn adopt_agent_terminals(db: &Connection) -> rusqlite::Result<()> {
+    let present: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'terminals')",
+        [],
+        |row| row.get(0),
+    )?;
+    if present {
+        let tx = db.unchecked_transaction()?;
+        tx.execute("INSERT INTO panels (id, task, name) SELECT id, task, ?1 FROM terminals", [AGENT_PANEL])?;
+        tx.execute("DROP TABLE terminals", [])?;
+        tx.commit()?;
+    }
+    Ok(())
+}
+
 fn workspace_row(row: &Row) -> rusqlite::Result<Workspace> {
     Ok(Workspace {
         id: WorkspaceId(row.get("id")?),
@@ -170,6 +188,7 @@ impl Store {
         let db = Connection::open(path).map_err(Error::internal)?;
         db.execute_batch(SCHEMA).map_err(Error::internal)?;
         add_missing_columns(&db).map_err(Error::internal)?;
+        adopt_agent_terminals(&db).map_err(Error::internal)?;
         Ok(Self { db })
     }
 
@@ -357,7 +376,7 @@ impl Store {
             rerooted.push(row);
         }
         let in_workspace = "task IN (SELECT id FROM tasks WHERE workspace = ?1)";
-        for table in ["terminals", "browsers"] {
+        for table in ["panels", "browsers"] {
             tx.execute(&format!("DELETE FROM {table} WHERE {in_workspace}"), [&id.0]).map_err(Error::internal)?;
         }
         tx.execute("DELETE FROM tasks WHERE workspace = ?1", [&id.0]).map_err(Error::internal)?;
@@ -526,32 +545,42 @@ impl Store {
         Ok(row)
     }
 
-    /// Replaces the task's previous terminal, if any.
-    pub fn record_terminal(&mut self, terminal: &TerminalRow) -> Result<(), Error> {
-        self.db
-            .execute(
-                "INSERT INTO terminals (task, id) VALUES (?1, ?2) ON CONFLICT(task) DO UPDATE SET id = excluded.id",
-                params![terminal.task.0, terminal.id.0],
-            )
-            .map(drop)
-            .map_err(Error::internal)
+    /// An agent panel replaces the task's previous one; a shell panel joins the end of the task's list.
+    pub fn record_panel(&mut self, panel: &PanelRow) -> Result<(), Error> {
+        let tx = self.db.transaction().map_err(Error::internal)?;
+        if panel.name == AGENT_PANEL {
+            tx.execute("DELETE FROM panels WHERE task = ?1 AND name = ?2", params![panel.task.0, AGENT_PANEL])
+                .map_err(Error::internal)?;
+        }
+        tx.execute(
+            "INSERT INTO panels (id, task, name) VALUES (?1, ?2, ?3)",
+            params![panel.id.0, panel.task.0, panel.name],
+        )
+        .map_err(Error::internal)?;
+        tx.commit().map_err(Error::internal)
     }
 
-    /// Deletes the terminal rows the host lost and returns the rest; a focused live task left without a terminal
-    /// forgets its focus, so its next focus starts its agent again.
-    pub fn reattach(&mut self, hosted: &HashSet<PtyId>) -> Result<Vec<TerminalRow>, Error> {
+    pub fn forget_panel(&mut self, id: &PtyId) -> Result<(), Error> {
+        self.db.execute("DELETE FROM panels WHERE id = ?1", [&id.0]).map(drop).map_err(Error::internal)
+    }
+
+    /// Deletes the panel rows the host lost and returns the rest, each task's in list order; a focused live task
+    /// left without an agent panel forgets its focus, so its next focus starts its agent again.
+    pub fn reattach(&mut self, hosted: &HashSet<PtyId>) -> Result<Vec<PanelRow>, Error> {
         let tx = self.db.transaction().map_err(Error::internal)?;
-        let rows: Vec<TerminalRow> = tx
-            .prepare("SELECT id, task FROM terminals")
+        let rows: Vec<PanelRow> = tx
+            .prepare("SELECT id, task, name FROM panels ORDER BY rowid")
             .and_then(|mut statement| {
                 statement
-                    .query_map([], |row| Ok(TerminalRow { id: PtyId(row.get(0)?), task: TaskId(row.get(1)?) }))?
+                    .query_map([], |row| {
+                        Ok(PanelRow { id: PtyId(row.get(0)?), task: TaskId(row.get(1)?), name: row.get(2)? })
+                    })?
                     .collect()
             })
             .map_err(Error::internal)?;
         let (kept, gone): (Vec<_>, Vec<_>) = rows.into_iter().partition(|row| hosted.contains(&row.id));
         for row in &gone {
-            tx.execute("DELETE FROM terminals WHERE id = ?1", [&row.id.0]).map_err(Error::internal)?;
+            tx.execute("DELETE FROM panels WHERE id = ?1", [&row.id.0]).map_err(Error::internal)?;
         }
         let live: Vec<String> = TaskState::ALL
             .into_iter()
@@ -559,7 +588,7 @@ impl Store {
             .map(|state| format!("'{}'", to_wire(&state)))
             .collect();
         let focused_live = format!(
-            "focused_at IS NOT NULL AND state IN ({}) AND id NOT IN (SELECT task FROM terminals)",
+            "focused_at IS NOT NULL AND state IN ({}) AND id NOT IN (SELECT task FROM panels WHERE name = '{AGENT_PANEL}')",
             live.join(", ")
         );
         let any: bool = tx
@@ -593,13 +622,17 @@ mod tests {
                  state TEXT NOT NULL, checkout TEXT NOT NULL, harness TEXT NOT NULL, directory TEXT NOT NULL,
                  branch TEXT, focused_at INTEGER, ended_at INTEGER, rev INTEGER NOT NULL);
                  INSERT INTO tasks VALUES ('tsk_1', 'wsp_1', NULL, 't', 'pinned', 'root', 'h', '/w', NULL, NULL, NULL, 1);
+                 CREATE TABLE terminals (task TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE);
+                 INSERT INTO terminals VALUES ('tsk_1', 'pty_1');
                  CREATE TABLE clients (name TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE);",
             )
             .expect("an earlier schema");
         drop(earlier);
-        let store = Store::open(&path).expect("open the earlier store");
+        let mut store = Store::open(&path).expect("open the earlier store");
         let task = store.task(&TaskId("tsk_1".into())).expect("its task");
         assert_eq!((task.archived_at, task.session), (None, None));
         assert_eq!(store.clients().expect("clients"), []);
+        let agent = PanelRow { id: PtyId("pty_1".into()), task: TaskId("tsk_1".into()), name: AGENT_PANEL.into() };
+        assert_eq!(store.reattach(&HashSet::from([agent.id.clone()])).expect("reattach"), [agent]);
     }
 }

@@ -4,8 +4,8 @@ use std::time::Instant;
 use octopus_client::servers;
 use octopus_proto::ops::{
     BrowserOpen, Entry, FileList, FileSearch, FileWrite, Match, Offer, PairedClient, PairingForget, PairingList,
-    PairingOffer, TaskArchive, TaskCreate, TaskFocus, TaskMove, TaskRename, TermResize, TermTakeLock, WorkspaceAdd,
-    WorkspaceRemove,
+    PairingOffer, TaskArchive, TaskCreate, TaskFocus, TaskMove, TaskRename, TermClose, TermOpen, TermResize,
+    TermTakeLock, WorkspaceAdd, WorkspaceRemove,
 };
 use octopus_proto::pairing::Code;
 use octopus_proto::types::{
@@ -185,6 +185,17 @@ pub fn term_input(terminals: State<Terminals>, attachment: u64, keys: String) ->
 #[tauri::command]
 pub fn term_detach(terminals: State<Terminals>, attachment: u64) {
     terminals.detach(attachment);
+}
+
+/// Resolves to the id of the shell panel it opens.
+#[tauri::command]
+pub async fn term_open(hub: Hubbed<'_>, at: TaskRef) -> Result<PtyId, String> {
+    Ok(hub.call(&at.server, &TermOpen { task: at.task }).await?.panel)
+}
+
+#[tauri::command]
+pub async fn term_close(hub: Hubbed<'_>, at: TaskRef, panel: PtyId) -> Result<(), String> {
+    hub.call(&at.server, &TermClose { task: at.task, panel: panel.0 }).await.map(drop)
 }
 
 #[tauri::command]

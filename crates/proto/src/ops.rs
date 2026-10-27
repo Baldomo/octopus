@@ -5,7 +5,8 @@ use crate::frames::Op;
 use crate::pairing::{Code, Proof};
 use crate::schema::{Field, record};
 use crate::types::{
-    AgentStatus, BrowserId, BrowserTarget, Checkout, Color, SessionId, Task, TaskId, TaskState, Workspace, WorkspaceId,
+    AgentStatus, BrowserId, BrowserTarget, Checkout, Color, PtyId, SessionId, Task, TaskId, TaskState, Workspace,
+    WorkspaceId,
 };
 
 /// Declares an op: its args as a `record!`, its wire name, and the type of its result.
@@ -279,6 +280,29 @@ op!(
         task: TaskId,
     }
 );
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Opened {
+    pub panel: PtyId,
+    pub rev: u64,
+}
+
+op!(
+    /// Open a shell panel in a live task: the user's login shell, in the task's checkout.
+    TermOpen = "term.open" -> Opened {
+        /// The task's id.
+        task: TaskId,
+    }
+);
+op!(
+    /// Stop a shell panel and drop it with its scrollback.
+    TermClose = "term.close" -> Revised {
+        /// The task's id.
+        task: TaskId,
+        /// The shell panel's name or id.
+        panel: String,
+    }
+);
 op!(
     /// Type text into a terminal panel.
     TermSend = "term.send" -> Revised {
@@ -435,6 +459,8 @@ pub fn commands() -> Vec<Command> {
         command::<TaskArchive>(),
         command::<TaskFocus>(),
         command::<TaskGet>(),
+        command::<TermOpen>(),
+        command::<TermClose>(),
         command::<TermSend>(),
         command::<TermTakeLock>(),
         command::<TermResize>(),

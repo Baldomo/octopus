@@ -1,7 +1,7 @@
 //! The environment the user's own terminal starts in, which every agent the server starts runs in.
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use octopus_proto::Error;
 
@@ -9,6 +9,22 @@ use octopus_proto::Error;
 pub fn search_path(environment: &[(String, String)]) -> Option<OsString> {
     let own = environment.iter().find(|(key, _)| key == "PATH").map(|(_, path)| OsString::from(path));
     own.or_else(|| std::env::var_os("PATH"))
+}
+
+/// The account's login shell, which a shell panel runs.
+#[cfg(unix)]
+pub fn shell() -> Result<PathBuf, Error> {
+    use nix::unistd::{User, getuid};
+
+    let uid = getuid();
+    let account = User::from_uid(uid).map_err(Error::internal)?;
+    Ok(account.ok_or_else(|| Error::internal(format!("uid {uid} has no account")))?.shell)
+}
+
+/// The command interpreter Windows names for the account.
+#[cfg(windows)]
+pub fn shell() -> Result<PathBuf, Error> {
+    std::env::var_os("ComSpec").map(PathBuf::from).ok_or_else(|| Error::internal("ComSpec is unset"))
 }
 
 /// Runs the account's login shell interactively, as a terminal window does, in `directory`, so whatever the
@@ -20,14 +36,8 @@ pub fn resolve(directory: &Path) -> Result<Vec<(String, String)>, Error> {
     use std::io::{Read, Seek};
     use std::process::{Command, Stdio};
 
-    use nix::unistd::{User, getuid};
-
     const MARKER: &str = "octopus-login-environment\n";
-    let uid = getuid();
-    let shell = User::from_uid(uid)
-        .map_err(Error::internal)?
-        .ok_or_else(|| Error::internal(format!("uid {uid} has no account")))?
-        .shell;
+    let shell = shell()?;
     let failed =
         |error: &dyn std::fmt::Display| Error::internal(format!("{} as a login shell: {error}", shell.display()));
     let run = || -> std::io::Result<_> {

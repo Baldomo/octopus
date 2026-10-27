@@ -4,7 +4,9 @@ use common::{
     SERVER, ServerProcess, connect, create, echo_agent, eventually, read_until, shell_var, start, task, workspace,
 };
 use octopus_client::{CallError, Connection};
-use octopus_proto::ops::{AgentReport, HarnessSet, TaskCreate, TaskFocus, TaskMove, TaskSetSession, TermSend};
+use octopus_proto::ops::{
+    AgentReport, HarnessSet, TaskCreate, TaskFocus, TaskMove, TaskSetSession, TermClose, TermOpen, TermSend,
+};
 use octopus_proto::types::{Agent, AgentStatus, Checkout, ENV_SERVER, ENV_TASK, SessionId, Stream, TaskId, TaskState};
 use octopus_proto::{Error, Op, Outcome};
 use serde_json::json;
@@ -58,6 +60,52 @@ async fn a_focused_task_runs_its_agent_terminal_end_to_end() {
     eventually("the agent exiting after its task completed", async || task(&laptop, &id).await.agent == Agent::Exited)
         .await;
     read_until(&mut desk.open_data_stream(&agent).await.expect("attach exited"), "ping").await;
+}
+
+fn conflict<T: std::fmt::Debug>(outcome: Result<T, CallError>, what: &str) {
+    match outcome {
+        Err(CallError::Server(Error::Conflict { .. })) => {}
+        other => panic!("{what} must fail conflict, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shell_panel_follows_the_agent_until_its_shell_exits_or_it_closes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock");
+    let laptop = connect(&running, "laptop").await;
+    let workspace = workspace(&laptop, dir.path()).await;
+    set_harness(&laptop, "echo", echo_agent("agent:up"), false).await;
+    let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
+    laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+
+    let shell = laptop.call(&TermOpen { task: id.clone() }).await.expect("term.open").panel;
+    let panels = task(&laptop, &id).await.panels;
+    assert_eq!(panels.iter().map(|panel| &panel.id).collect::<Vec<_>>()[1..], [&shell]);
+    assert_eq!(panels[0].name, "agent");
+    let mut live = laptop.open_data_stream(&Stream::Pty(shell.clone())).await.expect("attach the shell");
+    let echo = format!("echo shell:{}", shell_var(ENV_TASK));
+    let send = |text: &str| TermSend {
+        task: id.clone(),
+        panel: shell.0.clone(),
+        text: text.into(),
+        enter: true,
+        take_lock: false,
+    };
+    laptop.call(&send(&echo)).await.expect("type into the shell");
+    read_until(&mut live, &format!("shell:{id}")).await;
+    conflict(laptop.call(&TermClose { task: id.clone(), panel: "agent".into() }).await, "closing the agent panel");
+
+    let closed = laptop.call(&TermOpen { task: id.clone() }).await.expect("term.open").panel;
+    let names: Vec<_> = task(&laptop, &id).await.panels.into_iter().map(|panel| panel.name).collect();
+    assert_eq!(names[2], format!("{}-2", names[1]));
+    laptop.call(&send("exit")).await.expect("exit the shell");
+    eventually("the exited shell leaving the list", async || task(&laptop, &id).await.panels.len() == 2).await;
+    laptop.call(&TermClose { task: id.clone(), panel: closed.0 }).await.expect("term.close");
+    assert_eq!(task(&laptop, &id).await.panels.len(), 1);
+
+    laptop.call(&TaskMove { task: id.clone(), state: TaskState::Completed }).await.expect("complete");
+    conflict(laptop.call(&TermOpen { task: id }).await, "a shell in an ended task");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -124,6 +172,7 @@ async fn an_agent_outlives_a_restart_of_its_server_process() {
     set_harness(&laptop, "echo", echo_agent("agent:up"), false).await;
     let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
     laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+    laptop.call(&TermOpen { task: id.clone() }).await.expect("term.open");
     let view = task(&laptop, &id).await;
     let agent = Stream::Pty(view.panels[0].id.clone());
     let mut live = laptop.open_data_stream(&agent).await.expect("attach");
@@ -135,7 +184,8 @@ async fn an_agent_outlives_a_restart_of_its_server_process() {
     let after = ServerProcess::run(dir.path()).await;
     let laptop = after.connect("laptop").await;
     let reattached = task(&laptop, &id).await;
-    assert_eq!((reattached.focused_at, &reattached.panels[0].id), (view.focused_at, &view.panels[0].id));
+    let ids = |panels: &[octopus_proto::types::Panel]| panels.iter().map(|panel| panel.id.clone()).collect::<Vec<_>>();
+    assert_eq!((reattached.focused_at, ids(&reattached.panels)), (view.focused_at, ids(&view.panels)));
     assert_eq!(reattached.agent, Agent::Running { status: AgentStatus::Idle });
     let mut replay = laptop.open_data_stream(&agent).await.expect("reattach");
     read_until(&mut replay, "before-restart").await;

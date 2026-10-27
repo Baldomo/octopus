@@ -127,6 +127,21 @@ Print a task.
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
 
+## `octopus term open`
+
+Open a shell panel in a live task: the user's login shell, in the task's checkout.
+
+- `--server <server>`: The paired server's name.
+- `--task <task>`: The task's id.
+
+## `octopus term close`
+
+Stop a shell panel and drop it with its scrollback.
+
+- `--server <server>`: The paired server's name.
+- `--task <task>`: The task's id.
+- `--panel <panel>`: The shell panel's name or id.
+
 ## `octopus term send`
 
 Type text into a terminal panel.

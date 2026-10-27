@@ -12,7 +12,7 @@ use ts_rs::{Config, TS};
 use crate::browser::{Go, NAVIGATED_EVENT, Navigated, OnScreen};
 use crate::commands::{Boot, NewTask};
 use crate::hub::{FILES_CHANGED_EVENT, FilesChanged, MODEL_EVENT, Model, SERVERS_EVENT, ServerView};
-use crate::layers::{Bounds, FLOAT, Viewport, float_top};
+use crate::layers::{Bounds, FLOAT, Viewport, title_bar_height};
 use crate::task_lists::{Column, Glyph, Lists, Row, Section, TaskRef, WorkspaceRef};
 use crate::ui::{Modal, Prefs, Reveal, Surface, UI_EVENT, Ui, UiAct, View};
 use crate::window::TaskView;
@@ -89,7 +89,7 @@ pub fn render() -> String {
         constant("AGENT_PANEL", &AGENT_PANEL),
         constant("NEW_BROWSER_PANEL", &NEW_BROWSER_PANEL),
         constant("FLOAT_LAYER", &FLOAT),
-        constant("FLOAT_TOP", &float_top()),
+        constant("FLOAT_TOP", &title_bar_height()),
         constant(
             "EVENTS",
             &json!({

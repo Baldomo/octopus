@@ -1,7 +1,8 @@
 //! The window stacks native webviews as layers, bottom to top: base, the UI's own webview filling the window; page,
 //! the browser panel on screen at its rect; float, a second webview of the UI rendering every floating surface. A
-//! webview draws over and takes every click in its rect above those beneath it, so each layer's bounds are exactly what
-//! it shows, and float stays above every page. The keyboard sits in float while a modal is open and in base otherwise.
+//! webview draws over and takes every click and pointer move in its rect above those beneath it, so each layer's
+//! bounds are exactly what it shows, and float stays above every page. The keyboard sits in float while a modal is
+//! open and in base otherwise.
 //!
 //! A webview's native rect and the content it draws change in different processes, so no frame may depend on both
 //! changing at once. The float layer's top-left corner never moves: its surfaces lay out in window coordinates, and
@@ -13,6 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use tauri::utils::config::{LogicalPosition as ConfigPosition, WindowConfig};
 use tauri::webview::WebviewBuilder;
 use tauri::{LogicalPosition, LogicalSize, Webview, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent};
 use ts_rs::TS;
@@ -41,14 +43,24 @@ pub struct Viewport {
     pub height: f64,
 }
 
-/// The top of the float layer's corner on the window's left edge: just below the title bar.
-pub fn float_top() -> f64 {
+/// The float layer's corner sits on the window's left edge at this height, just below the title bar.
+pub fn title_bar_height() -> f64 {
     env!("OCTOPUS_CHROME_H").parse().expect("build.rs emits --chrome-h in px")
+}
+
+const TRAFFIC_LIGHTS_INSET: f64 = 14.0;
+const TITLE_BAR_BORDER: f64 = 1.0;
+const APPKIT_LIGHT_BELOW_GIVEN_Y: f64 = 2.0;
+
+/// The position that centers the traffic lights on the title bar's midline, above its bottom border.
+fn traffic_lights() -> ConfigPosition {
+    let midline = (title_bar_height() - TITLE_BAR_BORDER) / 2.0;
+    ConfigPosition { x: TRAFFIC_LIGHTS_INSET, y: midline - APPKIT_LIGHT_BELOW_GIVEN_Y }
 }
 
 /// The float layer's rect: from its corner to the far edges of every surface that is out.
 pub fn float_bounds(surfaces: impl Iterator<Item = Bounds>) -> Bounds {
-    let top = float_top();
+    let top = title_bar_height();
     let (right, bottom) = surfaces.fold((0.0_f64, top), |(right, bottom), rect| {
         (right.max(rect.x + rect.width), bottom.max(rect.y + rect.height))
     });
@@ -99,10 +111,15 @@ impl Layers {
             env!("OCTOPUS_BG").parse().map_err(|error: String| anyhow::anyhow!("DESIGN.html --bg: {error}"))?;
         let config =
             app.config().app.windows.iter().find(|window| window.label == BASE).context("tauri.conf.json window")?;
+        let config = WindowConfig { traffic_light_position: Some(traffic_lights()), ..config.clone() };
         let base: Webview =
-            WebviewWindowBuilder::from_config(app, config)?.background_color(background).build()?.as_ref().clone();
+            WebviewWindowBuilder::from_config(app, &config)?.background_color(background).build()?.as_ref().clone();
         let window = base.window();
         host::adopt_base(&base)?;
+        #[cfg(target_os = "macos")]
+        if let Err(error) = pointer::track_only_where_topmost() {
+            ui.report(format!("the cursor may flicker over floating surfaces: {error}"));
+        }
         let float = WebviewBuilder::new(FLOAT, WebviewUrl::App("index.html".into())).transparent(true);
         let float = add_child(&window, float, Some(ui.cover().float))?;
         let layers = Arc::new(Self { window: window.clone(), base, float, ui: Arc::clone(&ui), page: Arc::default() });
@@ -294,13 +311,70 @@ mod host {
     }
 }
 
+/// AppKit sends each webview's tracking observer every mouse move in the webview's rect, even where a webview above
+/// covers it, and the observer has WebKit set the cursor for its own content under the pointer. Every observer passes
+/// a mouse move on only when its webview is the topmost view under the pointer, so only the top layer sets the cursor.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+mod pointer {
+    use std::sync::OnceLock;
+
+    use anyhow::Context;
+    use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
+    use objc2::{MainThreadMarker, sel};
+    use objc2_app_kit::{NSEvent, NSView};
+
+    type MouseMoved = unsafe extern "C-unwind" fn(&AnyObject, Sel, &NSEvent);
+
+    static WEBKIT_MOUSE_MOVED: OnceLock<MouseMoved> = OnceLock::new();
+
+    pub fn track_only_where_topmost() -> anyhow::Result<()> {
+        let observer = AnyClass::get(c"WKMouseTrackingObserver").context("WebKit has no WKMouseTrackingObserver")?;
+        let method =
+            observer.instance_method(sel!(mouseMoved:)).context("WKMouseTrackingObserver has no mouseMoved:")?;
+        // SAFETY: `mouseMoved:` takes the receiver, its selector and an event, and returns nothing.
+        let webkit = unsafe { std::mem::transmute::<Imp, MouseMoved>(method.implementation()) };
+        WEBKIT_MOUSE_MOVED.set(webkit).ok().context("the pointer gate installs once")?;
+        let gated: MouseMoved = mouse_moved;
+        // SAFETY: the gate has the signature of the implementation it takes the place of.
+        unsafe { method.set_implementation(std::mem::transmute::<MouseMoved, Imp>(gated)) };
+        Ok(())
+    }
+
+    unsafe extern "C-unwind" fn mouse_moved(observer: &AnyObject, selector: Sel, event: &NSEvent) {
+        if observes_topmost_view(observer, event) {
+            let webkit = WEBKIT_MOUSE_MOVED.get().expect("the gate replaces WebKit's mouseMoved: after saving it");
+            // SAFETY: WebKit's own implementation, called with the arguments AppKit passed.
+            unsafe { webkit(observer, selector, event) }
+        }
+    }
+
+    fn observes_topmost_view(observer: &AnyObject, event: &NSEvent) -> bool {
+        let main_thread = MainThreadMarker::new().expect("AppKit delivers mouse moves on the main thread");
+        let content = event.window(main_thread).and_then(|window| window.contentView());
+        let mut view = content.and_then(|content| content.hitTest(event.locationInWindow()));
+        while let Some(shown) = view {
+            if observes(observer, &shown) {
+                return true;
+            }
+            // SAFETY: a view in the window's hierarchy holds its superview for as long as it is attached.
+            view = unsafe { shown.superview() };
+        }
+        false
+    }
+
+    fn observes(observer: &AnyObject, view: &NSView) -> bool {
+        view.trackingAreas().iter().any(|area| area.owner().is_some_and(|owner| std::ptr::eq(&*owner, observer)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn the_float_layer_grows_and_shrinks_from_a_corner_that_never_moves() {
-        let y = float_top();
+        let y = title_bar_height();
         let sidebar = Bounds { x: 8.0, y: 46.0, width: 286.0, height: 820.0 };
         let scrim = Bounds { x: 0.0, y, width: 1440.0, height: 862.0 };
         assert_eq!(float_bounds(std::iter::empty()), Bounds { x: 0.0, y, width: 0.0, height: 0.0 });

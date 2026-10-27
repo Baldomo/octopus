@@ -57,6 +57,9 @@ export const backend = {
     invoke<number>("term_attach", { at, pty, output }),
   termInput: (attachment: number, keys: string) => invoke<void>("term_input", { attachment, keys }),
   termDetach: (attachment: number) => invoke<void>("term_detach", { attachment }),
+  /** Resolves to the id of the shell panel it opens. */
+  termOpen: (at: TaskRef) => invoke<PtyId>("term_open", { at }),
+  termClose: (at: TaskRef, panel: PtyId) => invoke<void>("term_close", { at, panel }),
   termTakeLock: (at: TaskRef, panel: PtyId) => invoke<void>("term_take_lock", { at, panel }),
   termResize: (at: TaskRef, panel: PtyId, cols: number, rows: number) =>
     invoke<void>("term_resize", { at, panel, cols, rows }),

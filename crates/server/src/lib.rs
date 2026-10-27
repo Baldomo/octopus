@@ -9,7 +9,7 @@ mod service;
 mod store;
 mod tasks;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, Weak, mpsc};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,10 +17,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use octopus_proto::device::{DeviceKey, PublicKey};
 use octopus_proto::ops::{
     AgentReport, BrowserOpen, Clients, Done, Entries, FileList, FileSearch, FileWrite, HarnessSet, Matches, Offer,
-    Paired, PairedClient, PairingForget, PairingList, PairingOffer, PairingPair, Revised, SessionHello, SessionPing,
-    SessionSync, Shown, Snapshot, TaskArchive, TaskCreate, TaskCreated, TaskFocus, TaskGet, TaskMove, TaskRename,
-    TaskSetSession, TermResize, TermSend, TermTakeLock, Welcome, WorkspaceAdd, WorkspaceCreated, WorkspaceList,
-    WorkspaceRemove, WorkspaceRename, WorkspaceSetColor, Workspaces, Written,
+    Opened, Paired, PairedClient, PairingForget, PairingList, PairingOffer, PairingPair, Revised, SessionHello,
+    SessionPing, SessionSync, Shown, Snapshot, TaskArchive, TaskCreate, TaskCreated, TaskFocus, TaskGet, TaskMove,
+    TaskRename, TaskSetSession, TermClose, TermOpen, TermResize, TermSend, TermTakeLock, Welcome, WorkspaceAdd,
+    WorkspaceCreated, WorkspaceList, WorkspaceRemove, WorkspaceRename, WorkspaceSetColor, Workspaces, Written,
 };
 use octopus_proto::pairing::Side;
 use octopus_proto::types::{
@@ -35,7 +35,7 @@ pub use listener::serve;
 use pairing::Offers;
 use service::{HostClient, Terminal};
 pub use service::{TerminalHost, run_terminal_host};
-use store::{Harness, Store, TaskRow, TerminalRow};
+use store::{Harness, PanelRow, Store, TaskRow};
 use tasks::{MoveEffect, apply_move};
 
 const PUSH_BACKLOG: usize = 4096;
@@ -48,9 +48,16 @@ enum AgentSlot {
     HarnessUnknown,
 }
 
+struct Shell {
+    name: String,
+    terminal: Arc<Terminal>,
+}
+
 struct State {
     store: Store,
     agents: HashMap<TaskId, AgentSlot>,
+    /// Each task's shell panels, in the order they opened.
+    shells: HashMap<TaskId, Vec<Shell>>,
     /// The store's browser panels, which every task view carries.
     browsers: HashMap<TaskId, Vec<BrowserPanel>>,
     watchers: HashMap<TaskId, notify::RecommendedWatcher>,
@@ -124,6 +131,16 @@ impl State {
         }
     }
 
+    /// Ends every terminal of the task and drops their scrollback.
+    fn forget_terminals(&mut self, task: &TaskId) {
+        self.forget_agent(task);
+        for shell in self.shells.remove(task).unwrap_or_default() {
+            if let Err(error) = shell.terminal.forget() {
+                report!("forget the shell {} of {task}: {error}", shell.terminal.id);
+            }
+        }
+    }
+
     fn agent_terminal(&self, task: &TaskId) -> Option<&Arc<Terminal>> {
         match self.agents.get(task) {
             Some(AgentSlot::Running { terminal, .. }) => Some(terminal),
@@ -131,30 +148,51 @@ impl State {
         }
     }
 
+    /// The task's terminals in panel order, each with its panel's name.
+    fn terminals(&self, task: &TaskId) -> impl Iterator<Item = (&str, &Arc<Terminal>)> {
+        let agent = self.agent_terminal(task).map(|terminal| (AGENT_PANEL, terminal));
+        let shells = self.shells.get(task).into_iter().flatten().map(|shell| (shell.name.as_str(), &shell.terminal));
+        agent.into_iter().chain(shells)
+    }
+
+    fn every_terminal(&self) -> impl Iterator<Item = (&TaskId, &Arc<Terminal>)> {
+        let agents = self.agents.iter().filter_map(|(task, slot)| match slot {
+            AgentSlot::Running { terminal, .. } => Some((task, terminal)),
+            _ => None,
+        });
+        let shells =
+            self.shells.iter().flat_map(|(task, shells)| shells.iter().map(move |shell| (task, &shell.terminal)));
+        agents.chain(shells)
+    }
+
     fn panels(&self, task: &TaskId) -> Vec<Panel> {
-        self.agent_terminal(task)
-            .map(|terminal| Panel {
+        self.terminals(task)
+            .map(|(name, terminal)| Panel {
                 id: terminal.id.clone(),
-                name: AGENT_PANEL.to_string(),
+                name: name.to_string(),
                 running: terminal.running(),
                 lock_holder: terminal.holder(),
             })
-            .into_iter()
             .collect()
     }
 
     fn find_terminal(&self, task: &TaskId, key: &str) -> Result<Arc<Terminal>, Error> {
-        let found = self.panels(task).into_iter().find(|panel| panel.answers_to(key));
-        found
-            .and_then(|panel| self.agent_terminal(task).filter(|terminal| terminal.id == panel.id).cloned())
+        self.terminals(task)
+            .find(|(name, terminal)| *name == key || terminal.id.0 == key)
+            .map(|(_, terminal)| Arc::clone(terminal))
             .ok_or_else(|| Error::not_found(format!("panel {key} of {task}")))
     }
 
     fn terminal_by_id(&self, id: &PtyId) -> Option<(TaskId, Arc<Terminal>)> {
-        self.agents.iter().find_map(|(task, slot)| match slot {
-            AgentSlot::Running { terminal, .. } if &terminal.id == id => Some((task.clone(), Arc::clone(terminal))),
-            _ => None,
-        })
+        self.every_terminal()
+            .find(|(_, terminal)| &terminal.id == id)
+            .map(|(task, terminal)| (task.clone(), Arc::clone(terminal)))
+    }
+
+    fn take_shell(&mut self, task: &TaskId, id: &PtyId) -> Option<Shell> {
+        let shells = self.shells.get_mut(task)?;
+        let at = shells.iter().position(|shell| &shell.terminal.id == id)?;
+        Some(shells.remove(at))
     }
 
     fn view(&self, row: &TaskRow) -> Task {
@@ -206,16 +244,28 @@ impl Server {
             offers: Mutex::default(),
             worktrees: worktrees.to_path_buf(),
             host,
-            state: Mutex::new(State { store, agents: HashMap::new(), browsers, watchers: HashMap::new() }),
+            state: Mutex::new(State {
+                store,
+                agents: HashMap::new(),
+                shells: HashMap::new(),
+                browsers,
+                watchers: HashMap::new(),
+            }),
             clients: Mutex::new(HashMap::new()),
             pushes,
             file_changes,
         });
+        let mut state = lock(&server.state);
         for row in recorded {
             let running = hosted.remove(&row.id).expect("reattach keeps only hosted terminals");
-            let slot = server.adopt(&row.task, row.id, running);
-            lock(&server.state).agents.insert(row.task, slot);
+            let terminal = server.adopt(&row.task, row.id, running);
+            if row.name == AGENT_PANEL {
+                state.agents.insert(row.task, AgentSlot::Running { terminal, status: AgentStatus::Idle });
+            } else {
+                state.shells.entry(row.task).or_default().push(Shell { name: row.name, terminal });
+            }
         }
+        drop(state);
         for orphan in hosted.into_keys() {
             report!("ending terminal {orphan}, which this server's store does not record");
             server.host.forget(&orphan)?;
@@ -287,6 +337,8 @@ impl Server {
                 let state = lock(&self.state);
                 Ok(state.view(&state.store.task(&op.task)?))
             }),
+            TermOpen::NAME => call::<TermOpen>(args, |op| self.term_open(op)),
+            TermClose::NAME => call::<TermClose>(args, |op| self.term_close(op)),
             TermSend::NAME => call::<TermSend>(args, |op| self.term_send(client, op)),
             TermTakeLock::NAME => call::<TermTakeLock>(args, |op| self.term_take_lock(client, op)),
             TermResize::NAME => call::<TermResize>(args, |op| self.term_resize(client, op)),
@@ -367,7 +419,7 @@ impl Server {
         for task in &tasks {
             state.watchers.remove(&task.id);
             state.browsers.remove(&task.id);
-            state.forget_agent(&task.id);
+            state.forget_terminals(&task.id);
         }
         let root = PathBuf::from(&workspace.root);
         for task in tasks.iter().filter(|task| task.checkout == Checkout::Worktree) {
@@ -480,10 +532,10 @@ impl Server {
         }
         if effect == MoveEffect::StopProcesses {
             state.watchers.remove(&row.id);
-            if let Some(terminal) = state.agent_terminal(&row.id)
-                && let Err(error) = terminal.terminate()
-            {
-                report!("stop the agent of {}: {error}", row.id);
+            for (name, terminal) in state.terminals(&row.id) {
+                if let Err(error) = terminal.terminate() {
+                    report!("stop the {name} panel of {}: {error}", row.id);
+                }
             }
         }
         self.publish_task(&state, &row);
@@ -567,7 +619,7 @@ impl Server {
         state: &mut State,
         row: &mut TaskRow,
         harness: Harness,
-        mut env: Vec<(String, String)>,
+        env: Vec<(String, String)>,
     ) -> Result<AgentSlot, Error> {
         let directory = PathBuf::from(&row.directory);
         let (program, args) = harness.argv.split_first().expect("harness.set rejects an empty argv");
@@ -583,25 +635,92 @@ impl Server {
             .chain(args.iter().cloned())
             .chain(session_args.iter().map(|arg| arg.replace(SESSION, session)))
             .collect();
+        let panel = PanelRow { id: PtyId::random(), task: row.id.clone(), name: AGENT_PANEL.to_string() };
+        let terminal = self.spawn_panel(state, &panel, argv, &directory, env)?;
+        Ok(AgentSlot::Running { terminal, status: AgentStatus::Idle })
+    }
+
+    /// Callers hold the state lock until the terminal joins it, so its exit never lands before it does.
+    fn spawn_panel(
+        &self,
+        state: &mut State,
+        panel: &PanelRow,
+        argv: Vec<String>,
+        directory: &Path,
+        mut env: Vec<(String, String)>,
+    ) -> Result<Arc<Terminal>, Error> {
         env.extend(
             [
-                (ENV_TASK, row.id.0.as_str()),
+                (ENV_TASK, panel.task.0.as_str()),
                 (ENV_SERVER, self.name.as_str()),
                 ("TERM", "xterm-256color"),
                 ("COLORTERM", "truecolor"),
             ]
             .map(|(key, value)| (key.to_string(), value.to_string())),
         );
-        let id = PtyId::random();
-        self.host.spawn(&id, argv, &directory, env)?;
-        state.store.record_terminal(&TerminalRow { id: id.clone(), task: row.id.clone() })?;
-        Ok(self.adopt(&row.id, id, true))
+        self.host.spawn(&panel.id, argv, directory, env)?;
+        state.store.record_panel(panel)?;
+        Ok(self.adopt(&panel.task, panel.id.clone(), true))
     }
 
-    fn adopt(&self, task: &TaskId, id: PtyId, running: bool) -> AgentSlot {
+    fn adopt(&self, task: &TaskId, id: PtyId, running: bool) -> Arc<Terminal> {
         let terminal = Arc::new(Terminal::new(id, Arc::clone(&self.host), running));
         self.publish_on_exit(task.clone(), Arc::clone(&terminal));
-        AgentSlot::Running { terminal, status: AgentStatus::Idle }
+        terminal
+    }
+
+    /// The login shell runs outside the state lock, as in `task_focus`; the task is read again after it.
+    fn term_open(&self, op: TermOpen) -> Result<Opened, Error> {
+        let live_directory = |state: &State| -> Result<PathBuf, Error> {
+            let row = state.store.task(&op.task)?;
+            if !row.state.is_live() {
+                return Err(Error::conflict(format!("{} is ended; reopen it to open a shell", row.id)));
+            }
+            Ok(PathBuf::from(row.directory))
+        };
+        let directory = live_directory(&lock(&self.state))?;
+        let (shell, env) = (login::shell()?, login::resolve(&directory)?);
+        let mut state = lock(&self.state);
+        let directory = live_directory(&state)?;
+        let stem = shell.file_stem().unwrap_or(shell.as_os_str()).to_string_lossy().into_owned();
+        let taken: HashSet<&str> = state.terminals(&op.task).map(|(name, _)| name).chain([AGENT_PANEL]).collect();
+        let name = std::iter::once(stem.clone())
+            .chain((2..).map(|count| format!("{stem}-{count}")))
+            .find(|name| !taken.contains(name.as_str()))
+            .expect("an unbounded run of names holds one the task's panels lack");
+        let panel = PanelRow { id: PtyId::random(), task: op.task.clone(), name: name.clone() };
+        let argv = vec![shell.to_string_lossy().into_owned()];
+        let terminal = self.spawn_panel(&mut state, &panel, argv, &directory, env)?;
+        state.shells.entry(op.task.clone()).or_default().push(Shell { name, terminal });
+        Ok(Opened { panel: panel.id, rev: self.touch_task(&mut state, &op.task)? })
+    }
+
+    fn term_close(&self, op: TermClose) -> Result<Revised, Error> {
+        let mut state = lock(&self.state);
+        let terminal = state.find_terminal(&op.task, &op.panel)?;
+        if state.agent_terminal(&op.task).is_some_and(|agent| agent.id == terminal.id) {
+            return Err(Error::conflict(format!("the agent panel of {} closes only with its agent", op.task)));
+        }
+        terminal.forget()?;
+        let shell = state.take_shell(&op.task, &terminal.id).expect("a panel other than the agent's is a shell");
+        Ok(Revised { rev: self.drop_shell(&mut state, &op.task, &shell)? })
+    }
+
+    fn drop_shell(&self, state: &mut State, task: &TaskId, shell: &Shell) -> Result<u64, Error> {
+        state.store.forget_panel(&shell.terminal.id)?;
+        self.touch_task(state, task)
+    }
+
+    /// An exited shell leaves its task's list; an exited agent stays, showing its scrollback.
+    fn terminal_exited(&self, state: &mut State, task: &TaskId, id: &PtyId) -> Result<(), Error> {
+        if state.agent_terminal(task).is_some_and(|current| &current.id == id) {
+            return self.touch_task(state, task).map(drop);
+        }
+        let Some(shell) = state.take_shell(task, id) else { return Ok(()) };
+        if let Err(error) = shell.terminal.forget() {
+            report!("drop the scrollback of the exited shell {id}: {error}");
+        }
+        self.drop_shell(state, task, &shell).map(drop)
     }
 
     fn publish_on_exit(&self, task: TaskId, terminal: Arc<Terminal>) {
@@ -612,9 +731,7 @@ impl Server {
             }
             let Some(server) = server.upgrade() else { return };
             let mut state = lock(&server.state);
-            if state.agent_terminal(&task).is_some_and(|current| current.id == terminal.id)
-                && let Err(error) = server.touch_task(&mut state, &task)
-            {
+            if let Err(error) = server.terminal_exited(&mut state, &task, &terminal.id) {
                 report!("publish the exit of {}: {error}", terminal.id);
             }
         });
@@ -778,14 +895,11 @@ impl Server {
             clients.remove(client);
         }
         let mut state = lock(&self.state);
-        let mut released = Vec::new();
-        for (task, slot) in &state.agents {
-            if let AgentSlot::Running { terminal, .. } = slot
-                && terminal.release(client)
-            {
-                released.push(task.clone());
-            }
-        }
+        let released: HashSet<TaskId> = state
+            .every_terminal()
+            .filter(|(_, terminal)| terminal.release(client))
+            .map(|(task, _)| task.clone())
+            .collect();
         for task in released {
             if let Err(error) = self.touch_task(&mut state, &task) {
                 report!("release {client}'s lock on {task}: {error}");

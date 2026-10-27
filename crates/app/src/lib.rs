@@ -71,6 +71,8 @@ pub fn run(launch_problem: Option<String>) -> anyhow::Result<()> {
             commands::term_attach,
             commands::term_input,
             commands::term_detach,
+            commands::term_open,
+            commands::term_close,
             commands::term_take_lock,
             commands::term_resize,
             commands::file_list,

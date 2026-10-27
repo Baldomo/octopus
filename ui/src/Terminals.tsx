@@ -179,9 +179,9 @@ function Missing(props: { open: TaskView }) {
 }
 
 /** The agent's tab carries the task's glyph and names the harness it runs. */
-function AgentTab(props: { open: TaskView; on: boolean; choose?: () => void }) {
+function AgentTab(props: { open: TaskView; on: boolean; choose: () => void }) {
   return (
-    <button class="tab agent" classList={{ on: props.on }} onClick={() => props.choose?.()}>
+    <button class="tab agent" classList={{ on: props.on }} onClick={() => props.choose()}>
       <Glyph glyph={props.open.glyph} />
       {props.open.task.harness}
       <span class="kind">agent</span>
@@ -189,12 +189,16 @@ function AgentTab(props: { open: TaskView; on: boolean; choose?: () => void }) {
   );
 }
 
+/** The agent tab comes first and is selected unless a shell tab is chosen. */
 function Stack(props: { key: string }) {
   const task = () => model.tasks[props.key];
   const shown = () => ui.prefs.open === props.key && ui.prefs.view === "task";
   const [chosen, setChosen] = createSignal<PtyId | null>(null);
   const panels = () => task()?.task.panels ?? [];
-  const selected = () => panels().find((panel) => panel.id === chosen()) ?? panels()[0];
+  const agent = () => panels().find((panel) => panel.name === AGENT_PANEL);
+  const shells = () => panels().filter((panel) => panel.name !== AGENT_PANEL);
+  const selected = () => shells().find((panel) => panel.id === chosen()) ?? agent();
+  const agentOn = () => selected() === agent();
   const missing = () => {
     const kind = task()?.task.agent.kind;
     return kind === "harness_unknown" || kind === "harness_not_installed";
@@ -205,29 +209,30 @@ function Stack(props: { key: string }) {
         {(open) => (
           <>
             <div class="tabs">
-              <Show when={panels().length > 0} fallback={<AgentTab open={open()} on />}>
-                <For each={panels()}>
-                  {(panel) => (
-                    <Show
-                      when={panel.name === AGENT_PANEL}
-                      fallback={
-                        <button
-                          class="tab"
-                          classList={{ on: selected()?.id === panel.id }}
-                          onClick={() => setChosen(panel.id)}
-                        >
-                          <Show when={panel.running}>
-                            <span class="dot" />
-                          </Show>
-                          {panel.name}
-                        </button>
-                      }
+              <AgentTab open={open()} on={agentOn()} choose={() => setChosen(null)} />
+              <For each={shells()}>
+                {(panel) => (
+                  <button
+                    class="tab"
+                    classList={{ on: selected()?.id === panel.id }}
+                    onClick={() => setChosen(panel.id)}
+                  >
+                    {panel.name}
+                    <span
+                      class="close"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        act(backend.termClose(open().at, panel.id));
+                      }}
                     >
-                      <AgentTab open={open()} on={selected()?.id === panel.id} choose={() => setChosen(panel.id)} />
-                    </Show>
-                  )}
-                </For>
-              </Show>
+                      ×
+                    </span>
+                  </button>
+                )}
+              </For>
+              <button class="tab plus" onClick={() => act(backend.termOpen(open().at).then(setChosen))}>
+                +
+              </button>
               <span class="spacer" />
               <Show when={selected()}>
                 {(panel) => (
@@ -235,15 +240,18 @@ function Stack(props: { key: string }) {
                 )}
               </Show>
             </div>
-            <Show when={!missing()} fallback={<Missing open={open()} />}>
-              <For each={panels().map((panel) => panel.id)} fallback={<div class="term" />}>
-                {(id) => (
-                  <Show when={panels().find((panel) => panel.id === id)}>
-                    {(panel) => <Term at={open().at} panel={panel()} visible={shown() && selected()?.id === id} />}
-                  </Show>
-                )}
-              </For>
+            <Show when={agentOn() && agent() === undefined}>
+              <Show when={missing()} fallback={<div class="term" />}>
+                <Missing open={open()} />
+              </Show>
             </Show>
+            <For each={panels().map((panel) => panel.id)}>
+              {(id) => (
+                <Show when={panels().find((panel) => panel.id === id)}>
+                  {(panel) => <Term at={open().at} panel={panel()} visible={shown() && selected()?.id === id} />}
+                </Show>
+              )}
+            </For>
           </>
         )}
       </Show>
