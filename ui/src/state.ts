@@ -2,10 +2,10 @@ import { createRoot, createSelector, createSignal } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { backend } from "./backend";
-import { FLOAT_LAYER, FLOAT_TOP } from "./generated";
+import { FLOAT_LAYER } from "./generated";
 import type {
   Boot,
-  Bounds,
+  Floated,
   Model,
   Modal,
   ServerView,
@@ -41,7 +41,7 @@ const [ui, setUi] = createStore<Ui>({
   reveal: null,
   problem: null,
   viewport: { width: 0, height: 0 },
-  float: { x: 0, y: FLOAT_TOP, width: 0, height: 0 },
+  float_input: [],
 });
 export { ui };
 /** The section the next new-task form opens on; the sidebar and the form share the float layer. */
@@ -64,8 +64,8 @@ export const togglePin = () => uiAct({ do: "toggle_pin" });
 export const toggleCollapsed = (section: string) => uiAct({ do: "toggle_collapsed", section });
 export const showSidebar = (shown: boolean) => uiAct({ do: "show_sidebar", shown });
 export const toggleSidebar = () => uiAct({ do: "toggle_sidebar" });
-export const floatSurface = (surface: string, rect: Bounds, modal: boolean) =>
-  uiAct({ do: "float", surface, rect, modal });
+export const floatSurface = (surface: string, at: Floated, modal: boolean) =>
+  uiAct({ do: "float", surface, at, modal });
 export const sinkSurface = (surface: string) => uiAct({ do: "sink", surface });
 export const showModal = (modal: Modal | null) => uiAct({ do: "show_modal", modal });
 export const reveal = (task: string, path: string) => uiAct({ do: "reveal", task, path });
@@ -98,6 +98,8 @@ export const openView = (): TaskView | undefined => {
 export const serverView = (name: string) => servers().find((server) => server.name === name);
 
 export const isLocal = (name: string) => serverView(name)?.endpoint === null;
+
+export const serverLabel = (name: string) => serverView(name)?.label ?? name;
 
 export function showTasks() {
   const section = openView()?.section ?? ui.prefs.board;

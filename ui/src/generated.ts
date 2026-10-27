@@ -106,6 +106,10 @@ next: TaskState, live: boolean, glyph: Glyph, task: Task, };
 
 export type ServerView = { name: string, 
 /**
+ * What the window calls the server: "local" for one on the local socket, else its name.
+ */
+label: string, 
+/**
  * The QUIC endpoint as host:port; none for a server on the local socket.
  */
 endpoint: string | null, reachable: boolean, 
@@ -162,11 +166,11 @@ version: number, prefs: Prefs,
  */
 recent: Array<string>, sidebar: boolean, modal: Modal | null, reveal: Reveal | null, problem: string | null, viewport: Viewport, 
 /**
- * Where the float layer covers the window: from its fixed corner past every surface of it that is out.
+ * Where the float layer takes the pointer over the layers beneath it.
  */
-float: Bounds, };
+float_input: Array<Bounds>, };
 
-export type UiAct = { "do": "open_task", key: string, } | { "do": "show_view", view: View, } | { "do": "show_board", section: string, } | { "do": "show_surface", surface: Surface, } | { "do": "toggle_pin" } | { "do": "toggle_collapsed", section: string, } | { "do": "show_sidebar", shown: boolean, } | { "do": "toggle_sidebar" } | { "do": "show_modal", modal: Modal | null, } | { "do": "float", surface: string, rect: Bounds, modal: boolean, } | { "do": "sink", surface: string, } | { "do": "reveal", task: string, path: string, } | { "do": "report", problem: string, };
+export type UiAct = { "do": "open_task", key: string, } | { "do": "show_view", view: View, } | { "do": "show_board", section: string, } | { "do": "show_surface", surface: Surface, } | { "do": "toggle_pin" } | { "do": "toggle_collapsed", section: string, } | { "do": "show_sidebar", shown: boolean, } | { "do": "toggle_sidebar" } | { "do": "show_modal", modal: Modal | null, } | { "do": "float", surface: string, at: Floated, modal: boolean, } | { "do": "sink", surface: string, } | { "do": "reveal", task: string, path: string, } | { "do": "report", problem: string, };
 
 export type Viewport = { width: number, height: number, };
 
@@ -179,6 +183,8 @@ me: string, servers: Array<ServerView>, model: Model, ui: Ui, };
 export type NewTask = { server: string, workspace: WorkspaceId, title: string, parent: TaskId | null, state: TaskState, checkout: Checkout, harness: string, };
 
 export type Bounds = { x: number, y: number, width: number, height: number, };
+
+export type Floated = { input: Bounds, drawn: Bounds, };
 
 export type OnScreen = { at: TaskRef, panel: BrowserId, bounds: Bounds, };
 

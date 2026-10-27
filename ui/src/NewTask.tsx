@@ -2,7 +2,17 @@ import { createSignal, For, Show } from "solid-js";
 import { backend } from "./backend";
 import { Actions, Field, Segments, TextField } from "./Dialog";
 import { CHECKOUTS, TASK_STATES, type Checkout, type TaskState, type WorkspaceRef } from "./generated";
-import { model, newTaskSection, openTask, openView, report, serverView, setNewTaskSection, showModal } from "./state";
+import {
+  model,
+  newTaskSection,
+  openTask,
+  openView,
+  report,
+  serverLabel,
+  serverView,
+  setNewTaskSection,
+  showModal,
+} from "./state";
 
 const PARENTS = ["none", "open task"] as const;
 const workspaceKey = (workspace: WorkspaceRef) => `${workspace.server}/${workspace.workspace}`;
@@ -63,7 +73,7 @@ export function NewTask() {
               <For each={workspaces()}>
                 {(option) => (
                   <option value={workspaceKey(option)}>
-                    {option.name} · {option.server}
+                    {option.name} · {serverLabel(option.server)}
                   </option>
                 )}
               </For>

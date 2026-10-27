@@ -1,7 +1,7 @@
 import { For, Show } from "solid-js";
 import { backend } from "./backend";
 import { commands, hint, mac } from "./keys";
-import { act, openView, serverView, ui } from "./state";
+import { act, openView, serverLabel, serverView, ui } from "./state";
 
 function Crumbs(props: { crumbs: string[] }) {
   return (
@@ -41,7 +41,7 @@ export function TitleBar() {
           <>
             <span class="server">
               <span class="dot" classList={{ off: !serverView(open().at.server)?.reachable }} />
-              {open().at.server}
+              {serverLabel(open().at.server)}
             </span>
             <span
               class="pill"

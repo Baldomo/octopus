@@ -14,34 +14,57 @@ import { act, floatSurface, model, openView, serverView, showModal, showSidebar,
 import { StatusBar } from "./StatusBar";
 import { TerminalStacks } from "./Terminals";
 import { TitleBar } from "./TitleBar";
-import { FLOAT_TOP, type Modal as ModalName } from "./generated";
+import { FLOAT_TOP, type Bounds, type Modal as ModalName } from "./generated";
 
 /** This webview's own size, which grows only once the app has placed it and its renderer has taken the new size. */
 const [webview, setWebview] = createSignal({ width: innerWidth, height: innerHeight });
 addEventListener("resize", () => setWebview({ width: innerWidth, height: innerHeight }));
 
+/** The element's rect in window coordinates. */
+const box = (element: HTMLElement): Bounds => ({
+  x: element.offsetLeft,
+  y: element.offsetTop,
+  width: element.offsetWidth,
+  height: element.offsetHeight,
+});
+
+/** The element's box grown by how far its outer box shadows reach past each edge, its far edges cut to the window. */
+function drawnBox(element: HTMLElement): Bounds {
+  const rect = box(element);
+  const shadows = getComputedStyle(element)
+    .boxShadow.replace(/[\w-]+\([^)]*\)/g, "")
+    .split(",");
+  const reach = { left: 0, right: 0, top: 0, bottom: 0 };
+  for (const shadow of shadows.filter((shadow) => !shadow.includes("inset"))) {
+    const [x = 0, y = 0, blur = 0, spread = 0] = (shadow.match(/-?[\d.]+px/g) ?? []).map(parseFloat);
+    reach.left = Math.max(reach.left, blur + spread - x);
+    reach.right = Math.max(reach.right, blur + spread + x);
+    reach.top = Math.max(reach.top, blur + spread - y);
+    reach.bottom = Math.max(reach.bottom, blur + spread + y);
+  }
+  const [left, top] = [rect.x - reach.left, rect.y - reach.top];
+  const right = Math.min(rect.x + rect.width + reach.right, ui.viewport.width);
+  const bottom = Math.min(rect.y + rect.height + reach.bottom, ui.viewport.height);
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
 /**
- * A surface of the float layer: while it is `out`, and until its exit transition ends, the app covers its rect with
- * the float layer, and a surface holds the keyboard while it is `modal`. It is `shown` from the moment the webview holds it, so it
- * never draws where the window cannot show it yet.
+ * A surface of the float layer: while it is `out`, and until its exit transition ends, the app covers what `element`
+ * draws with the float layer, which takes the pointer in `input`, and a surface holds the keyboard while it is `modal`.
+ * It is `shown` from the moment the webview holds it, so it never draws where the window cannot show it yet.
  */
 function floating(surface: { name: string; modal: () => boolean; out: () => boolean }) {
   const { name, modal, out } = surface;
   /** The surface's far corner in this webview's coordinates. */
   const [reach, setReach] = createSignal<{ right: number; bottom: number } | null>(null);
-  const ref = (element: HTMLElement) => {
+  const ref = (element: HTMLElement, input: HTMLElement = element) => {
     createEffect(
       on(
         () => [out(), modal(), ui.viewport.width, ui.viewport.height] as const,
         ([isOut, isModal]) => {
-          const rect = {
-            x: element.offsetLeft,
-            y: element.offsetTop,
-            width: element.offsetWidth,
-            height: element.offsetHeight,
-          };
+          const rect = box(element);
           setReach({ right: rect.x + rect.width, bottom: rect.y + rect.height - FLOAT_TOP });
-          if (isOut) floatSurface(name, rect, isModal);
+          if (isOut) floatSurface(name, { input: box(input), drawn: drawnBox(element) }, isModal);
           else if (element.getAnimations().length === 0) sinkSurface(name);
         },
       ),
@@ -121,7 +144,7 @@ export function Docked() {
         <Board />
       </div>
       <StatusBar />
-      <div class="edge" onPointerEnter={() => showSidebar(true)} />
+      <div class="edge" classList={{ handle: !ui.sidebar }} onPointerEnter={() => showSidebar(true)} />
     </div>
   );
 }
@@ -156,7 +179,7 @@ export function Floating() {
   const sidebar = floating({ name: "sidebar", modal: holdsKeyboard, out: () => ui.sidebar });
   return (
     <div class="float-layer" style={{ width: `${ui.viewport.width}px`, height: `${ui.viewport.height}px` }}>
-      <Sidebar ref={sidebar.ref} shown={sidebar.shown()} />
+      <Sidebar floats={sidebar.ref} shown={sidebar.shown()} />
       <Show when={ui.modal}>{(modal) => <Modal modal={modal()} />}</Show>
     </div>
   );

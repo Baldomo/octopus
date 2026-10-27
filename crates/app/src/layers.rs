@@ -1,8 +1,9 @@
 //! The window stacks native webviews as layers, bottom to top: base, the UI's own webview filling the window; page,
 //! the browser panel on screen at its rect; float, a second webview of the UI rendering every floating surface. A
-//! webview draws over and takes every click and pointer move in its rect above those beneath it, so each layer's
-//! bounds are exactly what it shows, and float stays above every page. The keyboard sits in float while a modal is
-//! open and in base otherwise.
+//! webview draws over the webviews beneath it in its rect, and float stays above every page. Float covers what its
+//! surfaces draw, shadows included, but takes the pointer only in their input rects, so a click or hover on a shadow
+//! reaches the layer beneath. A host that cannot shape a webview's input bounds float by the input rects instead,
+//! and the shadows end there. The keyboard sits in float while a modal is open and in base otherwise.
 //!
 //! A webview's native rect and the content it draws change in different processes, so no frame may depend on both
 //! changing at once. The float layer's top-left corner never moves: its surfaces lay out in window coordinates, and
@@ -16,7 +17,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use tauri::utils::config::{LogicalPosition as ConfigPosition, WindowConfig};
 use tauri::webview::WebviewBuilder;
-use tauri::{LogicalPosition, LogicalSize, Webview, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent};
+use tauri::{LogicalPosition, LogicalSize, Theme, Webview, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent};
 use ts_rs::TS;
 
 use crate::lock;
@@ -58,13 +59,41 @@ fn traffic_lights() -> ConfigPosition {
     ConfigPosition { x: TRAFFIC_LIGHTS_INSET, y: midline - APPKIT_LIGHT_BELOW_GIVEN_Y }
 }
 
-/// The float layer's rect: from its corner to the far edges of every surface that is out.
-pub fn float_bounds(surfaces: impl Iterator<Item = Bounds>) -> Bounds {
+/// A surface of the float layer that is out: it takes the pointer in `input` and draws in `drawn`, shadows included.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct Floated {
+    pub input: Bounds,
+    pub drawn: Bounds,
+}
+
+/// From the float layer's corner to the far edges of every rect.
+fn from_corner(rects: impl Iterator<Item = Bounds>) -> Bounds {
     let top = title_bar_height();
-    let (right, bottom) = surfaces.fold((0.0_f64, top), |(right, bottom), rect| {
+    let (right, bottom) = rects.fold((0.0_f64, top), |(right, bottom), rect| {
         (right.max(rect.x + rect.width), bottom.max(rect.y + rect.height))
     });
     Bounds { x: 0.0, y: top, width: right, height: bottom - top }
+}
+
+/// The float layer's rect and the rects in it that take the pointer, for the surfaces that are out.
+pub fn float_cover(surfaces: &[Floated]) -> (Bounds, Vec<Bounds>) {
+    let inputs = surfaces.iter().map(|surface| surface.input);
+    if host::SHAPES_INPUT {
+        let drawn = surfaces.iter().flat_map(|surface| [surface.input, surface.drawn]);
+        (from_corner(drawn), inputs.collect())
+    } else {
+        let float = from_corner(inputs);
+        (float, vec![float])
+    }
+}
+
+/// Paints DESIGN.html's `--bg` of the OS appearance under the UI, so no frame shows another color.
+fn paint(window: &Window, base: &Webview, theme: Theme) -> tauri::Result<()> {
+    let bg = if theme == Theme::Dark { env!("OCTOPUS_BG_DARK") } else { env!("OCTOPUS_BG_LIGHT") };
+    let color: tauri::window::Color = bg.parse().expect("build.rs emits --bg as two hex colors");
+    window.set_background_color(Some(color))?;
+    base.set_background_color(Some(color))
 }
 
 pub struct Layers {
@@ -107,21 +136,25 @@ fn add_child(window: &Window, webview: WebviewBuilder<tauri::Wry>, at: Option<Bo
 impl Layers {
     /// Opens the window with its base and float layers; from then on the float layer follows the shared state.
     pub fn open(app: &tauri::App, ui: Arc<UiStore>) -> anyhow::Result<Arc<Self>> {
-        let background: tauri::window::Color =
-            env!("OCTOPUS_BG").parse().map_err(|error: String| anyhow::anyhow!("DESIGN.html --bg: {error}"))?;
         let config =
             app.config().app.windows.iter().find(|window| window.label == BASE).context("tauri.conf.json window")?;
         let config = WindowConfig { traffic_light_position: Some(traffic_lights()), ..config.clone() };
-        let base: Webview =
-            WebviewWindowBuilder::from_config(app, &config)?.background_color(background).build()?.as_ref().clone();
+        let base: Webview = WebviewWindowBuilder::from_config(app, &config)?.visible(false).build()?.as_ref().clone();
         let window = base.window();
+        paint(&window, &base, window.theme()?)?;
+        window.show()?;
         host::adopt_base(&base)?;
-        #[cfg(target_os = "macos")]
-        if let Err(error) = pointer::track_only_where_topmost() {
-            ui.report(format!("the cursor may flicker over floating surfaces: {error}"));
-        }
         let float = WebviewBuilder::new(FLOAT, WebviewUrl::App("index.html".into())).transparent(true);
         let float = add_child(&window, float, Some(ui.cover().float))?;
+        #[cfg(target_os = "macos")]
+        {
+            let ui = Arc::clone(&ui);
+            float.with_webview(move |platform| {
+                if let Err(error) = pointer::install(platform.inner()) {
+                    ui.report(format!("floating surfaces may block the pointer and flicker the cursor: {error}"));
+                }
+            })?;
+        }
         let layers = Arc::new(Self { window: window.clone(), base, float, ui: Arc::clone(&ui), page: Arc::default() });
         let follower = Arc::clone(&layers);
         ui.follow(move |before, after| {
@@ -130,13 +163,18 @@ impl Layers {
         layers.resize()?;
         let watcher = Arc::clone(&layers);
         window.on_window_event(move |event| {
-            let laid_out = match event {
-                WindowEvent::Resized(_) => watcher.resize(),
-                WindowEvent::ScaleFactorChanged { .. } => watcher.resize().and_then(|()| watcher.replace()),
+            let handled = match event {
+                WindowEvent::Resized(_) => watcher.resize().map_err(|error| ("lay out", error)),
+                WindowEvent::ScaleFactorChanged { .. } => {
+                    watcher.resize().and_then(|()| watcher.replace()).map_err(|error| ("lay out", error))
+                }
+                WindowEvent::ThemeChanged(theme) => {
+                    paint(&watcher.window, &watcher.base, *theme).map_err(|error| ("paint", error))
+                }
                 _ => Ok(()),
             };
-            if let Err(error) = laid_out {
-                watcher.ui.report(format!("lay out the window: {error}"));
+            if let Err((job, error)) = handled {
+                watcher.ui.report(format!("{job} the window: {error}"));
             }
         });
         Ok(layers)
@@ -145,6 +183,9 @@ impl Layers {
     fn track(&self, before: &Cover, after: &Cover) -> tauri::Result<()> {
         if after.float != before.float {
             host::place(&self.float, Some(after.float))?;
+        }
+        if after.input != before.input {
+            host::take_input(&self.float, after.float, after.input.clone())?;
         }
         match (before.modal, after.modal) {
             (false, true) => self.float.set_focus(),
@@ -195,12 +236,26 @@ impl Layers {
 }
 
 /// macOS and Windows stack a window's webviews as native child views in the order they were added, and re-adding
-/// one raises it.
+/// one raises it. macOS shapes a webview's input through its hit test; WebView2 takes every click in its window, so
+/// Windows cannot.
 #[cfg(not(target_os = "linux"))]
 mod host {
     use tauri::{LogicalPosition, LogicalSize, Rect, Webview, Window};
 
     use super::Bounds;
+
+    pub const SHAPES_INPUT: bool = cfg!(target_os = "macos");
+
+    /// The webview at `bounds` takes the pointer only in `input`, rects of the window.
+    #[cfg(target_os = "macos")]
+    pub fn take_input(webview: &Webview, bounds: Bounds, input: Vec<Bounds>) -> tauri::Result<()> {
+        webview.with_webview(move |_| super::pointer::take_input(bounds, input))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn take_input(_: &Webview, _: Bounds, _: Vec<Bounds>) -> tauri::Result<()> {
+        Ok(())
+    }
 
     pub fn adopt_base(_: &Webview) -> tauri::Result<()> {
         Ok(())
@@ -301,6 +356,25 @@ mod host {
         })
     }
 
+    pub const SHAPES_INPUT: bool = true;
+
+    /// The webview's window takes the pointer only in `input`, rects of the window, and the overlay passes every
+    /// other point to the child beneath.
+    pub fn take_input(webview: &Webview, bounds: Bounds, input: Vec<Bounds>) -> tauri::Result<()> {
+        with_widget(webview, move |widget| {
+            let region = gtk::cairo::Region::create();
+            for rect in input {
+                let (x, y) = (rect.x - bounds.x, rect.y - bounds.y);
+                let (left, top) = (x.floor() as i32, y.floor() as i32);
+                let (right, bottom) = ((x + rect.width).ceil() as i32, (y + rect.height).ceil() as i32);
+                let local = gtk::cairo::RectangleInt::new(left, top, right - left, bottom - top);
+                region.union_rectangle(&local).expect("cairo unions rectangles into a region it created");
+            }
+            overlay().set_overlay_pass_through(&widget, true);
+            widget.input_shape_combine_region(Some(&region));
+        })
+    }
+
     /// The overlay restacks its children's windows in its order on every allocation.
     pub fn raise(_: &Window, webview: &Webview) -> tauri::Result<()> {
         with_widget(webview, |widget| {
@@ -311,46 +385,156 @@ mod host {
     }
 }
 
-/// AppKit sends each webview's tracking observer every mouse move in the webview's rect, even where a webview above
-/// covers it, and the observer has WebKit set the cursor for its own content under the pointer. Every observer passes
-/// a mouse move on only when its webview is the topmost view under the pointer, so only the top layer sets the cursor.
+/// AppKit asks each view's hit test which view takes a click or a scroll, and sends each webview's tracking observer
+/// every pointer event in the webview's rect, even where a webview above covers it; the observer has WebKit set the
+/// cursor for its own content under the pointer. The float webview's hit test finds nothing outside its input rects,
+/// so AppKit hands those points to the view beneath, and an observer passes an event on only while its webview is
+/// the topmost view under the pointer, so only that webview tracks the pointer and sets the cursor. The float webview
+/// also gets the first move after it stops being topmost: that move lands in its own transparent area, which shows
+/// its page that the pointer left its surfaces.
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod pointer {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::ffi::c_void;
     use std::sync::OnceLock;
 
     use anyhow::Context;
+    use objc2::rc::Retained;
     use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
     use objc2::{MainThreadMarker, sel};
     use objc2_app_kit::{NSEvent, NSView};
+    use objc2_core_foundation::CGPoint;
 
-    type MouseMoved = unsafe extern "C-unwind" fn(&AnyObject, Sel, &NSEvent);
+    use super::Bounds;
 
-    static WEBKIT_MOUSE_MOVED: OnceLock<MouseMoved> = OnceLock::new();
+    type PointerEvent = unsafe extern "C-unwind" fn(&AnyObject, Sel, &NSEvent);
+    type HitTest = unsafe extern "C-unwind" fn(&NSView, Sel, CGPoint) -> *mut NSView;
 
-    pub fn track_only_where_topmost() -> anyhow::Result<()> {
-        let observer = AnyClass::get(c"WKMouseTrackingObserver").context("WebKit has no WKMouseTrackingObserver")?;
-        let method =
-            observer.instance_method(sel!(mouseMoved:)).context("WKMouseTrackingObserver has no mouseMoved:")?;
-        // SAFETY: `mouseMoved:` takes the receiver, its selector and an event, and returns nothing.
-        let webkit = unsafe { std::mem::transmute::<Imp, MouseMoved>(method.implementation()) };
-        WEBKIT_MOUSE_MOVED.set(webkit).ok().context("the pointer gate installs once")?;
-        let gated: MouseMoved = mouse_moved;
-        // SAFETY: the gate has the signature of the implementation it takes the place of.
-        unsafe { method.set_implementation(std::mem::transmute::<MouseMoved, Imp>(gated)) };
+    static WEBKIT_HIT_TEST: OnceLock<HitTest> = OnceLock::new();
+    static WEBKIT_MOUSE_MOVED: OnceLock<PointerEvent> = OnceLock::new();
+    static WEBKIT_MOUSE_ENTERED: OnceLock<PointerEvent> = OnceLock::new();
+    static WEBKIT_MOUSE_EXITED: OnceLock<PointerEvent> = OnceLock::new();
+
+    thread_local! {
+        /// The float webview, and the rects of it, in its own flipped coordinates, that take the pointer.
+        static FLOAT: RefCell<Option<(Retained<NSView>, Vec<Bounds>)>> = const { RefCell::new(None) };
+        /// Whether each observer's webview was topmost at the last pointer event the observer saw, by address.
+        static TOPMOST: RefCell<HashMap<usize, bool>> = RefCell::new(HashMap::new());
+    }
+
+    /// Puts `gate` in place of `class`'s implementation of `selector`, and keeps the one it replaced in `saved`.
+    fn swap(class: &AnyClass, selector: Sel, gate: Imp, saved: impl FnOnce(Imp) -> bool) -> anyhow::Result<()> {
+        let method = class.instance_method(selector).with_context(|| format!("{class} has no {selector}"))?;
+        // SAFETY: every gate has the signature of the implementation it takes the place of.
+        let webkit = unsafe { method.set_implementation(gate) };
+        anyhow::ensure!(saved(webkit), "the pointer gates install once");
         Ok(())
     }
 
+    /// Takes the float webview's pointer, given as the platform's `WKWebView`, on the main thread.
+    pub fn install(float: *mut c_void) -> anyhow::Result<()> {
+        // SAFETY: tauri hands over its live WKWebView.
+        let float = unsafe { Retained::retain(float.cast::<NSView>()) }.context("the float layer has no WKWebView")?;
+        let hit_test: HitTest = hit_test;
+        // SAFETY: an `Imp` is any function pointer, and `HitTest` matches `hitTest:`.
+        swap(float.class(), sel!(hitTest:), unsafe { std::mem::transmute::<HitTest, Imp>(hit_test) }, |webkit| {
+            // SAFETY: WebKit's `hitTest:` takes the receiver, its selector and a point, and returns a view or nil.
+            WEBKIT_HIT_TEST.set(unsafe { std::mem::transmute::<Imp, HitTest>(webkit) }).is_ok()
+        })?;
+        FLOAT.with_borrow_mut(|shaped| *shaped = Some((float, Vec::new())));
+        let observer = AnyClass::get(c"WKMouseTrackingObserver").context("WebKit has no WKMouseTrackingObserver")?;
+        let gates: [(Sel, PointerEvent, &OnceLock<PointerEvent>); 3] = [
+            (sel!(mouseMoved:), mouse_moved, &WEBKIT_MOUSE_MOVED),
+            (sel!(mouseEntered:), mouse_entered, &WEBKIT_MOUSE_ENTERED),
+            (sel!(mouseExited:), mouse_exited, &WEBKIT_MOUSE_EXITED),
+        ];
+        for (selector, gate, saved) in gates {
+            // SAFETY: an `Imp` is any function pointer, and `PointerEvent` matches each of these selectors.
+            swap(observer, selector, unsafe { std::mem::transmute::<PointerEvent, Imp>(gate) }, |webkit| {
+                // SAFETY: each takes the receiver, its selector and an event, and returns nothing.
+                saved.set(unsafe { std::mem::transmute::<Imp, PointerEvent>(webkit) }).is_ok()
+            })?;
+        }
+        Ok(())
+    }
+
+    /// The float webview at `bounds` takes the pointer only in `input`, rects of the window; runs on the main thread.
+    pub fn take_input(bounds: Bounds, input: Vec<Bounds>) {
+        let local = input.into_iter().map(|rect| Bounds { x: rect.x - bounds.x, y: rect.y - bounds.y, ..rect });
+        FLOAT.with_borrow_mut(|float| {
+            if let Some((_, taken)) = float {
+                *taken = local.collect();
+            }
+        });
+    }
+
+    unsafe extern "C-unwind" fn hit_test(view: &NSView, selector: Sel, point: CGPoint) -> *mut NSView {
+        let passes = FLOAT.with_borrow(|float| {
+            float.as_ref().is_some_and(|(float, input)| std::ptr::eq(&**float, view) && !takes(view, point, input))
+        });
+        if passes {
+            return std::ptr::null_mut();
+        }
+        let webkit = WEBKIT_HIT_TEST.get().expect("the gate replaces WebKit's hitTest: after saving it");
+        // SAFETY: WebKit's own implementation, called with the arguments AppKit passed.
+        unsafe { webkit(view, selector, point) }
+    }
+
+    /// Whether `point`, in the coordinates of the view's superview, falls in one of `input`. A WKWebView is flipped,
+    /// so its own coordinates run down from its top-left corner, as the rects do.
+    fn takes(view: &NSView, point: CGPoint, input: &[Bounds]) -> bool {
+        // SAFETY: a view in the window's hierarchy holds its superview for as long as it is attached.
+        let superview = unsafe { view.superview() };
+        let CGPoint { x, y } = view.convertPoint_fromView(point, superview.as_deref());
+        input.iter().any(|rect| x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height)
+    }
+
+    fn key(observer: &AnyObject) -> usize {
+        std::ptr::from_ref(observer) as usize
+    }
+
+    /// Records whether the observer's webview is topmost for this event, and returns whether it was at the last one.
+    fn now_topmost(observer: &AnyObject, topmost: bool) -> bool {
+        TOPMOST.with_borrow_mut(|seen| seen.insert(key(observer), topmost)).unwrap_or(false)
+    }
+
+    /// # Safety
+    /// The arguments are the ones AppKit passed to the gate of `webkit`'s selector.
+    unsafe fn forward(webkit: &OnceLock<PointerEvent>, observer: &AnyObject, selector: Sel, event: &NSEvent) {
+        let webkit = webkit.get().expect("each gate replaces WebKit's implementation after saving it");
+        // SAFETY: WebKit's own implementation, called with the arguments AppKit passed.
+        unsafe { webkit(observer, selector, event) }
+    }
+
     unsafe extern "C-unwind" fn mouse_moved(observer: &AnyObject, selector: Sel, event: &NSEvent) {
-        if observes_topmost_view(observer, event) {
-            let webkit = WEBKIT_MOUSE_MOVED.get().expect("the gate replaces WebKit's mouseMoved: after saving it");
-            // SAFETY: WebKit's own implementation, called with the arguments AppKit passed.
-            unsafe { webkit(observer, selector, event) }
+        let topmost = observes_topmost_view(observer, event);
+        let left = now_topmost(observer, topmost) && observes_float(observer);
+        if topmost || left {
+            // SAFETY: the arguments AppKit passed.
+            unsafe { forward(&WEBKIT_MOUSE_MOVED, observer, selector, event) }
+        }
+    }
+
+    unsafe extern "C-unwind" fn mouse_entered(observer: &AnyObject, selector: Sel, event: &NSEvent) {
+        let topmost = observes_topmost_view(observer, event);
+        now_topmost(observer, topmost);
+        if topmost {
+            // SAFETY: the arguments AppKit passed.
+            unsafe { forward(&WEBKIT_MOUSE_ENTERED, observer, selector, event) }
+        }
+    }
+
+    unsafe extern "C-unwind" fn mouse_exited(observer: &AnyObject, selector: Sel, event: &NSEvent) {
+        if TOPMOST.with_borrow_mut(|seen| seen.remove(&key(observer))).unwrap_or(false) {
+            // SAFETY: the arguments AppKit passed.
+            unsafe { forward(&WEBKIT_MOUSE_EXITED, observer, selector, event) }
         }
     }
 
     fn observes_topmost_view(observer: &AnyObject, event: &NSEvent) -> bool {
-        let main_thread = MainThreadMarker::new().expect("AppKit delivers mouse moves on the main thread");
+        let main_thread = MainThreadMarker::new().expect("AppKit delivers pointer events on the main thread");
         let content = event.window(main_thread).and_then(|window| window.contentView());
         let mut view = content.and_then(|content| content.hitTest(event.locationInWindow()));
         while let Some(shown) = view {
@@ -363,6 +547,10 @@ mod pointer {
         false
     }
 
+    fn observes_float(observer: &AnyObject) -> bool {
+        FLOAT.with_borrow(|float| float.as_ref().is_some_and(|(float, _)| observes(observer, float)))
+    }
+
     fn observes(observer: &AnyObject, view: &NSView) -> bool {
         view.trackingAreas().iter().any(|area| area.owner().is_some_and(|owner| std::ptr::eq(&*owner, observer)))
     }
@@ -373,12 +561,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_float_layer_grows_and_shrinks_from_a_corner_that_never_moves() {
+    fn the_float_layer_grows_from_a_fixed_corner_and_takes_the_pointer_only_where_its_surfaces_do() {
         let y = title_bar_height();
-        let sidebar = Bounds { x: 8.0, y: 46.0, width: 286.0, height: 820.0 };
+        let column = Bounds { x: 0.0, y, width: 294.0, height: 828.0 };
+        let sidebar = Floated { input: column, drawn: Bounds { x: -40.0, y: 22.0, width: 382.0, height: 900.0 } };
         let scrim = Bounds { x: 0.0, y, width: 1440.0, height: 862.0 };
-        assert_eq!(float_bounds(std::iter::empty()), Bounds { x: 0.0, y, width: 0.0, height: 0.0 });
-        assert_eq!(float_bounds([sidebar].into_iter()), Bounds { x: 0.0, y, width: 294.0, height: 866.0 - y });
-        assert_eq!(float_bounds([sidebar, scrim].into_iter()), scrim);
+        let modal = Floated { input: scrim, drawn: scrim };
+        assert_eq!(float_cover(&[]).0, Bounds { x: 0.0, y, width: 0.0, height: 0.0 });
+        if host::SHAPES_INPUT {
+            assert_eq!(float_cover(&[sidebar]), (Bounds { x: 0.0, y, width: 342.0, height: 922.0 - y }, vec![column]));
+            assert_eq!(float_cover(&[sidebar, modal]), (Bounds { height: 922.0 - y, ..scrim }, vec![column, scrim]));
+        } else {
+            assert_eq!(float_cover(&[sidebar]), (column, vec![column]));
+            assert_eq!(float_cover(&[sidebar, modal]), (scrim, vec![scrim]));
+        }
     }
 }

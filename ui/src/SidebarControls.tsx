@@ -14,7 +14,19 @@ import {
 } from "./generated";
 import { commands, hint, mac } from "./keys";
 import { anyMenuOpen, closeMenu, Head, Item, Sep } from "./Menu";
-import { act, isLocal, me, model, report, serverView, servers, setNewTaskSection, showBoard, showModal } from "./state";
+import {
+  act,
+  isLocal,
+  me,
+  model,
+  report,
+  serverLabel,
+  serverView,
+  servers,
+  setNewTaskSection,
+  showBoard,
+  showModal,
+} from "./state";
 import { swatchColor } from "./tokens";
 
 const TOAST_MS = 1800;
@@ -104,6 +116,7 @@ const grouped = (code: string) => code.match(/.{1,4}/g)?.join(" ") ?? code;
 
 export function ServerMenu(props: { name: string }) {
   const server = () => serverView(props.name);
+  const label = serverLabel(props.name);
   const now = ticking();
   const [mode, setMode] = createSignal<"main" | "forget" | Offer>("main");
   const offer = () => {
@@ -141,7 +154,7 @@ export function ServerMenu(props: { name: string }) {
       refetch();
       toast(
         <>
-          Revoked <b>{client}</b> on {props.name}
+          Revoked <b>{client}</b> on {label}
         </>,
       );
     }, report);
@@ -150,7 +163,7 @@ export function ServerMenu(props: { name: string }) {
       closeMenu();
       toast(
         <>
-          Forgot <b>{props.name}</b>
+          Forgot <b>{label}</b>
         </>,
       );
     }, report);
@@ -184,7 +197,7 @@ export function ServerMenu(props: { name: string }) {
       <Show when={mode() === "forget"}>
         <div class="confirm">
           <span>
-            Forget {props.name}? Its tasks leave this client's lists; they keep running on {props.name}.{" "}
+            Forget {label}? Its tasks leave this client's lists; they keep running on {label}.{" "}
             {isLocal(props.name) ? "It returns when the app next starts." : "Pairing again needs a new code."}
           </span>
           <div class="row">
@@ -292,7 +305,7 @@ export function SectionMenu(props: { name: string }) {
           <Head
             title={props.name}
             color={swatchColor(section().swatch)}
-            lines={workspaces().map((workspace) => `${workspace.server}  ${workspace.root}`)}
+            lines={workspaces().map((workspace) => `${serverLabel(workspace.server)}  ${workspace.root}`)}
           />
           <Item kbd={hint(commands.newTask)} run={closing(() => newTaskIn(props.name))}>
             New task here
@@ -316,14 +329,14 @@ export function SectionMenu(props: { name: string }) {
                   () =>
                     toast(
                       <>
-                        Removed <b>{workspace.name}</b> from {workspace.server} · branches kept
+                        Removed <b>{workspace.name}</b> from {serverLabel(workspace.server)} · branches kept
                       </>,
                     ),
                   report,
                 );
               return (
                 <Item danger why={why()} run={closing(remove)}>
-                  Remove from {workspace.server}
+                  Remove from {serverLabel(workspace.server)}
                 </Item>
               );
             }}
@@ -347,7 +360,7 @@ export function TaskMenu(props: { row: Row }) {
     });
   return (
     <>
-      <Head title={props.row.title} lines={[`${props.row.at.task} · ${props.row.at.server}`]} />
+      <Head title={props.row.title} lines={[`${props.row.at.task} · ${serverLabel(props.row.at.server)}`]} />
       <Item kbd="F2" run={closing(() => startRename("task", props.row.key))}>
         Rename…
       </Item>
@@ -417,7 +430,7 @@ function WorkspaceCard() {
     );
     if (needs.length > 0) return setError(`Needs ${needs.join(" and ")}.`);
     if (model.lists.workspaces.some((workspace) => workspace.server === chosen && workspace.name === named)) {
-      return setError(`${chosen} already has ${named}.`);
+      return setError(`${serverLabel(chosen)} already has ${named}.`);
     }
     setSending(true);
     backend
@@ -458,7 +471,7 @@ function WorkspaceCard() {
                 onClick={() => setServer(option.name)}
               >
                 <span class="dot" classList={{ off: !option.reachable }} />
-                {option.name}
+                {option.label}
               </button>
             )}
           </For>

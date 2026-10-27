@@ -1,6 +1,6 @@
 import { createRoot, createSelector, createSignal } from "solid-js";
 import { backend } from "./backend";
-import { TASK_STATES, type Row, type TaskState } from "./generated";
+import { TASK_STATES, type Bounds, type Row, type TaskState } from "./generated";
 import { act, dragged, layer, setDragged, ui } from "./state";
 
 /** Pointer travel that turns a press on a task into a drag. */
@@ -9,10 +9,11 @@ const DRAG_PX = 4;
 type Target = { section: string; state: TaskState };
 const [over, setOver] = createSignal<Target | null>(null);
 
-/** A point the float layer covers shows the float layer's UI, whatever the base layer has beneath it. */
+/** A point where the float layer takes the pointer shows the float layer's UI, whatever the base layer has beneath it. */
 function covered(x: number, y: number) {
-  const { x: left, y: top, width, height } = ui.float;
-  return layer === "base" && x >= left && x < left + width && y >= top && y < top + height;
+  const inside = ({ x: left, y: top, width, height }: Bounds) =>
+    x >= left && x < left + width && y >= top && y < top + height;
+  return layer === "base" && ui.float_input.some(inside);
 }
 
 function targetAt(x: number, y: number, section: string): Target | null {

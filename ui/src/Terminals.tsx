@@ -7,18 +7,18 @@ import { backend, Channel } from "./backend";
 import { AGENT_PANEL, type Panel, type PtyId, type TaskRef, type TaskView } from "./generated";
 import { Glyph } from "./Glyph";
 import { commands, hint } from "./keys";
-import { act, me, model, report, serverView, ui } from "./state";
-import { hex, px, styleOf, token } from "./tokens";
+import { act, me, model, report, serverLabel, serverView, ui } from "./state";
+import { colors, px, type Scheme, scheme, token } from "./tokens";
 
-let theme: ITheme | undefined;
-function terminalTheme(): ITheme {
-  const color = (name: string) => hex(token(name));
-  theme ??= {
+const themes: Partial<Record<Scheme, ITheme>> = {};
+function terminalTheme(current: Scheme): ITheme {
+  const color = colors(current);
+  return (themes[current] ??= {
     background: color("--term"),
-    foreground: hex(styleOf(["term"], "color")),
+    foreground: color("--term-text"),
     cursor: color("--text"),
     selectionBackground: color("--line2"),
-    black: color("--raised"),
+    black: color("--ansi-black"),
     red: color("--err"),
     green: color("--working"),
     yellow: color("--needs"),
@@ -34,8 +34,7 @@ function terminalTheme(): ITheme {
     brightMagenta: color("--violet"),
     brightCyan: color("--info"),
     brightWhite: color("--text"),
-  };
-  return theme;
+  });
 }
 
 const SCROLLBACK_LINES = 10_000;
@@ -53,7 +52,6 @@ function Term(props: { at: TaskRef; panel: Panel; visible: boolean }) {
   const xterm = new Terminal({
     fontFamily: token("--mono-terminal"),
     fontSize: px("--fs-mono"),
-    theme: terminalTheme(),
     cursorBlink: true,
     scrollback: SCROLLBACK_LINES,
   });
@@ -130,6 +128,9 @@ function Term(props: { at: TaskRef; panel: Panel; visible: boolean }) {
   createEffect(() => {
     xterm.options.disableStdin = !writable();
   });
+  createEffect(() => {
+    xterm.options.theme = terminalTheme(scheme());
+  });
   createEffect(on(mine, (holding) => holding && resize(), { defer: true }));
   onCleanup(() => {
     detach();
@@ -165,12 +166,12 @@ function Missing(props: { open: TaskView }) {
         when={install() !== null}
         fallback={
           <div>
-            {props.open.at.server} has no harness {props.open.task.harness}.
+            {serverLabel(props.open.at.server)} has no harness {props.open.task.harness}.
           </div>
         }
       >
         <div>
-          {props.open.task.harness} is not installed on {props.open.at.server}.
+          {props.open.task.harness} is not installed on {serverLabel(props.open.at.server)}.
         </div>
         <code>{install()}</code>
       </Show>

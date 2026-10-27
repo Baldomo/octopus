@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use ts_rs::TS;
 
-use crate::layers::{Bounds, Viewport, float_bounds};
+use crate::layers::{Bounds, Floated, Viewport, float_cover};
 use crate::{emit, lock};
 
 pub const UI_EVENT: &str = "ui";
@@ -81,8 +81,8 @@ pub struct Ui {
     pub reveal: Option<Reveal>,
     pub problem: Option<String>,
     pub viewport: Viewport,
-    /// Where the float layer covers the window: from its fixed corner past every surface of it that is out.
-    pub float: Bounds,
+    /// Where the float layer takes the pointer over the layers beneath it.
+    pub float_input: Vec<Bounds>,
 }
 
 /// Every change a layer makes to the shared state.
@@ -112,10 +112,10 @@ pub enum UiAct {
     ShowModal {
         modal: Option<Modal>,
     },
-    /// A surface of the float layer is out at `rect`; a modal one takes the keyboard.
+    /// A surface of the float layer is out; a modal one takes the keyboard.
     Float {
         surface: String,
-        rect: Bounds,
+        at: Floated,
         modal: bool,
     },
     /// A surface of the float layer is gone.
@@ -134,14 +134,15 @@ pub enum UiAct {
 /// A surface of the float layer that is out.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Out {
-    rect: Bounds,
+    at: Floated,
     modal: bool,
 }
 
-/// What the float layer covers, and whether a modal among it holds the keyboard.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// What the float layer covers, where in it it takes the pointer, and whether a modal among it holds the keyboard.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Cover {
     pub float: Bounds,
+    pub input: Vec<Bounds>,
     pub modal: bool,
 }
 
@@ -163,7 +164,7 @@ impl State {
             reveal: None,
             problem: None,
             viewport: Viewport::default(),
-            float: float_bounds(std::iter::empty()),
+            float_input: Vec::new(),
         };
         Self { ui, out: BTreeMap::new() }
     }
@@ -192,7 +193,7 @@ impl State {
             UiAct::ShowSidebar { shown } => ui.sidebar = shown,
             UiAct::ToggleSidebar => ui.sidebar = !ui.sidebar,
             UiAct::ShowModal { modal } => ui.modal = modal,
-            UiAct::Float { surface, rect, modal } => drop(out.insert(surface, Out { rect, modal })),
+            UiAct::Float { surface, at, modal } => drop(out.insert(surface, Out { at, modal })),
             UiAct::Sink { surface } => drop(out.remove(&surface)),
             UiAct::Reveal { task, path } => {
                 ui.show_surface(Surface::Files);
@@ -204,10 +205,8 @@ impl State {
     }
 
     fn cover(&self) -> Cover {
-        Cover {
-            float: float_bounds(self.out.values().map(|out| out.rect)),
-            modal: self.out.values().any(|out| out.modal),
-        }
+        let (float, input) = float_cover(&self.out.values().map(|out| out.at).collect::<Vec<_>>());
+        Cover { float, input, modal: self.out.values().any(|out| out.modal) }
     }
 }
 
@@ -304,7 +303,7 @@ impl UiStore {
             let (before, covered) = (state.ui.clone(), state.cover());
             change(&mut state);
             let cover = state.cover();
-            state.ui.float = cover.float;
+            state.ui.float_input.clone_from(&cover.input);
             state.ui.version += 1;
             let placed = self.follower.get().map_or(Ok(()), |follower| follower(&covered, &cover));
             let after = state.ui.clone();
@@ -349,17 +348,21 @@ mod tests {
 
     #[test]
     fn the_float_layer_covers_every_surface_that_is_out_and_a_modal_one_holds_the_keyboard() {
-        let sidebar = Bounds { x: 8.0, y: 46.0, width: 286.0, height: 820.0 };
-        let popover = Bounds { x: 400.0, y: 100.0, width: 200.0, height: 100.0 };
+        let rect = |x, y, width, height| Bounds { x, y, width, height };
+        let sidebar = Floated { input: rect(0.0, 38.0, 294.0, 828.0), drawn: rect(0.0, 22.0, 342.0, 866.0) };
+        let popover = Floated { input: rect(400.0, 100.0, 200.0, 100.0), drawn: rect(380.0, 90.0, 240.0, 140.0) };
         let mut state = State::starting(Prefs::default());
         let mut covered = |act| {
             state.apply(act);
             state.cover()
         };
-        let float = |surface: &str, rect, modal| UiAct::Float { surface: surface.into(), rect, modal };
-        let cover = |surfaces: &[Bounds], modal| Cover { float: float_bounds(surfaces.iter().copied()), modal };
+        let float = |surface: &str, at, modal| UiAct::Float { surface: surface.into(), at, modal };
+        let cover = |surfaces: &[Floated], modal| {
+            let (float, input) = float_cover(surfaces);
+            Cover { float, input, modal }
+        };
         assert_eq!(covered(float("sidebar", sidebar, false)), cover(&[sidebar], false));
-        assert_eq!(covered(float("modal", popover, true)), cover(&[sidebar, popover], true));
+        assert_eq!(covered(float("modal", popover, true)), cover(&[popover, sidebar], true));
         assert_eq!(covered(UiAct::Sink { surface: "modal".into() }), cover(&[sidebar], false));
         assert_eq!(covered(UiAct::Sink { surface: "sidebar".into() }), cover(&[], false));
     }

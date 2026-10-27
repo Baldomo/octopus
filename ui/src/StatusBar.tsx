@@ -1,5 +1,5 @@
 import { Show } from "solid-js";
-import { openView, serverView, ui } from "./state";
+import { openView, serverLabel, serverView, ui } from "./state";
 
 export function StatusBar() {
   return (
@@ -13,7 +13,7 @@ export function StatusBar() {
                 <Show when={server()?.reachable} fallback={<span>○</span>}>
                   <span class="live">●</span>
                 </Show>{" "}
-                {open().at.server} · {server()?.reachable ? `${server()?.rtt_ms ?? "–"}ms` : "unreachable"}
+                {serverLabel(open().at.server)} · {server()?.reachable ? `${server()?.rtt_ms ?? "–"}ms` : "unreachable"}
               </span>
               <span>{open().task.panels.length} pty</span>
               <span>⎇ {open().task.branch ?? "root checkout"}</span>

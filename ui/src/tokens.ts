@@ -1,13 +1,37 @@
 /** Values from DESIGN.html, read back from the stylesheet it compiles into. */
 
+import { createSignal } from "solid-js";
 import type { Swatch } from "./generated";
+
+export type Scheme = "light" | "dark";
+
+const darkAppearance = matchMedia("(prefers-color-scheme: dark)");
+const schemeNow = (): Scheme => (darkAppearance.matches ? "dark" : "light");
+/** The OS appearance every color token resolves against, tracked live. */
+const [scheme, setScheme] = createSignal<Scheme>(schemeNow());
+darkAppearance.addEventListener("change", () => setScheme(schemeNow()));
+export { scheme };
 
 export const swatchColor = (swatch: Swatch) => `var(--ws-${swatch.hue}-${swatch.tone})`;
 
 export const token = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-/** A computed style of an element nested under the given class chain, e.g. `["code-ed", "ln"]`. */
-export function styleOf(classes: string[], property: "color" | "lineHeight" | "paddingTop"): string {
+/** Resolves color tokens in the given scheme, each as `#rrggbb[aa]`. */
+export const colors = (scheme: Scheme) => (name: string) => resolve(name, scheme);
+
+function resolve(name: string, scheme: Scheme): string {
+  const probe = document.createElement("div");
+  probe.style.display = "none";
+  probe.style.colorScheme = scheme;
+  probe.style.color = `var(${name})`;
+  document.body.append(probe);
+  const value = getComputedStyle(probe).color;
+  probe.remove();
+  return hex(value);
+}
+
+/** A computed style of an element nested under the given class chain, e.g. `["code-ed", "src"]`. */
+export function styleOf(classes: string[], property: "lineHeight" | "paddingTop"): string {
   const root = document.createElement("div");
   root.style.display = "none";
   let leaf = root;
@@ -24,7 +48,7 @@ export function styleOf(classes: string[], property: "color" | "lineHeight" | "p
 }
 
 /** Any CSS color as `#rrggbb` or `#rrggbbaa`, the spelling Monaco and xterm accept. */
-export function hex(color: string): string {
+function hex(color: string): string {
   const canvas = document.createElement("canvas").getContext("2d");
   if (canvas === null) throw new Error("no 2d canvas to resolve colors");
   canvas.fillStyle = color;

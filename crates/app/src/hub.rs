@@ -32,6 +32,8 @@ const FILES_BATCH: Duration = Duration::from_millis(100);
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 pub struct ServerView {
     pub name: String,
+    /// What the window calls the server: "local" for one on the local socket, else its name.
+    pub label: String,
     /// The QUIC endpoint as host:port; none for a server on the local socket.
     pub endpoint: Option<String>,
     pub reachable: bool,
@@ -78,6 +80,15 @@ struct State {
     files_changed: BTreeMap<TaskRef, BTreeSet<String>>,
 }
 
+impl State {
+    fn label<'a>(&self, server: &'a str) -> &'a str {
+        match self.links.get(server).map(|link| &link.address) {
+            Some(Address::Local { .. }) => "local",
+            _ => server,
+        }
+    }
+}
+
 fn now() -> i64 {
     let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).expect("the clock reads after 1970");
     i64::try_from(elapsed.as_millis()).expect("milliseconds since 1970 fit in i64")
@@ -93,14 +104,19 @@ pub struct Hub {
     files_changed: Notify,
 }
 
-pub fn failure(server: &str, error: CallError) -> String {
-    match error {
-        CallError::Server(error) => format!("{server}: {error}"),
-        CallError::Transport(error) => format!("{server}: {error:#}"),
-    }
-}
-
 impl Hub {
+    pub fn label(&self, server: &str) -> String {
+        lock(&self.state).label(server).to_string()
+    }
+
+    pub fn failure(&self, server: &str, error: CallError) -> String {
+        let server = self.label(server);
+        match error {
+            CallError::Server(error) => format!("{server}: {error}"),
+            CallError::Transport(error) => format!("{server}: {error:#}"),
+        }
+    }
+
     pub fn start(app: AppHandle, me: Identity, servers: Vec<Server>) -> Arc<Self> {
         let hub = Arc::new(Self {
             me,
@@ -285,33 +301,34 @@ impl Hub {
                 let Some(workspace) = cache.workspaces.values().find(|workspace| workspace.name == section) else {
                     continue;
                 };
+                let label = state.label(server);
                 if state.links.get(server).is_none_or(|link| link.connection.is_none()) {
                     return Err(format!(
-                        "{server} is unreachable, so {section} would change on only some of its servers"
+                        "{label} is unreachable, so {section} would change on only some of its servers"
                     ));
                 }
-                if let Some(refusal) = refuses(server, cache) {
+                if let Some(refusal) = refuses(label, cache) {
                     return Err(refusal);
                 }
-                ops.push((server.clone(), op(workspace.id.clone())));
+                ops.push((server.clone(), label.to_string(), op(workspace.id.clone())));
             }
             ops
         };
         let mut done = Vec::new();
-        for (server, op) in ops {
+        for (server, label, op) in ops {
             if let Err(error) = self.call(&server, &op).await {
                 return Err(match done.as_slice() {
                     [] => error,
                     done => format!("{error}; {} already {did}", done.join(", ")),
                 });
             }
-            done.push(server);
+            done.push(label);
         }
         Ok(())
     }
 
     pub async fn call<O: Op>(&self, server: &str, op: &O) -> Result<O::Ok, String> {
-        self.connection(server)?.call(op).await.map_err(|error| failure(server, error))
+        self.connection(server)?.call(op).await.map_err(|error| self.failure(server, error))
     }
 
     /// Whether the server runs on another machine, where its ports are reached through a tunnel.
@@ -320,11 +337,14 @@ impl Hub {
     }
 
     pub fn connection(&self, server: &str) -> Result<Arc<Connection>, String> {
-        match lock(&self.state).links.get(server) {
+        let state = lock(&self.state);
+        match state.links.get(server) {
             Some(Link { connection: Some(connection), .. }) => Ok(Arc::clone(connection)),
-            Some(Link { problem, .. }) => {
-                Err(format!("{server} is unreachable: {}", problem.as_deref().unwrap_or("connecting")))
-            }
+            Some(Link { problem, .. }) => Err(format!(
+                "{} is unreachable: {}",
+                state.label(server),
+                problem.as_deref().unwrap_or("connecting")
+            )),
             None => Err(format!("no server named {server} in the list")),
         }
     }
@@ -336,11 +356,13 @@ impl Hub {
     }
 
     pub fn servers(&self) -> Vec<ServerView> {
-        lock(&self.state)
+        let state = lock(&self.state);
+        state
             .links
             .iter()
             .map(|(name, link)| ServerView {
                 name: name.clone(),
+                label: state.label(name).to_string(),
                 endpoint: match &link.address {
                     Address::Local { .. } => None,
                     Address::Quic { endpoint, .. } => Some(endpoint.clone()),

@@ -6,7 +6,7 @@ import { dropHint, GroupHead } from "./Group";
 import { isMenuOpen, MenuHost, menuTrigger, onRightClick } from "./Menu";
 import { backend } from "./backend";
 import { isLive, isRenaming, RenameInput, startRename, TaskMenu, Toast } from "./SidebarControls";
-import { model, openTask, ui } from "./state";
+import { model, openTask, serverLabel, ui } from "./state";
 
 function BoardColumn(props: { section: string; column: Column }) {
   const target = dropTarget(props.section, props.column.state);
@@ -51,7 +51,7 @@ function BoardColumn(props: { section: string; column: Column }) {
                   </span>
                 </div>
                 <div class="meta">
-                  <span>{row.at.server}</span>
+                  <span>{serverLabel(row.at.server)}</span>
                   <span>{statusWord[row.glyph]}</span>
                   <Show when={row.state !== props.column.state && isLive(row.state)}>
                     <span>{row.state}</span>

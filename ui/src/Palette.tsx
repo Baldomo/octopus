@@ -3,7 +3,7 @@ import { backend } from "./backend";
 import { autofocus } from "./Dialog";
 import type { Match } from "./generated";
 import { commands as keyCommands, hint } from "./keys";
-import { model, openTask, openView, report, reveal, showModal } from "./state";
+import { model, openTask, openView, report, reveal, serverLabel, showModal } from "./state";
 
 type Item = { label: string; detail: string; run: () => void };
 
@@ -46,7 +46,7 @@ export function Palette() {
       .slice(0, RESULTS_PER_GROUP)
       .map((view) => ({
         label: view.task.title,
-        detail: `${view.section} · ${view.at.server}`,
+        detail: `${view.section} · ${serverLabel(view.at.server)}`,
         run: () => openTask(view.key),
       }));
     const files: Item[] =

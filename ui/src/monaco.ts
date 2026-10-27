@@ -1,33 +1,37 @@
 import * as monaco from "monaco-editor/editor/editor.api";
 import "monaco-editor/basic-languages/monaco.contribution";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
-import { hex, px, styleOf, token } from "./tokens";
+import { createEffect, createRoot, on } from "solid-js";
+import { colors, px, scheme, styleOf, token } from "./tokens";
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 
-const THEME = "octopus";
-
-monaco.editor.defineTheme(THEME, {
-  base: "vs-dark",
-  inherit: true,
-  rules: [],
-  colors: {
-    "editor.background": hex(token("--term")),
-    "editor.foreground": hex(styleOf(["code-ed"], "color")),
-    "editorLineNumber.foreground": hex(styleOf(["code-ed", "ln"], "color")),
-    "editorLineNumber.activeForeground": hex(token("--dim")),
-    "editorCursor.foreground": hex(token("--text")),
-    "editor.selectionBackground": hex(token("--line2")),
-    "editor.lineHighlightBackground": hex(token("--term")),
-    "editorWidget.background": hex(token("--raised")),
-    "editorWidget.border": hex(token("--line2")),
-    "scrollbarSlider.background": hex(token("--line2")),
-  },
-});
+const THEMES = { light: "octopus-light", dark: "octopus-dark" } as const;
+for (const each of ["light", "dark"] as const) {
+  const color = colors(each);
+  monaco.editor.defineTheme(THEMES[each], {
+    base: each === "dark" ? "vs-dark" : "vs",
+    inherit: true,
+    rules: [],
+    colors: {
+      "editor.background": color("--term"),
+      "editor.foreground": color("--term-text"),
+      "editorLineNumber.foreground": color("--gutter"),
+      "editorLineNumber.activeForeground": color("--dim"),
+      "editorCursor.foreground": color("--text"),
+      "editor.selectionBackground": color("--line2"),
+      "editor.lineHighlightBackground": color("--term"),
+      "editorWidget.background": color("--raised"),
+      "editorWidget.border": color("--line2"),
+      "scrollbarSlider.background": color("--line2"),
+    },
+  });
+}
+createRoot(() => createEffect(on(scheme, (current) => monaco.editor.setTheme(THEMES[current]), { defer: true })));
 
 export function createEditor(host: HTMLElement) {
   return monaco.editor.create(host, {
-    theme: THEME,
+    theme: THEMES[scheme()],
     model: null,
     fontFamily: token("--mono"),
     fontSize: px("--fs-mono"),

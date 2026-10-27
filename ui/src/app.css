@@ -157,13 +157,18 @@ body {
   left: 0;
   width: var(--s2);
 }
-.sidebar {
-  position: absolute;
-  top: calc(var(--chrome-h) + var(--s2));
-  bottom: var(--status-h);
-  left: var(--s2);
+/* Unpositioned: the sidebar measures its rect against the float layer. */
+.sidebar-column {
+  display: flex;
+  width: fit-content;
+  height: calc(100% - var(--chrome-h) - var(--status-h));
+  margin-top: var(--chrome-h);
+  padding: var(--s2) 0 0 var(--s2);
 }
-.sidebar.hidden {
+.sidebar {
+  position: relative;
+}
+.sidebar-column.hidden {
   pointer-events: none;
 }
 .sidebar .search {

@@ -20,11 +20,11 @@ import {
   Toast,
 } from "./SidebarControls";
 import {
-  isLocal,
   isOpen,
   model,
   openTask,
   servers,
+  serverLabel,
   serverView,
   showSidebar,
   showBoard,
@@ -182,7 +182,7 @@ function ServerName(props: { name: string }) {
       onContextMenu={onRightClick(id, () => host, menu)}
     >
       <span class="dot" classList={{ off: !server()?.reachable }} />
-      <Show when={isRenaming("server", props.name)} fallback={isLocal(props.name) ? "local" : props.name}>
+      <Show when={isRenaming("server", props.name)} fallback={serverLabel(props.name)}>
         <RenameInput value={props.name} apply={(name) => backend.serverRename(props.name, name)} />
       </Show>
     </span>
@@ -190,21 +190,22 @@ function ServerName(props: { name: string }) {
 }
 
 /**
- * The unpinned sidebar goes once the pointer leaves the place it settles in. Entering and leaving count only there:
- * the sidebar sliding in sweeps under a pointer resting at the window's edge, and a modal's scrim takes the pointer
- * without it leaving, so a pointer that was on the sidebar when a modal opened leaves it when the modal closes
- * somewhere off the sidebar. The sidebar stays while it holds the keyboard, and goes when it lets go if the pointer
- * left meanwhile.
+ * The unpinned sidebar goes once the pointer leaves its column, which runs from the window's left edge to the
+ * sidebar's right edge, so a pointer resting on the edge that revealed it keeps it open. A modal's scrim takes the
+ * pointer without it leaving, so a pointer that was in the column when a modal opened leaves it when the modal closes
+ * somewhere off the column. The sidebar stays while it holds the keyboard, and goes when it lets go if the pointer
+ * left meanwhile. Hiding forgets the pointer, as a column that stops taking it under a still pointer never sees it
+ * leave.
  */
-function autohide(aside: HTMLElement) {
+function autohide(column: HTMLElement) {
   let hovered = false;
   let movedTo: PointerEvent | null = null;
   const track = (event: PointerEvent) => (movedTo = event);
   document.addEventListener("pointermove", track);
   onCleanup(() => document.removeEventListener("pointermove", track));
-  const onAside = ({ clientX, clientY }: PointerEvent) => {
+  const inColumn = ({ clientX, clientY }: PointerEvent) => {
     const [x, y] = [clientX, clientY + FLOAT_TOP];
-    const { offsetLeft: left, offsetTop: top, offsetWidth: width, offsetHeight: height } = aside;
+    const { offsetLeft: left, offsetTop: top, offsetWidth: width, offsetHeight: height } = column;
     return x >= left && x < left + width && y >= top && y < top + height;
   };
   const leave = () => {
@@ -212,51 +213,58 @@ function autohide(aside: HTMLElement) {
     if (!ui.prefs.pinned) showSidebar(false);
   };
   const settled = () => ui.modal === null && !holdsKeyboard();
+  createEffect(() => {
+    if (!ui.sidebar) hovered = false;
+  });
   createEffect(
     on(
       settled,
       (free) => {
-        if (free && hovered && movedTo !== null && !onAside(movedTo)) leave();
+        if (free && hovered && movedTo !== null && !inColumn(movedTo)) leave();
         movedTo = null;
       },
       { defer: true },
     ),
   );
-  aside.addEventListener("pointerenter", (event) => (hovered ||= onAside(event)));
-  aside.addEventListener("pointerleave", () => hovered && settled() && leave());
+  column.addEventListener("pointerenter", () => (hovered = true));
+  column.addEventListener("pointerleave", () => hovered && settled() && leave());
 }
 
-export function Sidebar(props: { ref: (aside: HTMLElement) => void; shown: boolean }) {
+/** The sidebar takes the pointer in its whole column and draws in its own box and shadow. */
+export function Sidebar(props: { floats: (aside: HTMLElement, column: HTMLElement) => void; shown: boolean }) {
+  let column!: HTMLDivElement;
   return (
-    <aside
-      ref={(aside) => {
-        props.ref(aside);
-        autohide(aside);
+    <div
+      ref={(element) => {
+        column = element;
+        autohide(element);
       }}
-      class="sidebar"
+      class="sidebar-column"
       classList={{ hidden: !props.shown }}
     >
-      <div class="sb-head">
-        <div class="search" onClick={commands.search.run}>
-          <span>Search</span>
-          <kbd>{hint(commands.search)}</kbd>
+      <aside ref={(aside) => props.floats(aside, column)} class="sidebar" classList={{ hidden: !props.shown }}>
+        <div class="sb-head">
+          <div class="search" onClick={commands.search.run}>
+            <span>Search</span>
+            <kbd>{hint(commands.search)}</kbd>
+          </div>
+          <button class="icon" classList={{ on: ui.prefs.pinned }} title="pin" onClick={togglePin}>
+            ⇤
+          </button>
         </div>
-        <button class="icon" classList={{ on: ui.prefs.pinned }} title="pin" onClick={togglePin}>
-          ⇤
-        </button>
-      </div>
-      <div class="servers">
-        <For each={servers().map((server) => server.name)}>{(name) => <ServerName name={name} />}</For>
-        <button class="host add" title={commands.pairServer.label} onClick={commands.pairServer.run}>
-          +
-        </button>
-      </div>
-      <div class="groups">
-        <For each={model.lists.sections}>{(section) => <SectionGroups section={section} />}</For>
-        <AddWorkspace />
-      </div>
-      <MenuHost />
-      <Toast />
-    </aside>
+        <div class="servers">
+          <For each={servers().map((server) => server.name)}>{(name) => <ServerName name={name} />}</For>
+          <button class="host add" title={commands.pairServer.label} onClick={commands.pairServer.run}>
+            +
+          </button>
+        </div>
+        <div class="groups">
+          <For each={model.lists.sections}>{(section) => <SectionGroups section={section} />}</For>
+          <AddWorkspace />
+        </div>
+        <MenuHost />
+        <Toast />
+      </aside>
+    </div>
   );
 }

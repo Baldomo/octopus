@@ -18,7 +18,7 @@ use tokio::io::AsyncReadExt;
 use ts_rs::TS;
 
 use crate::browser::{Browsers, Go, OnScreen};
-use crate::hub::{Hub, Model, ServerView, failure};
+use crate::hub::{Hub, Model, ServerView};
 use crate::task_lists::{TaskRef, auto_swatch};
 use crate::terminal::Terminals;
 use crate::ui::{Ui, UiAct, UiStore};
@@ -174,7 +174,7 @@ pub async fn term_attach(
     output: Channel<InvokeResponseBody>,
 ) -> Result<u64, String> {
     let connection = hub.connection(&at.server)?;
-    terminals.attach(&connection, pty, output).await.map_err(|error| failure(&at.server, error))
+    terminals.attach(&connection, pty, output).await.map_err(|error| hub.failure(&at.server, error))
 }
 
 #[tauri::command]
@@ -217,7 +217,7 @@ pub async fn file_list(hub: Hubbed<'_>, at: TaskRef, path: String) -> Result<Vec
 pub async fn file_read(hub: Hubbed<'_>, at: TaskRef, path: String) -> Result<String, String> {
     let connection = hub.connection(&at.server)?;
     let stream = Stream::File { task: at.task, path: path.clone() };
-    let mut opened = connection.open_data_stream(&stream).await.map_err(|error| failure(&at.server, error))?;
+    let mut opened = connection.open_data_stream(&stream).await.map_err(|error| hub.failure(&at.server, error))?;
     let mut bytes = Vec::new();
     opened.read_to_end(&mut bytes).await.map_err(|error| format!("read {path}: {error}"))?;
     String::from_utf8(bytes).map_err(|_| format!("{path} is not UTF-8 text"))

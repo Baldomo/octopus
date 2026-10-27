@@ -2548,6 +2548,7 @@ dependencies = [
  "gtk",
  "objc2",
  "objc2-app-kit",
+ "objc2-core-foundation",
  "octopus-client",
  "octopus-proto",
  "serde",
