@@ -1,0 +1,7 @@
+{
+  "identifier": "haptics",
+  "description": "A held task ticks as it lifts, and again over each state it can drop on.",
+  "webviews": ["main"],
+  "platforms": ["iOS", "android"],
+  "permissions": ["haptics:allow-impact-feedback", "haptics:allow-selection-feedback"]
+}

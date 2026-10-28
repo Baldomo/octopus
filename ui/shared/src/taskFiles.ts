@@ -15,6 +15,23 @@ export const join = (dir: string, name: string) => (dir === "." ? name : `${dir}
 const parentOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ".");
 export const nameOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 
+const dirsOf = (path: string) => path.split("/").slice(0, -1);
+const tail = (dirs: string[], depth: number) => dirs.slice(-depth).join("/");
+
+/** For each open path whose name another tab shares, the fewest trailing directories that tell it apart. */
+export function tabHints(tabs: string[]) {
+  const hints: Record<string, string> = {};
+  for (const path of tabs) {
+    const rivals = tabs.filter((tab) => tab !== path && nameOf(tab) === nameOf(path)).map(dirsOf);
+    if (rivals.length === 0) continue;
+    const dirs = dirsOf(path);
+    let depth = 1;
+    while (depth < dirs.length && rivals.some((rival) => tail(rival, depth) === tail(dirs, depth))) depth++;
+    hints[path] = dirs.length === 0 ? "." : tail(dirs, depth);
+  }
+  return hints;
+}
+
 type Opened = { model: Model; saved: number; view: ViewState };
 
 type Tree = {

@@ -2,6 +2,7 @@ import { render } from "solid-js/web";
 import "virtual:design.css";
 import "./app.css";
 import { backend, events } from "@octopus/shared/backend.ts";
+import inter from "@fontsource-variable/inter/files/inter-latin-wght-normal.woff2?url";
 import { loadFonts } from "@octopus/shared/fonts.ts";
 import { applyBoot, applyModel, applyUi, report, setServers } from "@octopus/shared/state.ts";
 import { applyFilesChanged } from "@octopus/shared/taskFiles.ts";
@@ -12,7 +13,7 @@ import { Docked, Floating } from "./layers";
 
 async function start() {
   document.documentElement.dataset.layer = layer;
-  await loadFonts();
+  await loadFonts(inter);
   bindKeys();
   await Promise.all([
     events.model(applyModel),

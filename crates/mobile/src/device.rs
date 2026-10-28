@@ -23,17 +23,23 @@ pub fn name(app: &AppHandle) -> anyhow::Result<String> {
     os::name(app)
 }
 
-/// How far the status bar and the display's cutout reach over the page, in CSS pixels.
+/// How far the status bar, the display's cutout and the navigation bar reach over the page, in CSS pixels.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Insets {
     pub top: f64,
     pub left: f64,
     pub right: f64,
+    pub bottom: f64,
 }
 
 /// The page's insets where the webview does not report them as its safe area, as on Android.
 pub fn insets(app: &AppHandle) -> anyhow::Result<Option<Insets>> {
     os::insets(app)
+}
+
+/// Opens the OS's settings for this app, where the user grants what they denied it.
+pub fn settings(app: &AppHandle) -> anyhow::Result<()> {
+    os::settings(app)
 }
 
 /// Whether the phone may record, asking the user the first time and waiting for the answer.
@@ -54,12 +60,15 @@ mod os {
     use security_framework::passwords::{PasswordOptions, generic_password, set_generic_password_options};
     use tauri::AppHandle;
 
-    const SERVICE: &str = "com.zabealbe.octopus";
     const ACCOUNT: &str = "device-key";
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
-    pub fn kept(_: &AppHandle) -> anyhow::Result<Option<Vec<u8>>> {
-        match generic_password(PasswordOptions::new_generic_password(SERVICE, ACCOUNT)) {
+    fn device_key(app: &AppHandle) -> PasswordOptions {
+        PasswordOptions::new_generic_password(&app.config().identifier, ACCOUNT)
+    }
+
+    pub fn kept(app: &AppHandle) -> anyhow::Result<Option<Vec<u8>>> {
+        match generic_password(device_key(app)) {
             Ok(pkcs8) => Ok(Some(pkcs8)),
             Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(None),
             Err(error) => Err(anyhow!("read the device key from the Keychain: {error}")),
@@ -67,8 +76,8 @@ mod os {
     }
 
     /// Readable once the phone has been unlocked since it started, and never restored onto another device.
-    pub fn keep(_: &AppHandle, pkcs8: &[u8]) -> anyhow::Result<()> {
-        let mut options = PasswordOptions::new_generic_password(SERVICE, ACCOUNT);
+    pub fn keep(app: &AppHandle, pkcs8: &[u8]) -> anyhow::Result<()> {
+        let mut options = device_key(app);
         let protection = Some(ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly);
         options.set_access_control(SecAccessControl::create_with_protection(protection, 0)?);
         set_generic_password_options(pkcs8, options).context("write the device key to the Keychain")
@@ -77,6 +86,27 @@ mod os {
     pub fn name(_: &AppHandle) -> anyhow::Result<String> {
         let main = MainThreadMarker::new().context("UIKit reports the device's name on the main thread")?;
         Ok(UIDevice::currentDevice(main).name().to_string())
+    }
+
+    #[allow(unsafe_code, reason = "UIKit's settings URL is an extern static and opening a URL has no safe binding")]
+    pub fn settings(app: &AppHandle) -> anyhow::Result<()> {
+        use objc2_foundation::{NSDictionary, NSURL};
+        use objc2_ui_kit::{UIApplication, UIApplicationOpenSettingsURLString};
+
+        app.run_on_main_thread(|| {
+            let main = MainThreadMarker::new().expect("the main thread runs this");
+            // SAFETY: UIKit keeps the settings URL string for the app's life, and the options are the empty dictionary.
+            unsafe {
+                let url = NSURL::URLWithString(UIApplicationOpenSettingsURLString)
+                    .expect("UIKit's settings URL string is a URL");
+                UIApplication::sharedApplication(main).openURL_options_completionHandler(
+                    &url,
+                    &NSDictionary::new(),
+                    None,
+                );
+            }
+        })
+        .context("open the settings on the main thread")
     }
 
     /// WebKit reports the safe area to CSS itself.
@@ -142,7 +172,7 @@ mod os {
     pub fn plugin() -> TauriPlugin<Wry> {
         tauri::plugin::Builder::new("device")
             .setup(|app, api| {
-                app.manage(Keeper(api.register_android_plugin("com.zabealbe.octopus", "DevicePlugin")?));
+                app.manage(Keeper(api.register_android_plugin("com.noi.octopus", "DevicePlugin")?));
                 Ok(())
             })
             .build()
@@ -166,6 +196,11 @@ mod os {
     #[derive(Deserialize)]
     struct Answered {
         granted: bool,
+    }
+
+    pub fn settings(app: &AppHandle) -> anyhow::Result<()> {
+        keeper(app).run_mobile_plugin::<IgnoredAny>("settings", ()).context("open the app's settings")?;
+        Ok(())
     }
 
     pub fn microphone(app: &AppHandle) -> anyhow::Result<bool> {

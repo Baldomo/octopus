@@ -1,20 +1,27 @@
-import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import { AGENT_PANEL, type Panel, type PtyId, type TaskRef, type TaskView } from "@octopus/shared/generated.ts";
-import { Glyph } from "@octopus/shared/Glyph.tsx";
-import { act, me, model, scale, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
-import { Missing } from "@octopus/shared/Terminals.tsx";
+import { ago, clock, ticking } from "@octopus/shared/SidebarControls.tsx";
+import { act, me, model, report, scale, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
 import { terminalSession } from "@octopus/shared/terminalSession.ts";
-import { px } from "@octopus/shared/tokens.ts";
-import { micDenied, openKey, openTaskSheet, showTasks } from "./screen";
+import { colors, scheme } from "@octopus/shared/tokens.ts";
+import { Icon } from "./Icon";
+import { back, micDenied, openSheet } from "./nav";
+import { Circle, Gap, Glyph, Id, Para, sectionColor, ServerDot, Slot } from "./parts";
+import { phone } from "./phone";
+import { TERMINAL_FONT } from "./symbols";
+import { notify } from "./Toast";
 
 /** A finger that moves further than this is dragging, not tapping. */
 const TAP_SLOP_PX = 8;
-/** The corner map's width; its height follows the terminal's shape. */
-const MAP_PX = 72;
 /** The keyboard's text field always holds this, so its delete has something to delete even when the line is empty. */
-const SENTINEL = " ";
+const SENTINEL = " ";
 const ESC = "\x1b";
+/** The terminal sets 13pt Meslo on 20pt rows. */
+const FONT_PX = 13;
+const ROW_PX = 20;
+/** How long the server keeps a dropped holder's lock, which the phone counts down while it reconnects. */
+const LOCK_KEPT_MS = 10_000;
 
 /** A letter or one of `@[\]^_` as its control character; anything else as itself. */
 const control = (char: string) =>
@@ -27,8 +34,6 @@ const ARROWS: [string, string][] = [
   ["→", "C"],
 ];
 
-const reachable = (at: TaskRef) => serverView(at.server)?.reachable === true;
-
 type Size = { width: number; height: number };
 
 function observeSize(element: HTMLElement, set: (size: Size) => void) {
@@ -37,25 +42,39 @@ function observeSize(element: HTMLElement, set: (size: Size) => void) {
   onCleanup(() => observer.disconnect());
 }
 
+/** What the phone knows of the task's server: reachable, reconnecting while the lock it held is kept, or gone. */
+type Reach = { is: "reachable" } | { is: "reconnecting"; left: number } | { is: "unreachable"; since: number };
+
+function reachOf(at: TaskRef, panel: Panel | undefined, now: number): Reach {
+  const server = serverView(at.server);
+  if (server === undefined || server.reachable) return { is: "reachable" };
+  const left = LOCK_KEPT_MS - (now - server.since);
+  if (panel?.lock_holder === me() && left > 0) return { is: "reconnecting", left };
+  return { is: "unreachable", since: server.since };
+}
+
 /**
- * One terminal panel: the holder types into it and sizes it to the pane; everyone else sees it at the holder's size,
- * cropped to the pane, panned by dragging, with a map of the whole terminal in the corner.
+ * One terminal panel. The holder types into it through the keyboard and the key bar and sizes it to the pane; everyone
+ * else sees it at the holder's size, cropped to the pane at its last line, panned by dragging.
  */
-function PhoneTerm(props: { at: TaskRef; panel: Panel; visible: boolean; agent: boolean }) {
-  let pane!: HTMLDivElement;
+function PhoneTerm(props: { at: TaskRef; panel: Panel; visible: boolean; reach: Reach; ended: boolean }) {
   let host!: HTMLDivElement;
+  let pane!: HTMLDivElement;
   let sink!: HTMLTextAreaElement;
   const session = terminalSession({ at: props.at, panel: () => props.panel, shown: () => props.visible });
   const { xterm, mine } = session;
   xterm.options.disableStdin = true;
-  const live = () => reachable(props.at);
-  /** The part of the pane the terminal shows through, and the terminal's whole screen. */
+  xterm.options.fontFamily = TERMINAL_FONT;
+  const live = () => props.reach.is === "reachable";
   const [view, setView] = createSignal<Size>({ width: 0, height: 0 });
   const [screen, setScreen] = createSignal<Size>({ width: 0, height: 0 });
   const [pan, setPan] = createSignal({ x: 0, y: 0 });
   const [ctrl, setCtrl] = createSignal(false);
-  const [compose, setCompose] = createSignal("");
   const cropped = () => !mine() && (screen().width > view().width || screen().height > view().height);
+  const most = () => ({
+    x: Math.max(screen().width - view().width, 0),
+    y: Math.max(screen().height - view().height, 0),
+  });
 
   /** Text the keyboard inserts, the first character as its control character while Ctrl is latched. */
   const typed = (text: string) => {
@@ -66,24 +85,12 @@ function PhoneTerm(props: { at: TaskRef; panel: Panel; visible: boolean; agent: 
     }
     session.input(text.replaceAll("\n", "\r"));
   };
-  const flush = () => {
-    if (compose() !== "") session.input(compose());
-    setCompose("");
-  };
-  /** A key of the key bar writes the compose line's text first. */
-  const key = (keys: string) => {
-    flush();
-    session.input(keys);
-  };
   const arrow = (code: string) => `${ESC}${xterm.modes.applicationCursorKeysMode ? "O" : "["}${code}`;
-  /** Ctrl writes the compose line's text like every key, and its next character skips the line: the keyboard types
-   * into the terminal while it is latched. */
   const latch = () => {
-    if (ctrl()) return setCtrl(false);
-    flush();
-    setCtrl(true);
-    sink.focus();
+    setCtrl(!ctrl());
+    if (ctrl()) sink.focus();
   };
+  const toggleKeyboard = () => (document.activeElement === sink ? sink.blur() : sink.focus());
 
   let sent = SENTINEL;
   let composing = false;
@@ -124,11 +131,26 @@ function PhoneTerm(props: { at: TaskRef; panel: Panel; visible: boolean; agent: 
     last = { x: touch.clientX, y: touch.clientY };
     travelled += Math.hypot(dx, dy);
     if (!cropped()) return scrollBy(-dy);
-    const most = { x: screen().width - view().width, y: screen().height - view().height };
     const wanted = { x: pan().x - dx, y: pan().y - dy };
-    const y = Math.min(Math.max(wanted.y, 0), Math.max(most.y, 0));
-    setPan({ x: Math.min(Math.max(wanted.x, 0), Math.max(most.x, 0)), y });
+    const y = Math.min(Math.max(wanted.y, 0), most().y);
+    setPan({ x: Math.min(Math.max(wanted.x, 0), most().x), y });
     scrollBy(wanted.y - y);
+  };
+
+  /** Rows of 20pt at 13pt: the line height that turns the font's own cell into a 20pt one, measured once drawn. */
+  /** xterm measures a terminal that opened hidden only once it sees it on screen, so this measures it first. */
+  const fitRows = () => {
+    const core = (
+      xterm as unknown as {
+        _core: {
+          _charSizeService: { measure: () => void };
+          _renderService: { dimensions: { css: { cell: { height: number } } } };
+        };
+      }
+    )._core;
+    core._charSizeService.measure();
+    const natural = core._renderService.dimensions.css.cell.height / xterm.options.lineHeight!;
+    if (natural > 0) xterm.options.lineHeight = (ROW_PX * scale(ui.prefs)) / natural;
   };
 
   onMount(() => {
@@ -141,63 +163,76 @@ function PhoneTerm(props: { at: TaskRef; panel: Panel; visible: boolean; agent: 
     pane.addEventListener("touchmove", drag, { passive: false });
     resetSink();
   });
+  /** A terminal mounted hidden measures no cell, so its rows fit again each time it shows. */
   createEffect(() => {
-    xterm.options.fontSize = px("--fs-mono") * scale(ui.prefs);
-    if (session.shown() && mine()) session.fit();
+    session.shown();
+    xterm.options.fontSize = FONT_PX * scale(ui.prefs);
+    xterm.options.lineHeight = 1;
+    requestAnimationFrame(() => {
+      fitRows();
+      if (session.shown() && mine()) session.fit();
+    });
+  });
+  /** The terminal draws on the screen's one surface, its plain text dim while another client holds it. */
+  createEffect(() => {
+    const color = colors(scheme());
+    xterm.options.theme = {
+      ...xterm.options.theme,
+      background: color("--bg"),
+      foreground: color(mine() ? "--term-text" : "--dim"),
+      cursor: color("--text"),
+    };
   });
   createEffect(() => {
     if (xterm.element) xterm.element.style.transform = `translate(${-pan().x}px, ${-pan().y}px)`;
   });
-  createEffect(() => {
-    if (!cropped()) setPan({ x: 0, y: 0 });
-  });
+  /** A cropped terminal opens at its last line. */
+  createEffect(() => setPan(cropped() ? { x: 0, y: most().y } : { x: 0, y: 0 }));
 
-  const map = () => {
+  /** Two 3pt thumbs, one per axis the crop scrolls, sized and placed as the part on screen. */
+  const thumbs = () => {
     const whole = screen();
-    const ratio = MAP_PX / whole.width;
     const seen = view();
+    const across = Math.min(seen.width / whole.width, 1);
+    const down = Math.min(seen.height / whole.height, 1);
     return {
-      box: { width: `${MAP_PX}px`, height: `${whole.height * ratio}px` },
-      seen: {
-        left: `${pan().x * ratio}px`,
-        top: `${pan().y * ratio}px`,
-        width: `${Math.min(seen.width, whole.width) * ratio}px`,
-        height: `${Math.min(seen.height, whole.height) * ratio}px`,
+      x: across < 1 && {
+        left: `calc(var(--rail) + ${(pan().x / whole.width) * seen.width}px / var(--zoom, 1))`,
+        width: `calc(${across * seen.width}px / var(--zoom, 1))`,
+      },
+      y: down < 1 && {
+        top: `calc(var(--g2) + ${(pan().y / whole.height) * seen.height}px / var(--zoom, 1))`,
+        height: `calc(${down * seen.height}px / var(--zoom, 1))`,
       },
     };
   };
 
   return (
-    <div class="mterm" style={{ display: props.visible ? "" : "none" }}>
-      <div class="zoom-reset" classList={{ stale: !live() }}>
-        <div
-          ref={pane}
-          class="term-pane"
-          onTouchStart={(event) => {
-            const touch = event.touches[0];
-            last = touch === undefined ? null : { x: touch.clientX, y: touch.clientY };
-            travelled = 0;
-          }}
-          onTouchEnd={(event) => {
-            last = null;
-            if (travelled >= TAP_SLOP_PX || !mine() || !live()) return;
-            // The click a tap synthesizes would land on the pane and take the focus back from the keyboard.
-            event.preventDefault();
-            sink.focus();
-          }}
-        >
+    <div class="tterm fill" style={{ display: props.visible ? "" : "none" }}>
+      <div
+        ref={pane}
+        class="term"
+        classList={{ held: !mine(), stale: !live() }}
+        onTouchStart={(event) => {
+          const touch = event.touches[0];
+          last = touch === undefined ? null : { x: touch.clientX, y: touch.clientY };
+          travelled = 0;
+        }}
+        onTouchEnd={(event) => {
+          last = null;
+          if (travelled >= TAP_SLOP_PX || !mine() || !live()) return;
+          // The click a tap synthesizes would land on the pane and take the focus back from the keyboard.
+          event.preventDefault();
+          sink.focus();
+        }}
+      >
+        <div class="zoom-reset">
           <div ref={host} class="term-host" />
-          <Show when={cropped()}>
-            <div class="map">
-              <div class="map-whole" style={map().box}>
-                <i style={map().seen} />
-              </div>
-              <span>
-                {props.panel.cols}×{props.panel.rows}
-              </span>
-            </div>
-          </Show>
         </div>
+        <Show when={cropped()}>
+          <Show when={thumbs().x}>{(x) => <i class="thumb across" style={x()} />}</Show>
+          <Show when={thumbs().y}>{(y) => <i class="thumb down" style={y()} />}</Show>
+        </Show>
       </div>
       <textarea
         ref={sink}
@@ -219,73 +254,143 @@ function PhoneTerm(props: { at: TaskRef; panel: Panel; visible: boolean; agent: 
           session.input("\r");
         }}
       />
-      <div class="foot">
-        <Show when={live()} fallback={<div class="foot-line">reconnecting to {serverLabel(props.at.server)}…</div>}>
-          <Show
-            when={mine()}
-            fallback={
-              <Show when={props.panel.running && props.panel.lock_holder !== null}>
-                <div class="foot-line readonly">
-                  <span>read-only · held by {props.panel.lock_holder}</span>
-                  <span class="spacer" />
-                  <button class="btn live" onClick={session.take}>
-                    Take over
-                  </button>
-                </div>
-              </Show>
-            }
-          >
-            <form
-              class="compose"
-              onSubmit={(event) => {
-                event.preventDefault();
-                session.input(`${compose()}\r`);
-                setCompose("");
-              }}
-            >
-              <input
-                value={compose()}
-                placeholder={props.agent ? "Message the agent" : "Type a command"}
-                autocapitalize="off"
-                autocorrect="off"
-                spellcheck={false}
-                enterkeyhint="send"
-                onFocus={() => setCtrl(false)}
-                onInput={(event) => setCompose(event.currentTarget.value)}
-              />
-              <button type="submit" class="send" aria-label="Send">
-                ↵
-              </button>
-            </form>
+      <Show when={!props.ended}>
+        <Switch>
+          <Match when={props.reach.is === "unreachable" && props.reach}>
+            {(gone) => (
+              <div class="lockbar">
+                <Slot>
+                  <Icon name="warn" />
+                </Slot>
+                <span class="name">
+                  {serverLabel(props.at.server)} unreachable since {clock(gone().since, "h23")}
+                </span>
+                <Id>retrying</Id>
+              </div>
+            )}
+          </Match>
+          <Match when={props.reach.is === "reconnecting" && props.reach}>
+            {(kept) => (
+              <div class="lockbar">
+                <Slot>
+                  <ServerDot server={undefined} reconnecting />
+                </Slot>
+                <span class="name">reconnecting</span>
+                <Id>lock kept {Math.ceil(kept().left / 1000)} s</Id>
+              </div>
+            )}
+          </Match>
+          <Match when={mine()}>
             <div class="keys" onPointerDown={(event) => event.preventDefault()}>
-              <button onClick={() => key(ESC)}>Esc</button>
-              <button onClick={() => key("\t")}>Tab</button>
-              <button classList={{ on: ctrl() }} onClick={latch}>
-                Ctrl
+              <button class="key" onClick={() => session.input(ESC)}>
+                esc
               </button>
-              <For each={ARROWS}>{([label, code]) => <button onClick={() => key(arrow(code))}>{label}</button>}</For>
-              <button onClick={() => key(`${ESC}\r`)}>⇧↵</button>
+              <button class="key" onClick={() => session.input("\t")}>
+                tab
+              </button>
+              <button class="key" classList={{ on: ctrl() }} onClick={latch}>
+                ctrl
+              </button>
+              <For each={ARROWS}>
+                {([label, code]) => (
+                  <button class="key" onClick={() => session.input(arrow(code))}>
+                    {label}
+                  </button>
+                )}
+              </For>
+              <button class="key" aria-label="Keyboard" onClick={toggleKeyboard}>
+                <Icon name="kbd" />
+              </button>
             </div>
-          </Show>
-        </Show>
-      </div>
+          </Match>
+          <Match when={props.panel.running && props.panel.lock_holder !== null}>
+            <div class="lockbar">
+              <span class="name">read-only · held by {props.panel.lock_holder}</span>
+              <button class="btn" onClick={session.take}>
+                Take over
+              </button>
+            </div>
+          </Match>
+        </Switch>
+      </Show>
     </div>
   );
 }
 
-/**
- * "✎ you" while this phone holds the selected terminal, "✎ <client>" while another does, then whether it listens, and
- * whether this phone's microphone is denied to it.
- */
-function lockMark(panel: Panel) {
-  const mine = panel.lock_holder === me();
-  const holder = panel.lock_holder === null ? "" : `✎ ${mine ? "you" : panel.lock_holder}`;
-  const listening = panel.listening ? " · listening" : "";
-  const denied = panel.listening && mine && micDenied() ? " · mic denied" : "";
-  return holder + listening + denied;
+/** The selected terminal's holder and size, after a coral microphone while it hears this phone, or a red "denied". */
+function LockLabel(props: { panel: Panel }) {
+  const mine = () => props.panel.lock_holder === me();
+  const hearing = () => mine() && props.panel.listening;
+  return (
+    <span class="lock">
+      <Show when={props.panel.running} fallback="exited">
+        <Show when={hearing() && micDenied()}>
+          <span class="id denied" role="button" onClick={() => phone.settings().catch(notify)}>
+            <Icon name="micoff" />
+            denied
+          </span>
+          ·{" "}
+        </Show>
+        <Show when={hearing() && !micDenied()}>
+          <span class="id live">
+            <Icon name="mic" />
+          </span>
+        </Show>
+        <Show when={props.panel.lock_holder !== null}>
+          <span class="name">{props.panel.lock_holder}</span>· {props.panel.cols}×{props.panel.rows}
+        </Show>
+      </Show>
+    </span>
+  );
+}
+
+/** What the agent panel says when its harness is missing on the server, with the install command to copy. */
+function Missing(props: { open: TaskView }) {
+  const install = () => {
+    const agent = props.open.task.agent;
+    return agent.kind === "harness_not_installed" ? agent.install : null;
+  };
+  const server = () => serverLabel(props.open.at.server);
+  return (
+    <div class="missing fill">
+      <Gap n={4} />
+      <Show
+        when={install()}
+        fallback={
+          <Para>
+            {server()} has no harness <b>{props.open.task.harness}</b>.
+          </Para>
+        }
+      >
+        {(command) => (
+          <>
+            <Para>
+              <b>{props.open.task.harness}</b> is not installed on {server()}.
+            </Para>
+            <Gap n={2} />
+            <div
+              class="cmd wrap"
+              role="button"
+              onClick={() =>
+                navigator.clipboard.writeText(command()).then(() => notify("Copied the install command"), report)
+              }
+            >
+              <span class="name">{command()}</span>
+              <Slot>
+                <Icon name="copy" />
+              </Slot>
+            </div>
+            <Gap n={2} />
+            <Para>The agent starts the next time this task opens.</Para>
+          </>
+        )}
+      </Show>
+    </div>
+  );
 }
 
 function TaskScreen(props: { open: TaskView }) {
+  const now = ticking();
   const [chosen, setChosen] = createSignal<PtyId | null>(null);
   const panels = () => props.open.task.panels;
   const agent = () => panels().find((panel) => panel.name === AGENT_PANEL);
@@ -293,53 +398,110 @@ function TaskScreen(props: { open: TaskView }) {
   const selected = () => shells().find((panel) => panel.id === chosen()) ?? agent();
   const agentOn = () => selected() === agent();
   const missing = () => ["harness_unknown", "harness_not_installed"].includes(props.open.task.agent.kind);
-  const live = () => reachable(props.open.at);
+  const reach = () => reachOf(props.open.at, selected(), now());
+  const live = () => reach().is === "reachable";
+  const server = () => serverView(props.open.at.server);
+  const ended = () => !props.open.live;
   return (
-    <main class="task-screen">
-      <header class="task-head">
-        <button class="back" aria-label="Tasks" onClick={showTasks}>
-          ‹
-        </button>
-        <div class="task-title">
-          <b>{props.open.task.title}</b>
-          <span>
-            {props.open.section} · {serverLabel(props.open.at.server)}
+    <>
+      <div class="bar">
+        <Circle icon="back" label="Tasks" tap={back} />
+        <div class="ttl" style={{ "--ws": sectionColor(props.open.section) }}>
+          <span class="crumb">
+            <i />
+            <For each={props.open.crumbs.slice(0, -1)}>
+              {(crumb, nth) => (
+                <>
+                  <Show when={nth() > 0}>
+                    <span class="sep">/</span>
+                  </Show>
+                  {crumb}
+                </>
+              )}
+            </For>
           </span>
+          <b class="name">{props.open.task.title}</b>
         </div>
-        <button class="pill" classList={{ ended: !props.open.live }} onClick={() => openTaskSheet(props.open.key)}>
+        <Circle icon="more" label="Task menu" tap={() => openSheet({ is: "task", key: props.open.key, open: true })} />
+      </div>
+      <div class="chips">
+        <span
+          class="chip"
+          classList={{ state: props.open.live }}
+          role="button"
+          onClick={() =>
+            props.open.live
+              ? act(backend.taskMove(props.open.at, props.open.next))
+              : openSheet({ is: "reopen", key: props.open.key })
+          }
+        >
           {props.open.task.state}
-        </button>
-      </header>
-      <div class="tabs">
-        <button class="tab agent" classList={{ on: agentOn() }} onClick={() => setChosen(null)}>
-          <Glyph glyph={props.open.glyph} />
-          {props.open.task.harness}
-          <span class="kind">agent</span>
-        </button>
-        <For each={shells()}>
-          {(panel) => (
-            <button class="tab" classList={{ on: selected()?.id === panel.id }} onClick={() => setChosen(panel.id)}>
-              {panel.name}
-              <span
-                class="close"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (live()) act(backend.termClose(props.open.at, panel.id));
-                }}
-              >
-                ×
-              </span>
-            </button>
+        </span>
+        <span class="chip">
+          <ServerDot server={server()} reconnecting={reach().is === "reconnecting"} />
+          {serverLabel(props.open.at.server)}
+          <Id>
+            {
+              { reachable: `${server()?.rtt_ms ?? "–"} ms`, reconnecting: "reconnecting", unreachable: "unreachable" }[
+                reach().is
+              ]
+            }
+          </Id>
+        </span>
+        <Show when={props.open.task.branch}>
+          {(branch) => (
+            <span class="chip">
+              <Icon name="branch" />
+              <span class="mono">{branch()}</span>
+            </span>
           )}
-        </For>
-        <button class="tab plus" onClick={() => live() && act(backend.termOpen(props.open.at).then(setChosen))}>
-          +
-        </button>
-        <span class="spacer" />
-        <Show when={selected()}>{(panel) => <span class="lock">{lockMark(panel())}</span>}</Show>
+        </Show>
+        <span class="chip">{props.open.task.harness}</span>
+      </div>
+      <div class="tabs">
+        <div class="tabrow">
+          <span class="tab" classList={{ on: agentOn() }} role="button" onClick={() => setChosen(null)}>
+            <Glyph status={props.open.glyph} />
+            {props.open.task.harness}
+          </span>
+          <For each={shells()}>
+            {(panel) => (
+              <span
+                class="tab"
+                classList={{ on: selected()?.id === panel.id }}
+                role="button"
+                onClick={() => setChosen(panel.id)}
+              >
+                {panel.name}
+                <span
+                  class="x"
+                  role="button"
+                  aria-label={`Close ${panel.name}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (live()) act(backend.termClose(props.open.at, panel.id));
+                  }}
+                >
+                  <Icon name="x" />
+                </span>
+              </span>
+            )}
+          </For>
+          <Show when={!ended()}>
+            <span
+              class="tab plus"
+              role="button"
+              aria-label="New shell"
+              onClick={() => live() && act(backend.termOpen(props.open.at).then(setChosen))}
+            >
+              <Icon name="plus" />
+            </span>
+          </Show>
+        </div>
+        <Show when={reach().is !== "unreachable" && selected()}>{(panel) => <LockLabel panel={panel()} />}</Show>
       </div>
       <Show when={agentOn() && agent() === undefined}>
-        <Show when={missing()} fallback={<div class="mterm" />}>
+        <Show when={missing()} fallback={<div class="fill" />}>
           <Missing open={props.open} />
         </Show>
       </Show>
@@ -351,26 +513,32 @@ function TaskScreen(props: { open: TaskView }) {
                 at={props.open.at}
                 panel={panel()}
                 visible={selected()?.id === id}
-                agent={panel().name === AGENT_PANEL}
+                reach={reach()}
+                ended={ended()}
               />
             )}
           </Show>
         )}
       </For>
-    </main>
+      <Show when={ended()}>
+        <div class="lockbar">
+          <Slot>
+            <Glyph status={props.open.glyph} />
+          </Slot>
+          <span class="name">
+            {props.open.task.state}
+            <Show when={props.open.task.ended_at}>{(at) => ` ${ago(at(), now())}`}</Show>
+          </span>
+          <button class="btn quiet" onClick={() => openSheet({ is: "reopen", key: props.open.key })}>
+            Reopen…
+          </button>
+        </div>
+      </Show>
+    </>
   );
 }
 
-/** The open task, while the model still lists it; another task opened starts its screen afresh. */
-export function Task() {
-  return (
-    <Show when={openKey()} keyed>
-      {(key) => <Show when={model.tasks[key]}>{(view) => <TaskScreen open={view()} />}</Show>}
-    </Show>
-  );
+/** The open task, while the model still lists it. */
+export function Task(props: { taskKey: string }) {
+  return <Show when={model.tasks[props.taskKey]}>{(view) => <TaskScreen open={view()} />}</Show>;
 }
-
-export const taskShown = () => {
-  const key = openKey();
-  return key !== null && model.tasks[key] !== undefined;
-};

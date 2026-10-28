@@ -118,7 +118,15 @@ label: string,
 /**
  * The relay a remote server is dialled through; none for a server on the local socket.
  */
-relay: string | null, reachable: boolean, 
+relay: string | null, 
+/**
+ * The key a remote server is pinned by, in hex; none for a server on the local socket.
+ */
+key: string | null, 
+/**
+ * Where a remote server is dialled directly.
+ */
+addresses: Array<string>, reachable: boolean, 
 /**
  * When `reachable` last changed, in milliseconds since 1970.
  */
@@ -196,7 +204,11 @@ export type Boot = {
  */
 me: string, servers: Array<ServerView>, model: Model, ui: Ui, };
 
-export type NewTask = { server: string, workspace: WorkspaceId, title: string, parent: TaskId | null, state: TaskState, checkout: Checkout, harness: string, };
+export type NewTask = { server: string, workspace: WorkspaceId, title: string, parent: TaskId | null, state: TaskState, checkout: Checkout, harness: string, 
+/**
+ * An existing session for the agent to resume; none for a fresh one.
+ */
+session: SessionId | null, };
 
 export type Bounds = { x: number, y: number, width: number, height: number, };
 

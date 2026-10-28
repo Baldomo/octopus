@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
-	<string>com.zabealbe.octopus</string>
+	<string>com.noi.octopus</string>
 	<key>CFBundleName</key>
 	<string>octopus</string>
 	<key>NSMicrophoneUsageDescription</key>

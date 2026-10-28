@@ -1,8 +1,10 @@
-package com.zabealbe.octopus
+package com.noi.octopus
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.res.Configuration
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
@@ -84,27 +86,29 @@ class DevicePlugin(private val activity: Activity) : Plugin(activity) {
 
     private var appearance = "system"
 
-    /** The status bar and display cutout's insets, in CSS pixels, which the page clears itself. */
-    private var edges = JSObject().put("top", 0).put("left", 0).put("right", 0)
+    /** The status bar, display cutout and navigation bar's insets, in CSS pixels, which the page clears itself. */
+    private var edges = JSObject().put("top", 0).put("left", 0).put("right", 0).put("bottom", 0)
 
     /**
      * Edge to edge, the window runs under the status bar, the navigation bar and the on-screen keyboard. The webview
-     * stays clear of the navigation bar on whichever side it sits and of the keyboard, and the page reads the rest
-     * from `insets`.
+     * stays clear of the keyboard and of a navigation bar at a side, and the page reads the rest from `insets`, so a
+     * sheet runs under the gesture bar at the foot.
      */
     override fun load(webView: WebView) {
         super.load(webView)
         page = webView
         val content = activity.findViewById<View>(android.R.id.content)
         ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
-            val foot = insets.getInsets(WindowInsetsCompat.Type.ime() or WindowInsetsCompat.Type.navigationBars())
-            view.setPadding(foot.left, 0, foot.right, foot.bottom)
+            val keyboard = insets.getInsets(WindowInsetsCompat.Type.ime())
+            val bars = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            view.setPadding(bars.left, 0, bars.right, keyboard.bottom)
             val sides = insets.getInsets(WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.displayCutout())
             val density = activity.resources.displayMetrics.density
-            // The padding already clears a side the navigation bar sits on.
+            // The padding already clears a side the navigation bar sits on, and the keyboard covers the one at the foot.
             edges = JSObject().put("top", sides.top / density)
-                .put("left", maxOf(0, sides.left - foot.left) / density)
-                .put("right", maxOf(0, sides.right - foot.right) / density)
+                .put("left", maxOf(0, sides.left - bars.left) / density)
+                .put("right", maxOf(0, sides.right - bars.right) / density)
+                .put("bottom", (if (keyboard.bottom > 0) 0 else bars.bottom) / density)
             WindowInsetsCompat.CONSUMED
         }
     }
@@ -126,6 +130,14 @@ class DevicePlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun insets(invoke: Invoke) {
         invoke.resolve(edges)
+    }
+
+    /** Opens this app's page of the system settings, where the user grants what they denied it. */
+    @Command
+    fun settings(invoke: Invoke) {
+        val page = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", activity.packageName, null))
+        activity.startActivity(page)
+        invoke.resolve()
     }
 
     /** Draws the status and navigation bars' icons to read against the page in the appearance the app shows. */

@@ -1,605 +1,378 @@
-html,
-body {
-  overflow: hidden;
-  -webkit-tap-highlight-color: transparent;
-  -webkit-touch-callout: none;
-  -webkit-user-select: none;
-  user-select: none;
-}
+/*
+ * The phone's screens around DESIGN-MOBILE.html's tokens and components: the content box between the OS's insets,
+ * the sheet layer, and the screen parts the design draws in its rendered examples.
+ */
 
-/* the app fills the part of the screen the on-screen keyboard leaves, clear of what the OS draws over it */
-html {
-  height: var(--viewport-h, 100%);
-  --safe-top: max(env(safe-area-inset-top), var(--os-inset-top, 0px));
-  --safe-left: max(env(safe-area-inset-left), var(--os-inset-left, 0px));
-  --safe-right: max(env(safe-area-inset-right), var(--os-inset-right, 0px));
-}
-
-body {
-  height: calc(var(--viewport-h, 100vh) / var(--zoom, 1));
-  zoom: var(--zoom, 1);
-  font-size: var(--fs-phone);
-}
-
-button {
-  font: inherit;
-}
-
-.screen {
-  height: 100%;
-}
-
-.tasks {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  padding: var(--safe-top) var(--safe-right) 0 var(--safe-left);
-}
-
-.title {
-  display: flex;
-  align-items: center;
-  padding: var(--s3) var(--s4) var(--s1);
-}
-
-.title h1 {
-  flex: 1;
-  margin: 0;
-  font-size: var(--fs-phone-head);
-  font-weight: 650;
-  letter-spacing: -0.01em;
-}
-
-.title .gear {
-  width: var(--touch);
-  height: var(--touch);
-  margin-right: calc(-1 * var(--s2));
-  border-radius: var(--r2);
-}
-
-.title .gear svg {
-  width: 22px;
-  height: 22px;
-}
-
-/* a finger leaves no pointer behind, so a tapped control keeps no hover look */
-.title .gear:hover {
-  background: none;
-  color: var(--faint);
-}
-
-.title .gear:active {
-  background: var(--hover);
-  color: var(--text);
-}
-
-.servers {
-  display: flex;
-  gap: var(--s4);
-  padding: 0 var(--s4) var(--s2);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.servers .host {
-  height: var(--hit);
-  font-size: var(--fs-small);
-}
-
-.first-pair {
-  all: unset;
-  margin: var(--s6) var(--s4);
-  height: var(--touch);
-  display: grid;
-  place-items: center;
-  border: 1px dashed var(--line2);
-  border-radius: var(--r2);
-  color: var(--dim);
-}
-
-.list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0 var(--s2) calc(var(--s6) + env(safe-area-inset-bottom));
-}
-
-.list .ws::before {
-  left: calc(var(--s2) + 6px);
-  top: var(--touch);
-}
-
-.list .wsh {
+:where(button) {
   all: unset;
   box-sizing: border-box;
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
-  height: var(--touch);
-  padding: 0 var(--s2);
-  font-weight: 600;
 }
 
-.list .wsh .car {
-  width: 14px;
-  flex: none;
-  text-align: center;
-  color: var(--ws);
-  font-size: var(--fs-micro);
-  transition: transform var(--t-hover) var(--ease);
+svg {
+  display: block;
 }
 
-.list .ws.closed .car {
-  transform: rotate(-90deg);
+/* the OS's insets, read where the webview leaves them out of env() */
+html {
+  --safe-top: max(env(safe-area-inset-top), var(--os-inset-top, 0px));
+  --safe-bottom: max(env(safe-area-inset-bottom), var(--os-inset-bottom, 0px));
+  --safe-left: max(env(safe-area-inset-left), var(--os-inset-left, 0px));
+  --safe-right: max(env(safe-area-inset-right), var(--os-inset-right, 0px));
+  height: var(--viewport-h, 100%);
 }
 
-.list .wsh .count {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+/* the keyboard covers the bottom inset */
+:root[data-keyboard] {
+  --safe-bottom: 0px;
 }
 
-.list .gh {
-  height: 28px;
-  padding: 0 var(--s2) 0 calc(var(--s2) + 22px);
-  font-size: var(--fs-small);
-}
-
-.row {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
-  height: var(--touch);
-  padding: 0 var(--s2) 0 calc(var(--s2) + 18px + 16px * var(--depth, 0));
-  border-radius: var(--r2);
-  color: var(--text);
-  /* WebKit on iOS delivers a tap's click to a plain element only while it shows a pointer */
-  cursor: pointer;
-}
-
-.row:active {
-  background: var(--hover);
-}
-
-.row .tt {
-  flex: 1;
-  min-width: 0;
+/*
+ * The zoom scales the whole app, so every OS length is divided by it. The grid starts at the top inset, and the
+ * content box ends at the last whole baseline above the bottom inset or the keyboard, its remainder joining --bot.
+ */
+body {
+  --vh: calc(var(--viewport-h, 100vh) / var(--zoom, 1));
+  --top: calc(var(--safe-top) / var(--zoom, 1));
+  --ch: round(down, calc(var(--vh) - var(--top) - var(--safe-bottom) / var(--zoom, 1)), 4px);
+  --bot: calc(var(--vh) - var(--top) - var(--ch));
+  --surface: var(--bg);
+  margin: 0;
+  height: var(--vh);
+  zoom: var(--zoom, 1);
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  background: var(--bg);
+  color: var(--text);
+  font: var(--t-body);
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
 }
 
-.row .st {
-  flex: none;
-  font-family: var(--mono);
-  font-size: var(--fs-micro);
-  color: var(--faint);
-}
-
-.chev {
-  flex: none;
-  color: var(--faint);
-  font-size: 20px;
-  line-height: 1;
-}
-
-/* the sheet: rises from the foot of the screen over a scrim */
-.scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 4;
-  background: color-mix(in srgb, var(--shadow) 70%, transparent);
-}
-
-.sheet {
+.app,
+.layer {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: 0;
-  z-index: 5;
-  max-height: 88%;
+  top: 0;
+  height: var(--vh);
+}
+
+.app {
+  background: var(--bg);
+}
+
+.content {
+  left: calc(var(--safe-left) / var(--zoom, 1));
+  right: calc(var(--safe-right) / var(--zoom, 1));
+}
+
+.content > .fill,
+.content > .list {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.content > .list {
   overflow-y: auto;
-  padding: 0 var(--s2) calc(var(--s3) + env(safe-area-inset-bottom));
-  background: var(--raised);
-  border-top: 1px solid var(--line2);
+  padding-bottom: var(--g5);
+}
+
+/* fields type into a bare input */
+.field input {
+  all: unset;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  font: inherit;
+  color: inherit;
+  caret-color: var(--focus, var(--text));
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.field input::placeholder {
+  color: var(--faint);
+}
+
+.field:focus-within {
+  box-shadow: inset 0 0 0 1.5px var(--focus, var(--text));
+}
+
+.primary:disabled {
+  opacity: 0.45;
+}
+
+/* sheets: a scrim over everything, a sheet from the bottom edge over the bottom inset */
+.layer {
+  z-index: 6;
+}
+
+.scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+}
+
+.sheet {
+  --surface: var(--sheet);
+  --fill: light-dark(#f0f1f4, #24262d);
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: calc(var(--vh) - var(--top) - var(--g2));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: var(--bot);
+  background: var(--sheet);
   border-radius: var(--r3) var(--r3) 0 0;
-  box-shadow: 0 -16px 40px -8px var(--shadow);
-  transition: transform var(--t-sidebar) var(--ease);
+  display: flex;
+  flex-direction: column;
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .sheet.pulled {
   transition: none;
 }
 
-.grabber {
-  width: 36px;
-  height: 5px;
-  margin: var(--s2) auto var(--s1);
-  border-radius: 3px;
-  background: var(--line2);
+.sheet > * {
+  flex: none;
 }
 
-.sh {
-  display: flex;
-  align-items: center;
-  gap: var(--s1);
-  padding: var(--s2) var(--s2) var(--s3);
-  margin-bottom: var(--s1);
-  border-bottom: 1px solid var(--line);
+.sheet.full {
+  top: calc(var(--top) + var(--g2));
 }
 
-.sh-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.shead.lead {
+  align-items: flex-start;
 }
 
-.sh-text b {
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.shead .ttl b i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ws);
+  flex: none;
 }
 
-.sh-text .mono {
-  color: var(--faint);
-  font-size: var(--fs-micro);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* parts the design's screens draw */
+.sp1 {
+  height: 4px;
+}
+.sp4 {
+  height: 20px;
+}
+.sp5 {
+  height: 32px;
 }
 
-.back {
-  all: unset;
-  width: 32px;
-  height: var(--touch);
-  margin: calc(-1 * var(--s2)) 0;
-  display: grid;
-  place-items: center;
+.h1 {
+  font: var(--t-title);
+  letter-spacing: -0.015em;
+  padding: 0 var(--rail);
+}
+
+.para {
+  padding: var(--g1) var(--rail);
+  font: var(--t-sub);
   color: var(--dim);
-  font-size: 28px;
-  line-height: 1;
 }
 
-.sheet .label {
-  padding: var(--s2) var(--s2) var(--s1);
-  color: var(--faint);
-  font-size: var(--fs-small);
+.para b {
+  color: var(--text);
+  font-weight: 600;
 }
 
-.si {
-  all: unset;
-  box-sizing: border-box;
-  width: 100%;
+.para.c {
+  text-align: center;
+}
+
+.pair2 {
   display: flex;
-  align-items: center;
-  gap: var(--s3);
-  height: var(--touch);
-  padding: 0 var(--s2);
+  gap: var(--g2);
+  margin: 0 var(--rail);
+}
+
+.pair2 > * {
+  flex: 1;
+  margin: 0;
+}
+
+.btn.ws {
+  background: var(--ws);
+  color: var(--surface);
+}
+
+.sec.void::before {
+  display: none;
+}
+
+.qr {
+  margin: 0 var(--rail);
+  height: 264px;
   border-radius: var(--r2);
-  color: var(--text);
-  white-space: nowrap;
-}
-
-.si:active:not([aria-disabled]) {
-  background: var(--hover);
-}
-
-.si[aria-disabled] {
-  color: var(--faint);
-}
-
-.si.danger {
-  color: var(--err);
-}
-
-.si .rtt,
-.si .why {
-  margin-left: auto;
-  font-family: var(--mono);
-  font-size: var(--fs-small);
-  color: var(--faint);
-}
-
-.si .rtt + .chev {
-  margin-left: 0;
-}
-
-.si .chev {
-  margin-left: auto;
-}
-
-.si .ck {
-  width: 14px;
-  color: var(--accent);
-}
-
-.sheet .sep {
-  height: 1px;
-  margin: var(--s1) var(--s2);
-  background: var(--line);
-}
-
-.srow {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
-  height: var(--touch);
-  padding: 0 var(--s2);
-  color: var(--text);
-}
-
-.srow .seg {
-  margin-left: auto;
-  height: 32px;
-}
-
-.srow .seg button {
-  padding: 0 var(--s3);
-}
-
-.srow .stepper {
-  font-size: var(--fs-small);
-  gap: var(--s1);
-}
-
-.step {
-  all: unset;
-  width: 36px;
-  height: 32px;
+  background: #fff;
   display: grid;
   place-items: center;
-  border-radius: var(--r1);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  color: var(--text);
-  font-size: 18px;
 }
 
-.sheet .code .qr {
-  width: 200px;
+.qr svg {
+  width: 232px;
+  height: 232px;
 }
 
-.sheet .client {
-  height: var(--touch);
-  font-size: var(--fs-small);
-}
-
-.revoke {
-  all: unset;
-  margin-left: auto;
-  padding: var(--s1) var(--s2);
-  border-radius: var(--r1);
-  color: var(--err);
-  font-size: var(--fs-small);
-}
-
-.sheet .confirm {
-  font-size: var(--fs-small);
-}
-
-.sheet .confirm .row {
-  height: auto;
-  padding: 0;
-}
-
-.sheet .btn,
-.sheet .confirm .row .btn {
-  height: 36px;
-  padding: 0 var(--s4);
-  font-size: var(--fs-small);
-}
-
-.rename {
-  font-size: var(--fs-phone);
-  padding: var(--s1) var(--s2);
-}
-
-.pair {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s3);
-  padding-bottom: var(--s2);
-}
-
-.pair .sh {
-  margin-bottom: 0;
-}
-
-.pair .field {
-  padding: 0 var(--s2);
-}
-
-.pair .field textarea,
-.pair .field input {
-  font: var(--fs-phone) var(--ui);
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: var(--r1);
-  padding: var(--s2);
-  outline: none;
-  resize: none;
-  -webkit-user-select: text;
-  user-select: text;
-}
-
-.pair .field textarea.mono {
-  font-family: var(--mono);
-  font-size: var(--fs-small);
-  word-break: break-all;
-}
-
-.pair .field :focus {
-  border-color: var(--accent-line);
-  box-shadow: 0 0 0 3px var(--accent-ink);
-}
-
-.pair > .btn {
-  align-self: stretch;
-  justify-content: center;
-  margin: 0 var(--s2);
-}
-
-.pair .btn.go {
-  color: light-dark(var(--raised), var(--bg));
-  background: var(--accent);
-  box-shadow: none;
-  font-weight: 550;
-}
-
-.pair .btn.go:disabled {
-  opacity: 0.45;
-}
-
-.pair .err {
-  padding: 0 var(--s2);
-  font-size: var(--fs-small);
-  overflow-wrap: anywhere;
-  -webkit-user-select: text;
-  user-select: text;
+.applogo {
+  display: block;
+  width: 64px;
+  height: 64px;
+  margin-left: var(--rail);
+  border-radius: var(--r2);
 }
 
 .toast {
   position: fixed;
-  bottom: calc(var(--s6) + env(safe-area-inset-bottom));
-  font-size: var(--fs-small);
+  bottom: calc(var(--bot) + var(--g2));
+  z-index: 8;
 }
 
-.toast.problem {
-  white-space: normal;
-  color: var(--err);
+/* the camera: dark in both schemes, and clear inside the finder while the camera shows behind the page */
+.app.cam {
+  background: #0c0d0f;
 }
 
-/* the Task screen: header, tab bar, one terminal, and the foot that types into it */
-.task-screen {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  padding: var(--safe-top) var(--safe-right) 0 var(--safe-left);
-  background: var(--panel);
+.cam .content {
+  color: #f2f3f5;
+  --fill: rgba(255, 255, 255, 0.12);
+  --text: #f2f3f5;
+  --dim: #b4b8bf;
+  --faint: #7d828b;
+  --surface: #0c0d0f;
 }
 
-.task-head {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
-  padding: var(--s2) var(--s3) var(--s2) var(--s1);
+.finder {
+  width: 256px;
+  height: 256px;
+  margin: 0 auto;
+  border-radius: var(--r3);
+  position: relative;
+  background: radial-gradient(circle at 40% 35%, #2a2d33, #15171a);
 }
 
-.task-head .back {
-  margin: 0;
+.finder::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--r3);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.85);
+  mask:
+    linear-gradient(#000, #000) top left/48px 48px no-repeat,
+    linear-gradient(#000, #000) top right/48px 48px no-repeat,
+    linear-gradient(#000, #000) bottom left/48px 48px no-repeat,
+    linear-gradient(#000, #000) bottom right/48px 48px no-repeat;
 }
 
-.task-title {
-  flex: 1;
+:root[data-scanning],
+:root[data-scanning] body,
+:root[data-scanning] .app.cam {
+  background: transparent;
+}
+
+:root[data-scanning] .finder {
+  background: transparent;
+  box-shadow: 0 0 0 100vmax #0c0d0f;
+}
+
+:root[data-scanning] .cam .content > :not(.finder) {
+  position: relative;
+  z-index: 1;
+}
+
+::-webkit-scrollbar {
+  display: none;
+}
+
+/* long names, facts and values end at the right rail with an ellipsis; a path loses its start instead */
+.shead .ttl .id,
+.mi > .id,
+.servers span {
   min-width: 0;
-  display: flex;
-  flex-direction: column;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.task-title b,
-.task-title span {
+.mi > .id {
+  flex-shrink: 1;
+}
+
+.fact {
+  display: flex;
+  gap: 1ch;
+}
+
+.path {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  direction: rtl;
 }
 
-.task-title b {
-  font-weight: 600;
-}
-
-.task-title span {
-  color: var(--faint);
-  font-size: var(--fs-small);
-}
-
-.task-screen .tabs {
-  height: var(--touch);
-  border-top: 1px solid var(--line);
-}
-
-.task-screen .tab {
-  height: 34px;
-}
-
-.task-screen .tab:hover:not(.on) {
-  background: none;
-}
-
-.task-screen .tab .close {
-  padding: var(--s1) var(--s2);
-  margin-right: calc(-1 * var(--s2));
-}
-
-.mterm {
+/* the Task screen: the selected terminal fills the pane between the tab bar and its foot */
+.tterm {
   position: relative;
-  flex: 1;
-  min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--term);
+}
+
+.tterm > * {
+  flex: none;
+}
+
+.tterm > .term {
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
+  display: flex;
 }
 
 /* the terminal draws at the device's pixels and takes the zoom through its font size */
-.zoom-reset {
+.term .zoom-reset {
   flex: 1;
-  min-height: 0;
-  display: flex;
-  zoom: calc(1 / var(--zoom, 1));
-  transition: opacity var(--t-hover);
-}
-
-.zoom-reset.stale {
-  opacity: 0.45;
-}
-
-.term-pane {
+  min-width: 0;
   position: relative;
-  flex: 1;
-  overflow: hidden;
+  zoom: calc(1 / var(--zoom, 1));
 }
 
-/* the terminal shows through the host, which a cropped terminal pans behind */
 .term-host {
   position: absolute;
-  inset: var(--s2) var(--s3);
+  inset: 0;
   overflow: hidden;
 }
 
 .term-host .xterm {
+  position: absolute;
+  inset: 0 auto auto 0;
   pointer-events: none;
 }
 
-.map {
-  position: absolute;
-  right: var(--s2);
-  bottom: var(--s2);
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-  font: var(--fs-micro) var(--mono);
-  color: var(--faint);
-  pointer-events: none;
+.term-host .xterm-viewport {
+  overflow: hidden !important;
 }
 
-.map-whole {
-  position: relative;
-  border: 1px solid var(--line2);
-  border-radius: var(--r1);
-  background: color-mix(in srgb, var(--panel) 85%, transparent);
+.term .thumb.across {
+  bottom: 2px;
+  height: 3px;
 }
 
-.map-whole i {
-  position: absolute;
-  border: 1px solid var(--accent-line);
-  border-radius: 2px;
-  background: var(--accent-ink);
+.term .thumb.down {
+  right: 2px;
+  width: 3px;
 }
 
+/* the keyboard's text field, out of sight */
 .sink {
   position: absolute;
   left: 0;
@@ -611,106 +384,272 @@ button {
   resize: none;
 }
 
-.foot {
-  flex: none;
+.key.on {
+  background: var(--text);
+  color: var(--surface);
+}
+
+.term.stale {
+  opacity: 0.45;
+}
+
+.missing {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: var(--s2);
-  min-height: calc(var(--touch) * 2);
-  padding: var(--s2) var(--s2) calc(var(--s2) + env(safe-area-inset-bottom));
-  background: var(--panel);
-  border-top: 1px solid var(--line);
 }
 
-:root[data-keyboard] .foot {
-  padding-bottom: var(--s2);
+.tabs .x {
+  display: grid;
 }
 
-.foot-line {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
-  padding: 0 var(--s2);
-  color: var(--dim);
-  font-size: var(--fs-small);
+.chips {
+  overflow-x: auto;
 }
 
-.foot .readonly {
-  padding: 0 var(--s2);
-  border: 0;
-  background: none;
-}
-
-.foot .readonly > span:first-child {
+/* a long holder name gives way before the tabs do */
+.tabs .lock {
+  flex-shrink: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 55%;
 }
 
-.foot .readonly .btn {
-  flex: none;
-  white-space: nowrap;
+.content > .cards {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: var(--g5);
 }
 
-.compose {
+.tabs.scroll {
+  overflow-x: auto;
+  -webkit-mask: linear-gradient(90deg, #000 calc(100% - var(--g5)), transparent);
+}
+
+.btn.inert {
+  opacity: 0.45;
+}
+
+/* a picker field opens the OS's own list from a select laid over it */
+.field {
+  position: relative;
+}
+
+.field .native {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  font-size: 16px;
+}
+
+.field .chev {
+  color: var(--faint);
+  display: grid;
+}
+
+/* the editor and the rendered view */
+.codepane {
   display: flex;
-  gap: var(--s2);
 }
 
-.compose input {
+.codepane .zoom-reset {
   flex: 1;
   min-width: 0;
-  height: 40px;
-  padding: 0 var(--s3);
-  font: 16px var(--ui);
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: var(--r2);
-  outline: none;
+  position: relative;
+  zoom: calc(1 / var(--zoom, 1));
+}
+
+.code-host {
+  position: absolute;
+  inset: 0;
+}
+
+.tab .udot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--needs);
+}
+
+.rendered-host {
+  overflow-y: auto;
+}
+
+.rendered-host .rendered,
+.rendered-host .rendered-page {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.rendered-doc {
+  padding: var(--g2) var(--rail);
+  font: var(--t-sub);
+  color: var(--dim);
   -webkit-user-select: text;
   user-select: text;
 }
 
-.compose input:focus {
-  border-color: var(--accent-line);
+.rendered-doc h1 {
+  font: var(--t-title);
+  letter-spacing: -0.015em;
+  color: var(--text);
+  margin: 0 0 var(--g2);
 }
 
-.compose .send {
-  all: unset;
-  width: 40px;
-  height: 40px;
-  display: grid;
-  place-items: center;
+.rendered-doc h2,
+.rendered-doc h3 {
+  font: var(--t-head);
+  color: var(--text);
+  margin: var(--g4) 0 var(--g1);
+}
+
+.rendered-doc p,
+.rendered-doc ul,
+.rendered-doc ol {
+  margin: 0 0 var(--g2);
+}
+
+.rendered-doc code {
+  font: 13px/16px var(--mono);
+  color: var(--text);
+}
+
+.rendered-doc pre {
+  margin: 0 0 var(--g2);
+  padding: var(--g2) var(--g3);
   border-radius: var(--r2);
-  color: light-dark(var(--raised), var(--bg));
-  background: var(--accent);
-  font-size: 18px;
+  background: var(--fill);
+  font: var(--t-term);
+  color: var(--term-text);
+  overflow-x: auto;
 }
 
-.keys {
-  display: flex;
-  gap: var(--s1);
+.rendered-doc pre code {
+  font: inherit;
+  color: inherit;
 }
 
-.keys button {
+.rendered-doc table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 0 0 var(--g2);
+}
+
+.rendered-doc td,
+.rendered-doc th {
+  height: 32px;
+  padding: 0 var(--g2) 0 0;
+  vertical-align: middle;
+  text-align: left;
+  font: var(--t-sub);
+  box-shadow: inset 0 -1px var(--line);
+}
+
+.rendered-doc th {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.rendered-doc td:first-child {
+  font: 13px/16px var(--mono);
+  color: var(--text);
+}
+
+.rendered-doc a {
+  color: var(--text);
+}
+
+.rendered-doc img {
+  max-width: 100%;
+}
+
+.web {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: #fff;
+  color-scheme: light;
+}
+
+.bar .cancel {
+  font: var(--t-sub);
+  color: var(--dim);
+}
+
+.url input {
   all: unset;
   flex: 1;
-  height: 36px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--r1);
-  font: var(--fs-small) var(--mono);
+  min-width: 0;
   color: var(--text);
-  background: var(--raised);
-  box-shadow: inset 0 0 0 1px var(--line2);
+  font: inherit;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
-.keys button:active,
-.keys button.on {
-  color: var(--accent);
-  background: var(--accent-ink);
-  box-shadow: inset 0 0 0 1px var(--accent-line);
+.pick {
+  overflow-x: auto;
+}
+
+.tree.closed .car {
+  transform: rotate(-90deg);
+}
+
+.capsule .circle.on {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 4px var(--fill);
+}
+
+/*
+ * A lifted task: its row or card stays dim in place while its ghost follows the finger, its content on the row's
+ * rails over the open row's tint shape (8 before its glyph slot to 8 past the right rail) on the screen's surface,
+ * raised by a shadow. The group it can drop on fills behind its rows, and a state tab rings.
+ */
+.lifting {
+  opacity: 0.35;
+}
+
+.ghost {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  isolation: isolate;
+  pointer-events: none;
+}
+
+.ghost::before {
+  content: "";
+  position: absolute;
+  inset: 0 calc(var(--rail) - var(--g2)) 0 calc(var(--rail) + var(--step) * var(--d, 0) - var(--g2));
+  border-radius: var(--r2);
+  background: var(--surface);
+  box-shadow: 0 8px 24px light-dark(rgba(24, 25, 29, 0.16), rgba(0, 0, 0, 0.5));
+  z-index: -1;
+}
+
+.row.ghost::before {
+  left: calc(var(--rail) + var(--step) * (var(--d, 0) + 1) - var(--g2));
+}
+
+.row.ghost.open::before {
+  background: linear-gradient(color-mix(in srgb, var(--ws) 13%, transparent)), var(--surface);
+}
+
+.grp {
+  position: relative;
+  isolation: isolate;
+}
+
+.grp.over::before {
+  content: "";
+  position: absolute;
+  inset: 0 calc(var(--rail) - var(--g2)) 0 calc(var(--rail) + var(--step) - var(--g2));
+  border-radius: var(--r2);
+  background: var(--fill);
+  z-index: -1;
+}
+
+.tab.over {
+  box-shadow: inset 0 0 0 1.5px var(--text);
 }

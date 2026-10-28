@@ -50,6 +50,7 @@ export function NewTask() {
         state: state(),
         checkout: checkout(),
         harness: harness().trim(),
+        session: null,
       })
       .then((key) => {
         showModal(null);

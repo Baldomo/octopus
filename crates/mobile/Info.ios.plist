@@ -6,5 +6,7 @@
 	<string>Scan a server's pairing QR code.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Let the programs in a terminal you hold hear your microphone.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Reach your servers directly on this network.</string>
 </dict>
 </plist>

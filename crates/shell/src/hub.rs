@@ -39,6 +39,10 @@ pub struct ServerView {
     pub label: String,
     /// The relay a remote server is dialled through; none for a server on the local socket.
     pub relay: Option<String>,
+    /// The key a remote server is pinned by, in hex; none for a server on the local socket.
+    pub key: Option<String>,
+    /// Where a remote server is dialled directly.
+    pub addresses: Vec<String>,
     pub reachable: bool,
     /// When `reachable` last changed, in milliseconds since 1970.
     pub since: i64,
@@ -384,6 +388,14 @@ impl Hub {
                 relay: match &link.address {
                     Address::Local { .. } => None,
                     Address::Remote { relay, .. } => Some(relay.to_string()),
+                },
+                key: match &link.address {
+                    Address::Local { .. } => None,
+                    Address::Remote { key, .. } => Some(key.hex()),
+                },
+                addresses: match &link.address {
+                    Address::Local { .. } => Vec::new(),
+                    Address::Remote { addresses, .. } => addresses.iter().map(ToString::to_string).collect(),
                 },
                 reachable: link.connection.is_some(),
                 since: link.since,

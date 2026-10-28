@@ -16,6 +16,16 @@ const ACCEPT_RETRY: Duration = Duration::from_millis(100);
 /// The server's connection at the moment a browser connects, which a reconnect may have replaced.
 pub type Dial = Arc<dyn Fn() -> Result<Arc<Connection>, String> + Send + Sync>;
 
+/// The port of the server's machine a page reaches, when its host is a loopback name or address.
+pub fn loopback_port(page: &url::Url) -> Option<u16> {
+    let loopback = match page.host()? {
+        url::Host::Domain(name) => name == "localhost",
+        url::Host::Ipv4(address) => address.is_loopback(),
+        url::Host::Ipv6(address) => address.is_loopback(),
+    };
+    loopback.then(|| page.port_or_known_default()).flatten()
+}
+
 /// Listens while it lives; connections already carried finish on their own.
 pub struct Tunnel {
     _accepting: Vec<Task>,

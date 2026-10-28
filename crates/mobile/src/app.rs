@@ -8,6 +8,7 @@ use octopus_client::servers::{Config, Servers};
 use octopus_shell::Client;
 use tauri::{Manager, WebviewWindowBuilder};
 
+use crate::browser::{self, Shown};
 use crate::client_menu::{self, Phone};
 use crate::device;
 
@@ -16,12 +17,23 @@ const CONFIG_DIR: &str = "octopus";
 
 #[tauri::mobile_entry_point]
 pub fn run() {
-    let builder =
-        tauri::Builder::default().plugin(octopus_shell::plugin()).plugin(tauri_plugin_barcode_scanner::init());
+    let builder = tauri::Builder::default()
+        .plugin(octopus_shell::plugin())
+        .plugin(tauri_plugin_barcode_scanner::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_haptics::init());
     #[cfg(target_os = "android")]
     let builder = builder.plugin(device::plugin());
     builder
-        .invoke_handler(tauri::generate_handler![client_menu::phone_named, client_menu::phone_pair, phone_insets])
+        .invoke_handler(tauri::generate_handler![
+            browser::phone_browse,
+            browser::phone_unbrowse,
+            client_menu::phone_named,
+            client_menu::phone_invite_key,
+            client_menu::phone_pair,
+            phone_insets,
+            phone_settings
+        ])
         .setup(|app| {
             let handle = app.handle();
             let dir = app.path().app_config_dir()?.join(CONFIG_DIR);
@@ -36,6 +48,7 @@ pub fn run() {
                 microphone_access: Box::new(move || device::microphone(&asking)),
             };
             app.manage(phone);
+            app.manage(Shown::default());
             octopus_shell::start(handle, client, None);
             let window = app.config().app.windows.first().context("tauri.conf.json declares the window")?;
             WebviewWindowBuilder::from_config(handle, window)?.build()?;
@@ -54,6 +67,12 @@ pub fn run() {
 #[tauri::command]
 async fn phone_insets(app: tauri::AppHandle) -> Result<Option<device::Insets>, String> {
     device::insets(&app).map_err(|error| format!("{error:#}"))
+}
+
+/// Opens this app's page of the OS's settings, where a denied microphone is granted.
+#[tauri::command]
+fn phone_settings(app: tauri::AppHandle) -> Result<(), String> {
+    device::settings(&app).map_err(|error| format!("{error:#}"))
 }
 
 /// Every server pinned the old key, so a phone with a new one starts as one that never paired.

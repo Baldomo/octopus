@@ -1,140 +1,146 @@
-import { createSignal, For, Show } from "solid-js";
-import { Gear } from "@octopus/shared/Gear.tsx";
-import { Glyph } from "@octopus/shared/Glyph.tsx";
+import { For, Show } from "solid-js";
 import type { Column, Row, Section } from "@octopus/shared/generated.ts";
-import { model, servers } from "@octopus/shared/state.ts";
+import { isOpen, model, servers, toggleCollapsed, ui } from "@octopus/shared/state.ts";
+import { dropHint } from "@octopus/shared/drop.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
-import { openMenu, openTask, openTaskSheet } from "./screen";
+import { Icon } from "./Icon";
+import { dropTarget, isLifted, lift, liftsIn } from "./lift";
+import { go, openSheet, openTask } from "./nav";
+import { Circle, Glyph, Id, ServerDot, Slot } from "./parts";
+import { pressed } from "./press";
 
-const LONG_PRESS_MS = 450;
-/** A finger that moves further than this is scrolling, not pressing. */
-const PRESS_SLOP_PX = 10;
-
-const [collapsed, setCollapsed] = createSignal<ReadonlySet<string>>(new Set());
-const toggle = (section: string) =>
-  setCollapsed((shut) => {
-    const next = new Set(shut);
-    if (!next.delete(section)) next.add(section);
-    return next;
-  });
-
-/** A tap runs `tap`; holding a finger still runs `hold`, and the tap that ends the hold does nothing more. */
-function pressed(tap: () => void, hold: () => void) {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let from: { x: number; y: number } | null = null;
-  let held = false;
-  const cancel = () => {
-    clearTimeout(timer);
-    from = null;
-  };
-  return {
-    onTouchStart: (event: TouchEvent) => {
-      const touch = event.touches[0];
-      if (touch === undefined) return;
-      held = false;
-      from = { x: touch.clientX, y: touch.clientY };
-      timer = setTimeout(() => {
-        held = true;
-        hold();
-      }, LONG_PRESS_MS);
-    },
-    onClick: () => held || tap(),
-    onTouchMove: (event: TouchEvent) => {
-      const touch = event.touches[0];
-      if (from === null || touch === undefined) return;
-      if (Math.hypot(touch.clientX - from.x, touch.clientY - from.y) > PRESS_SLOP_PX) cancel();
-    },
-    onTouchEnd: cancel,
-    onTouchCancel: cancel,
-    onContextMenu: (event: MouseEvent) => event.preventDefault(),
-  };
-}
-
-function TaskRow(props: { row: Row; group: Column }) {
+function TaskRow(props: { row: Row; section: string; group: Column }) {
   return (
     <div
       class="row"
-      style={{ "--depth": props.row.depth }}
+      classList={{ open: isOpen(props.row.key), lifting: isLifted(props.row.key) }}
+      style={{ "--d": props.row.depth }}
       {...pressed(
         () => openTask(props.row.key, props.row.at),
-        () => openTaskSheet(props.row.key),
+        () => openSheet({ is: "task", key: props.row.key, open: false }),
+        (element, from) => lift(props.row, props.section, element, from),
       )}
     >
-      <Glyph glyph={props.row.glyph} />
-      <span class="tt">{props.row.title}</span>
+      <Slot>
+        <Glyph status={props.row.glyph} />
+      </Slot>
+      <span class="name">{props.row.title}</span>
       <Show when={props.row.state !== props.group.state}>
-        <span class="st">{props.row.state}</span>
+        <Id>{props.row.state}</Id>
       </Show>
-      <span class="chev">›</span>
+    </div>
+  );
+}
+
+/** A state's group of a section, which shows while empty only to take a task lifted in its section. */
+function Group(props: { section: string; group: Column }) {
+  const target = dropTarget(props.section, props.group.state);
+  return (
+    <div class="grp" classList={{ over: target.over() }} {...target.attributes}>
+      <div class="gl">{props.group.state}</div>
+      <For each={props.group.rows} fallback={<div class="empty">{dropHint(props.group.state)}</div>}>
+        {(row) => <TaskRow row={row} section={props.section} group={props.group} />}
+      </For>
     </div>
   );
 }
 
 function SectionRows(props: { section: Section }) {
-  const shut = () => collapsed().has(props.section.name);
+  const closed = () => ui.prefs.collapsed.includes(props.section.name);
+  const groups = () => props.section.groups.filter((group) => group.rows.length > 0 || liftsIn(props.section.name));
+  const empty = () => !closed() && groups().length === 0;
   return (
-    <div class="ws" classList={{ closed: shut() }} style={{ "--ws": swatchColor(props.section.swatch) }}>
-      <button class="wsh" onClick={() => toggle(props.section.name)}>
-        <span class="car">▾</span>
-        <span class="name">{props.section.name}</span>
-        <Show when={shut()}>
+    <div
+      class="sec"
+      classList={{ closed: closed(), void: empty() }}
+      style={{ "--ws": swatchColor(props.section.swatch) }}
+    >
+      <div
+        class="sech"
+        {...pressed(
+          () => {},
+          () => openSheet({ is: "section", name: props.section.name }),
+        )}
+      >
+        <span
+          class="slot"
+          role="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            toggleCollapsed(props.section.name);
+          }}
+        >
+          <Icon name="car" class="car" />
+        </span>
+        <span class="name" role="button" onClick={() => go({ at: "board", section: props.section.name })}>
+          {props.section.name}
+        </span>
+        <Show when={closed()}>
           <span class="count">
             <Show when={props.section.waiting}>
-              <span class="wait" />
+              <i class="dot needs" />
             </Show>
-            {props.section.live}
+            <Id>{props.section.live}</Id>
           </span>
         </Show>
-      </button>
-      <Show when={!shut()}>
-        <For each={props.section.groups.filter((group) => group.rows.length > 0)}>
-          {(group) => (
-            <div class="group">
-              <div class="gh">{group.state}</div>
-              <For each={group.rows}>{(row) => <TaskRow row={row} group={group} />}</For>
-            </div>
-          )}
-        </For>
+        <span
+          class="slot new"
+          role="button"
+          aria-label={`New task in ${props.section.name}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            openSheet({ is: "newtask", section: props.section.name });
+          }}
+        >
+          <Icon name="plus" />
+        </span>
+      </div>
+      <Show when={!closed()}>
+        <For each={groups()}>{(group) => <Group section={props.section.name} group={group} />}</For>
+        <Show when={empty()}>
+          <div class="empty">no live tasks</div>
+        </Show>
       </Show>
     </div>
   );
 }
 
+/** The root screen: every section's live tasks under their state, on one scroll. */
 export function Tasks() {
   return (
-    <main class="tasks">
-      <header class="title">
+    <>
+      <div class="bar">
         <h1>Tasks</h1>
-        <button class="gear" aria-label="Client menu" onClick={() => openMenu({ show: "menu" })}>
-          <Gear />
-        </button>
-      </header>
-      <Show
-        when={servers().length > 0}
-        fallback={
-          <button class="first-pair" onClick={() => openMenu({ show: "pair" })}>
-            Pair a server
-          </button>
-        }
-      >
-        <div class="servers">
-          <For each={servers()}>
-            {(server) => (
-              <button
-                class="host"
-                classList={{ off: !server.reachable }}
-                onClick={() => openMenu({ show: "server", name: server.name })}
-              >
-                <span class="dot" classList={{ off: !server.reachable }} />
-                <span class="name">{server.label}</span>
-              </button>
-            )}
-          </For>
+        <div class="right">
+          <div class="capsule">
+            <Circle icon="search" label="Search" tap={() => go({ at: "search" })} />
+            <Circle icon="gear" label="Client menu" tap={() => openSheet({ is: "client" })} />
+          </div>
         </div>
-        <div class="list">
-          <For each={model.lists.sections}>{(section) => <SectionRows section={section} />}</For>
+      </div>
+      <div class="servers">
+        <For each={servers()}>
+          {(server) => (
+            <span
+              classList={{ off: !server.reachable }}
+              role="button"
+              onClick={() => openSheet({ is: "server", name: server.name })}
+            >
+              <ServerDot server={server} />
+              <span class="name">{server.label}</span>
+            </span>
+          )}
+        </For>
+      </div>
+      <div class="list">
+        <For each={model.lists.sections}>{(section) => <SectionRows section={section} />}</For>
+        <div class="addws" role="button" onClick={() => openSheet({ is: "addws" })}>
+          <Slot>
+            <Icon name="plus" />
+          </Slot>
+          <span class="name">workspace</span>
         </div>
-      </Show>
-    </main>
+      </div>
+    </>
   );
 }

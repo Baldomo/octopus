@@ -1,28 +1,44 @@
-import { report } from "@octopus/shared/state.ts";
+import { createSignal, Show } from "solid-js";
+import { Note } from "./parts";
 
-/** Edits a name in place: return applies a changed, non-empty name, and leaving the field keeps the old one. */
+/**
+ * Edits a name in place in a focused field: return applies a changed, non-empty name, and leaving the field keeps the
+ * old one. A refusal shows under the field, which stays for another try.
+ */
 export function Rename(props: { value: string; apply: (name: string) => Promise<unknown>; done: () => void }) {
+  const [problem, setProblem] = createSignal<string | null>(null);
+  let applying = false;
   return (
-    <input
-      class="rename"
-      spellcheck={false}
-      autocorrect="off"
-      enterkeyhint="done"
-      value={props.value}
-      ref={(input) =>
-        requestAnimationFrame(() => {
-          input.focus();
-          input.select();
-        })
-      }
-      onKeyDown={(event) => {
-        if (event.key !== "Enter") return;
-        event.preventDefault();
-        const name = event.currentTarget.value.trim();
-        props.done();
-        if (name !== "" && name !== props.value) props.apply(name).catch(report);
-      }}
-      onBlur={() => props.done()}
-    />
+    <>
+      <label class="field">
+        <input
+          class="name"
+          spellcheck={false}
+          autocapitalize="off"
+          autocorrect="off"
+          enterkeyhint="done"
+          value={props.value}
+          ref={(input) =>
+            requestAnimationFrame(() => {
+              input.focus();
+              input.select();
+            })
+          }
+          onKeyDown={(event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            const name = event.currentTarget.value.trim();
+            if (name === "" || name === props.value) return props.done();
+            applying = true;
+            props.apply(name).then(props.done, (error) => {
+              applying = false;
+              setProblem(String(error));
+            });
+          }}
+          onBlur={() => !applying && problem() === null && props.done()}
+        />
+      </label>
+      <Show when={problem()}>{(shown) => <Note err>{shown()}</Note>}</Show>
+    </>
   );
 }

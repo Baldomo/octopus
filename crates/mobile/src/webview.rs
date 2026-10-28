@@ -1,6 +1,6 @@
 //! What UIKit is told about the iOS webview: the page runs under the status bar and the home indicator, clearing them
-//! by the safe area's insets, and the window takes the appearance the client menu picks, so the status bar reads
-//! against the page.
+//! by the safe area's insets, the edge swipe steps back through the page's history, and the window takes the
+//! appearance the client menu picks, so the status bar reads against the page.
 #![allow(unsafe_code, reason = "a WKWebView reaches UIKit only through its raw pointer")]
 
 use std::sync::Arc;
@@ -18,6 +18,8 @@ pub fn set_up(app: &tauri::App) -> anyhow::Result<()> {
         // SAFETY: a WKWebView's `scrollView` is its UIScrollView.
         let scroll: Retained<UIScrollView> = unsafe { msg_send![view, scrollView] };
         scroll.setContentInsetAdjustmentBehavior(UIScrollViewContentInsetAdjustmentBehavior::Never);
+        // SAFETY: a WKWebView takes this property; the edge swipe then steps back through the page's history.
+        let () = unsafe { msg_send![view, setAllowsBackForwardNavigationGestures: true] };
     })?;
     let ui = Arc::clone(app.state::<Arc<UiStore>>().inner());
     show(&window, ui.native().appearance)?;

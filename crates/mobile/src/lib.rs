@@ -2,6 +2,7 @@
 #![cfg(mobile)]
 
 mod app;
+mod browser;
 mod client_menu;
 mod device;
 #[cfg(target_os = "ios")]

@@ -2,71 +2,89 @@ import { createResource, createSignal, For, Match, Show, Switch } from "solid-js
 import { backend } from "@octopus/shared/backend.ts";
 import { aboutCopy, APPEARANCES } from "@octopus/shared/ClientMenu.tsx";
 import { VERSION, type ShownOffer } from "@octopus/shared/generated.ts";
-import { clientStatus, clock, expiry, grouped, inviteCode, ticking, toast } from "@octopus/shared/SidebarControls.tsx";
-import { me, report, serverView, servers, setAppearance, setMe, ui, zoom } from "@octopus/shared/state.ts";
-import { phone, scanInvite } from "./phone";
-import { closeMenu, menuPage, openMenu } from "./screen";
-import { Sheet, SheetHead } from "./Sheet";
+import { clientStatus, clock, expiry, grouped, inviteCode, ticking } from "@octopus/shared/SidebarControls.tsx";
+import { me, report, serverView, servers, setAppearance, ui, zoom } from "@octopus/shared/state.ts";
+import { host, shortKey } from "./format";
+import { Icon } from "./Icon";
+import { go, showInSheet } from "./nav";
+import { Chev, Gap, Gl, Id, Mi, Seg, Sep, ServerDot, Why } from "./parts";
 import { Rename } from "./Rename";
+import { Sheet, SheetHead } from "./Sheet";
+import { notify } from "./Toast";
 
-const toMenu = () => openMenu({ show: "menu" });
+const toMenu = () => showInSheet({ is: "client" });
 
-function Items() {
+/** A private IPv4 address, the one a server's header names as its LAN. */
+const LAN = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
+
+const rtt = (ms: number | null) => `${ms ?? "–"} ms`;
+
+/** The client menu: this phone's servers, then its appearance, zoom and version. */
+export function ClientMenu() {
   const { copied, copy: about } = aboutCopy();
   return (
-    <>
+    <Sheet>
       <SheetHead title={me()} />
-      <div class="label">Servers</div>
+      <Gl>servers</Gl>
       <For each={servers()}>
         {(server) => (
-          <button class="si" onClick={() => openMenu({ show: "server", name: server.name })}>
-            <span class="dot" classList={{ off: !server.reachable }} />
-            <span class="name">{server.label}</span>
-            <span class="rtt">{server.reachable ? `${server.rtt_ms ?? "–"} ms` : "unreachable"}</span>
-            <span class="chev">›</span>
-          </button>
+          <Mi
+            class={server.reachable ? undefined : "off"}
+            slot={<ServerDot server={server} />}
+            end={
+              <>
+                <Id>{server.reachable ? rtt(server.rtt_ms) : "unreachable"}</Id>
+                <Chev />
+              </>
+            }
+            tap={() => showInSheet({ is: "server", name: server.name })}
+          >
+            {server.label}
+          </Mi>
         )}
       </For>
-      <button class="si" onClick={() => openMenu({ show: "pair" })}>
-        <span class="glyph">+</span>Pair a server…
-      </button>
-      <div class="sep" />
-      <div class="srow">
+      <Mi slot={<Icon name="plus" />} tap={() => go({ at: "scan" })}>
+        Pair a server…
+      </Mi>
+      <Sep />
+      <Mi
+        slot={<Icon name="sun" />}
+        end={<Seg options={APPEARANCES} value={ui.prefs.appearance} choose={setAppearance} />}
+      >
         Appearance
-        <div class="seg">
-          <For each={APPEARANCES}>
-            {([appearance, label]) => (
-              <button classList={{ on: ui.prefs.appearance === appearance }} onClick={() => setAppearance(appearance)}>
-                {label}
-              </button>
-            )}
-          </For>
-        </div>
-      </div>
-      <div class="srow">
+      </Mi>
+      <Mi
+        slot={<Icon name="zoom" />}
+        end={
+          <div class="stepper">
+            <span role="button" aria-label="Zoom out" onClick={() => zoom("out")}>
+              <Icon name="minus" />
+            </span>
+            <output>{ui.prefs.zoom}%</output>
+            <span role="button" aria-label="Zoom in" onClick={() => zoom("in")}>
+              <Icon name="plus" />
+            </span>
+          </div>
+        }
+      >
         Zoom
-        <span class="stepper">
-          <button class="step" aria-label="Zoom out" onClick={() => zoom("out")}>
-            −
-          </button>
-          <output>{ui.prefs.zoom}%</output>
-          <button class="step" aria-label="Zoom in" onClick={() => zoom("in")}>
-            +
-          </button>
-        </span>
-      </div>
-      <div class="sep" />
-      <button class="si" onClick={about}>
-        About octopus<span class="why">{copied() ? "copied" : VERSION}</span>
-      </button>
-    </>
+      </Mi>
+      <Sep />
+      <Mi slot={<Icon name="info" />} end={<Why>{copied() ? "copied" : VERSION}</Why>} tap={about}>
+        About octopus
+      </Mi>
+      <Gap n={2} />
+    </Sheet>
   );
 }
 
-function ServerPage(props: { name: string }) {
+type Mode = "main" | "rename" | "forget" | ShownOffer;
+
+/** A server's screen in the sheet: its reachability and key, its pairing code, its paired clients, rename and forget. */
+export function ServerMenu(props: { name: string }) {
   const server = () => serverView(props.name);
   const now = ticking();
-  const [mode, setMode] = createSignal<"main" | "rename" | "forget" | ShownOffer>("main");
+  const [mode, setMode] = createSignal<Mode>("main");
   const offer = () => {
     const shown = mode();
     return typeof shown === "string" ? null : shown;
@@ -75,196 +93,140 @@ function ServerPage(props: { name: string }) {
     () => (server()?.reachable ? props.name : false),
     backend.serverClients,
   );
+  const facts = () => {
+    const shown = server();
+    if (shown === undefined) return [];
+    const reach = shown.reachable
+      ? `reachable · ${rtt(shown.rtt_ms)}`
+      : `unreachable since ${clock(shown.since, "h23")}`;
+    const key = shown.key === null ? "local socket" : `key ${shortKey(shown.key)}`;
+    const lan = shown.addresses.find((address) => LAN.test(address)) ?? shown.addresses[0];
+    return [reach, lan === undefined ? key : `${key} · lan ${host(lan)}`];
+  };
   const showCode = () => backend.serverOffer(props.name).then(setMode, report);
   const copyInvite = (invite: string) =>
-    navigator.clipboard.writeText(invite).then(() => toast("Copied the pairing invite"), report);
+    navigator.clipboard.writeText(invite).then(() => notify("Copied the pairing invite"), report);
+  const shareInvite = (invite: string) =>
+    navigator.share
+      ? navigator.share({ text: invite }).catch((error: Error) => {
+          if (error.name !== "AbortError") report(error);
+        })
+      : copyInvite(invite);
   const revoke = (client: string) => backend.serverRevoke(props.name, client).then(refetch, report);
   const rename = (name: string) =>
-    backend.serverRename(props.name, name).then(() => openMenu({ show: "server", name }));
+    backend.serverRename(props.name, name).then(() => showInSheet({ is: "server", name }));
   const forget = () => backend.serverForget(props.name).then(toMenu, report);
+  const head = (lines: string[], up: () => void) => <SheetHead title={props.name} facts={lines} back={up} />;
   return (
-    <>
-      <SheetHead
-        back={toMenu}
-        title={
-          <Show when={mode() === "rename"} fallback={props.name}>
+    <Sheet>
+      <Switch>
+        <Match when={offer()}>
+          {(offered) => (
+            <>
+              {head([expiry(offered().offer, now())], () => setMode("main"))}
+              <div class="qr" innerHTML={offered().qr} />
+              <Gap n={3} />
+              <div class="cmd">
+                <span class="name">{grouped(inviteCode(offered().offer))}</span>
+              </div>
+              <Gap n={3} />
+              <div class="pair2">
+                <button class="secondary" onClick={() => copyInvite(offered().offer.invite)}>
+                  <Icon name="copy" />
+                  Copy invite
+                </button>
+                <button class="secondary" onClick={() => shareInvite(offered().offer.invite)}>
+                  <Icon name="share" />
+                  Share
+                </button>
+              </div>
+              <Gap n={2} />
+            </>
+          )}
+        </Match>
+        <Match when={true}>
+          {head(facts(), toMenu)}
+          <Mi
+            slot={<Icon name="qr" />}
+            off={!server()?.reachable}
+            end={server()?.reachable ? <Chev /> : <Why>unreachable</Why>}
+            tap={showCode}
+          >
+            Show pairing code
+          </Mi>
+          <Show when={mode() !== "forget"}>
+            <Gl>paired clients</Gl>
+            <Show
+              when={server()?.reachable && !clients.error && clients()}
+              fallback={
+                <div class="empty">
+                  {!server()?.reachable
+                    ? "unknown while unreachable"
+                    : clients.error
+                      ? String(clients.error)
+                      : "listing…"}
+                </div>
+              }
+            >
+              {(listed) => (
+                <For each={listed()}>
+                  {(client) => (
+                    <Mi
+                      slot={<i class={client.connected || client.name === me() ? "dot srv" : "dot idle"} />}
+                      end={
+                        <>
+                          <Why>{clientStatus(client, now())}</Why>
+                          <Show when={client.name !== me()}>
+                            <button class="btn danger" onClick={() => revoke(client.name)}>
+                              Revoke
+                            </button>
+                          </Show>
+                        </>
+                      }
+                    >
+                      {client.name}
+                    </Mi>
+                  )}
+                </For>
+              )}
+            </Show>
+          </Show>
+          <Sep />
+          <Show
+            when={mode() === "rename"}
+            fallback={
+              <Mi slot={<Icon name="pen" />} tap={() => setMode("rename")}>
+                Rename…
+              </Mi>
+            }
+          >
             <Rename value={props.name} apply={rename} done={() => setMode("main")} />
           </Show>
-        }
-        lines={[
-          server()?.relay ?? "",
-          server()?.reachable
-            ? `reachable · ${server()?.rtt_ms ?? "–"} ms`
-            : `unreachable since ${clock(server()?.since ?? now())}`,
-        ]}
-      />
-      <Show when={offer()}>
-        {(offered) => (
-          <>
-            <div class="code">
-              <div class="qr" innerHTML={offered().qr} />
-              <div class="digits">{grouped(inviteCode(offered().offer))}</div>
-              <div class="exp">{expiry(offered().offer, now())}</div>
+          <Show
+            when={mode() === "forget"}
+            fallback={
+              <Mi slot={<Icon name="x" />} danger tap={() => setMode("forget")}>
+                Forget server
+              </Mi>
+            }
+          >
+            <Gap n={2} />
+            <div class="confirm">
+              <span>
+                Forget {props.name}? Its tasks leave this client's lists; they keep running on {props.name}. Pairing
+                again needs a new code.
+              </span>
+              <div class="row2">
+                <button class="btn quiet" onClick={() => setMode("main")}>
+                  Cancel
+                </button>
+                <button class="btn danger" onClick={forget}>
+                  Forget
+                </button>
+              </div>
             </div>
-            <button class="si" onClick={() => copyInvite(offered().offer.invite)}>
-              Copy invite
-            </button>
-          </>
-        )}
-      </Show>
-      <Show when={mode() === "forget"}>
-        <div class="confirm">
-          <span>
-            Forget {props.name}? Its tasks leave this phone's list; they keep running on {props.name}. Pairing again
-            needs a new invite.
-          </span>
-          <div class="row">
-            <button class="btn" onClick={() => setMode("main")}>
-              Cancel
-            </button>
-            <button class="btn danger" onClick={forget}>
-              Forget
-            </button>
-          </div>
-        </div>
-      </Show>
-      <Show when={mode() === "main" || mode() === "rename"}>
-        <button
-          class="si"
-          aria-disabled={server()?.reachable ? undefined : "true"}
-          onClick={() => server()?.reachable && showCode()}
-        >
-          Show pairing code
-          <Show when={!server()?.reachable}>
-            <span class="why">unreachable</span>
           </Show>
-        </button>
-        <div class="sep" />
-        <div class="label">Paired clients</div>
-        <Show
-          when={server()?.reachable && !clients.error && clients()}
-          fallback={
-            <div class="label">
-              {!server()?.reachable ? "unknown while unreachable" : clients.error ? String(clients.error) : "listing…"}
-            </div>
-          }
-        >
-          {(listed) => (
-            <For each={listed()}>
-              {(client) => (
-                <div class="client">
-                  <span class="dot" classList={{ idle: !client.connected }} />
-                  <span class="name">{client.name}</span>
-                  <span class="mono">{clientStatus(client, now())}</span>
-                  <Show when={client.name !== me()}>
-                    <button class="revoke" onClick={() => revoke(client.name)}>
-                      Revoke
-                    </button>
-                  </Show>
-                </div>
-              )}
-            </For>
-          )}
-        </Show>
-        <div class="sep" />
-        <button class="si" onClick={() => setMode("rename")}>
-          Rename…
-        </button>
-        <button class="si danger" onClick={() => setMode("forget")}>
-          Forget server
-        </button>
-      </Show>
-    </>
-  );
-}
-
-function PairPage() {
-  const [named] = createResource(phone.named);
-  const [invite, setInvite] = createSignal("");
-  const [name, setName] = createSignal(me());
-  const [problem, setProblem] = createSignal<string | null>(null);
-  const [pairing, setPairing] = createSignal(false);
-  const naming = () => named() === false;
-  const complete = () => invite().trim() !== "" && (!naming() || name().trim() !== "") && !pairing();
-  const scanned = () =>
-    scanInvite().then(
-      (text) => {
-        setInvite(text);
-        setProblem(null);
-      },
-      (error: { message: string }) => setProblem(error.message),
-    );
-  const pair = (event: SubmitEvent) => {
-    event.preventDefault();
-    if (!complete()) return;
-    setPairing(true);
-    setProblem(null);
-    phone
-      .pair(invite().trim(), naming() ? name().trim() : null)
-      .then(
-        () => {
-          if (naming()) setMe(name().trim());
-          toMenu();
-        },
-        (error) => setProblem(String(error)),
-      )
-      .finally(() => setPairing(false));
-  };
-  return (
-    <form class="pair" onSubmit={pair}>
-      <SheetHead back={toMenu} title="Pair a server" />
-      <label class="field">
-        <span>Invite</span>
-        <textarea
-          class="mono"
-          rows={3}
-          spellcheck={false}
-          autocapitalize="off"
-          autocorrect="off"
-          placeholder="octopus://…"
-          value={invite()}
-          onInput={(event) => setInvite(event.currentTarget.value)}
-        />
-      </label>
-      <button type="button" class="btn" onClick={scanned}>
-        Scan QR
-      </button>
-      <Show when={naming()}>
-        <label class="field">
-          <span>This phone's name</span>
-          <input
-            spellcheck={false}
-            autocorrect="off"
-            value={name()}
-            onInput={(event) => setName(event.currentTarget.value)}
-          />
-        </label>
-      </Show>
-      <Show when={problem()}>{(shown) => <div class="err">{shown()}</div>}</Show>
-      <button type="submit" class="btn go" disabled={!complete()}>
-        {pairing() ? "Pairing…" : "Pair"}
-      </button>
-    </form>
-  );
-}
-
-const shownServer = () => {
-  const page = menuPage();
-  return page?.show === "server" ? page.name : null;
-};
-
-export function ClientMenu() {
-  return (
-    <Sheet shown={menuPage() !== null} close={closeMenu}>
-      <Switch>
-        <Match when={menuPage()?.show === "menu"}>
-          <Items />
-        </Match>
-        <Match when={menuPage()?.show === "pair"}>
-          <PairPage />
-        </Match>
-        <Match when={shownServer()} keyed>
-          {(name) => <ServerPage name={name} />}
+          <Gap n={2} />
         </Match>
       </Switch>
     </Sheet>

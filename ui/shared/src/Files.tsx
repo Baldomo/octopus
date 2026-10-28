@@ -1,7 +1,7 @@
 import { createEffect, createMemo, For, lazy, on, Show } from "solid-js";
 import { keepInView } from "./keepInView";
 import { commands, hint, mac } from "./commands";
-import { filesOf, join, loadMonaco, nameOf, renderable, type TaskFiles } from "./taskFiles";
+import { filesOf, join, loadMonaco, nameOf, renderable, tabHints, type TaskFiles } from "./taskFiles";
 import { act, openView, report } from "./state";
 
 type Editor = import("monaco-editor").editor.IStandaloneCodeEditor;
@@ -54,25 +54,10 @@ function Tree(props: { files: TaskFiles; dir: string; depth: number }) {
   );
 }
 
-const dirsOf = (path: string) => path.split("/").slice(0, -1);
-const tail = (dirs: string[], depth: number) => dirs.slice(-depth).join("/");
-
 /** A tab names its file, and the fewest trailing directories that tell it from another open tab of the same name. */
 function EditorTabs(props: { files: TaskFiles; visible: boolean }) {
   let bar!: HTMLDivElement;
-  const where = createMemo(() => {
-    const tabs = props.files.state.tabs;
-    const hints: Record<string, string> = {};
-    for (const path of tabs) {
-      const rivals = tabs.filter((tab) => tab !== path && nameOf(tab) === nameOf(path)).map(dirsOf);
-      if (rivals.length === 0) continue;
-      const dirs = dirsOf(path);
-      let depth = 1;
-      while (depth < dirs.length && rivals.some((rival) => tail(rival, depth) === tail(dirs, depth))) depth++;
-      hints[path] = dirs.length === 0 ? "." : tail(dirs, depth);
-    }
-    return hints;
-  });
+  const where = createMemo(() => tabHints(props.files.state.tabs));
   const scrollSideways = (event: WheelEvent) => {
     if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
     bar.scrollLeft += event.deltaY;

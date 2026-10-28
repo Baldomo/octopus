@@ -97,9 +97,11 @@ async function copy(text: string, what: JSX.Element) {
   toast(<>Copied {what}</>);
 }
 
-export const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+/** A time of day in the locale's clock, or on the 24-hour one a design asks for. */
+export const clock = (at: number, hourCycle?: "h23") =>
+  new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle });
 
-function ago(at: number, now: number) {
+export function ago(at: number, now: number) {
   const minutes = Math.floor((now - at) / 60_000);
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes} min ago`;

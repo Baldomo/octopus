@@ -19,9 +19,12 @@ octopus-client.workspace = true
 octopus-proto.workspace = true
 octopus-shell.workspace = true
 tauri = { version = "2.12.5", features = [] }
+tokio = { version = "1.54.1", features = ["sync"] }
 
 [target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
 tauri-plugin-barcode-scanner = "2.5.3"
+tauri-plugin-clipboard-manager = "2.5.0"
+tauri-plugin-haptics = "2.4.2"
 
 [target.'cfg(target_os = "ios")'.dependencies]
 # Exact, and so for the whole workspace, which resolves one libc: from 0.2.190 libc declares the route and `in6_ifreq`
@@ -30,6 +33,8 @@ libc = "=0.2.189"
 objc2 = "0.6.5"
 objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
   "std",
+  "block2",
+  "UIApplication",
   "UIDevice",
   "UIInterface",
   "UIResponder",
@@ -38,6 +43,7 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
   "UIWindow",
 ] }
 block2 = "0.6.2"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDictionary", "NSString", "NSURL"] }
 objc2-avf-audio = { version = "0.3.2", default-features = false, features = [
   "std",
   "block2",

@@ -50,6 +50,14 @@ pub fn phone_named(phone: State<Phone>) -> bool {
     phone.named.load(Ordering::Relaxed)
 }
 
+/// Reads the key, in hex, of the server an invite pairs, shown before pairing spends it, naming the part of the
+/// invite that is wrong.
+#[tauri::command]
+pub fn phone_invite_key(invite: String) -> Result<String, String> {
+    let invite: Invite = invite.trim().parse()?;
+    Ok(invite.server.hex())
+}
+
 /// Pairs with the server `invite` names and resolves to its name. A phone that has never paired names itself `name`
 /// first; a named phone passes none.
 #[tauri::command]

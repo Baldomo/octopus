@@ -1,16 +1,18 @@
-import { createSignal, Show, type JSX } from "solid-js";
+import { createSignal, For, Show, type JSX } from "solid-js";
+import { back } from "./nav";
+import { Circle, Slot } from "./parts";
 
 /** How far a downward swipe carries the sheet before letting go closes it. */
 const SWIPE_CLOSES_PX = 80;
 
-/** Rises from the foot of the screen; a downward swipe from its top, or a tap above it, closes it. */
-export function Sheet(props: { shown: boolean; close: () => void; children: JSX.Element }) {
+/**
+ * Rises from the bottom edge over a scrim and the bottom inset; a swipe down from its top, a tap on the scrim, or the
+ * OS's back closes it.
+ */
+export function Sheet(props: { children: JSX.Element; full?: boolean; style?: JSX.CSSProperties }) {
   let sheet!: HTMLDivElement;
   const [pulled, setPulled] = createSignal(0);
   let start: number | null = null;
-  const touchStart = (event: TouchEvent) => {
-    start = sheet.scrollTop === 0 ? (event.touches[0]?.clientY ?? null) : null;
-  };
   const touchMove = (event: TouchEvent) => {
     const y = event.touches[0]?.clientY;
     if (start === null || y === undefined) return;
@@ -18,49 +20,51 @@ export function Sheet(props: { shown: boolean; close: () => void; children: JSX.
     if (pulled() > 0) event.preventDefault();
   };
   const touchEnd = () => {
-    if (pulled() > SWIPE_CLOSES_PX) props.close();
+    if (pulled() > SWIPE_CLOSES_PX) back();
     start = null;
     setPulled(0);
   };
   return (
-    <Show when={props.shown}>
-      <div class="scrim" onClick={props.close} />
+    <div class="layer">
+      <div class="scrim" onClick={back} />
       <div
         ref={(element) => {
           sheet = element;
           element.addEventListener("touchmove", touchMove, { passive: false });
         }}
         class="sheet"
-        classList={{ pulled: pulled() > 0 }}
-        style={{ transform: pulled() > 0 ? `translateY(${pulled()}px)` : undefined }}
-        onTouchStart={touchStart}
+        classList={{ full: props.full, pulled: pulled() > 0 }}
+        style={{ ...props.style, transform: pulled() > 0 ? `translateY(${pulled()}px)` : undefined }}
+        onTouchStart={(event) => (start = sheet.scrollTop === 0 ? (event.touches[0]?.clientY ?? null) : null)}
         onTouchEnd={touchEnd}
         onTouchCancel={touchEnd}
       >
-        <div class="grabber" />
+        <div class="grab" />
         {props.children}
       </div>
-    </Show>
+    </div>
   );
 }
 
-/** A sheet page's header: a back chevron when the page has a parent, its title, and lines beneath. */
-export function SheetHead(props: { title: JSX.Element; lines?: string[]; back?: () => void }) {
+/** A sheet's header: back when it shows a page in place, a lead glyph, its subject over its facts in mono, an action. */
+export function SheetHead(props: {
+  title: JSX.Element;
+  facts?: JSX.Element[];
+  back?: () => void;
+  lead?: JSX.Element;
+  end?: JSX.Element;
+}) {
   return (
-    <div class="sh">
-      <Show when={props.back}>
-        {(back) => (
-          <button class="back" aria-label="Back" onClick={back()}>
-            ‹
-          </button>
-        )}
+    <div class="shead" classList={{ lead: props.lead !== undefined && (props.facts?.length ?? 0) > 0 }}>
+      <Show when={props.lead}>
+        <Slot>{props.lead}</Slot>
       </Show>
-      <div class="sh-text">
-        <b>{props.title}</b>
-        {props.lines?.map((line) => (
-          <span class="mono">{line}</span>
-        ))}
+      <Show when={props.back}>{(back) => <Circle icon="back" label="Back" tap={back()} />}</Show>
+      <div class="ttl">
+        <b class="name">{props.title}</b>
+        <For each={props.facts}>{(fact) => <span class="id">{fact}</span>}</For>
       </div>
+      {props.end}
     </div>
   );
 }

@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use octopus_client::tunnel::{Tunnel, listen_on_localhost};
+use octopus_client::tunnel::{Tunnel, listen_on_localhost, loopback_port};
 use octopus_proto::types::{BrowserId, web_page};
 use octopus_shell::hub::Hub;
 use octopus_shell::task_lists::TaskRef;
@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use tauri::webview::{PageLoadEvent, WebviewBuilder};
 use tauri::{AppHandle, Url, Webview, WebviewUrl};
 use ts_rs::TS;
-use url::Host;
 
 use crate::layers::Layers;
 
@@ -41,16 +40,6 @@ pub struct Navigated {
 /// A browser panel anywhere in the client: `<server>/<task>/<panel>`.
 fn panel_key(at: &TaskRef, panel: &BrowserId) -> String {
     format!("{}/{panel}", at.key())
-}
-
-/// The port of the server's machine a page reaches, when its host is a loopback name or address.
-fn loopback_port(page: &Url) -> Option<u16> {
-    let loopback = match page.host()? {
-        Host::Domain(name) => name == "localhost",
-        Host::Ipv4(address) => address.is_loopback(),
-        Host::Ipv6(address) => address.is_loopback(),
-    };
-    loopback.then(|| page.port_or_known_default()).flatten()
 }
 
 /// The browser panel the page layer shows, at its rect.

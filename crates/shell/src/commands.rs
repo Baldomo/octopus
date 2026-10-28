@@ -9,7 +9,7 @@ use octopus_proto::ops::{
     WorkspaceAdd, WorkspaceRemove,
 };
 use octopus_proto::pairing::Invite;
-use octopus_proto::types::{Checkout, Color, PtyId, Stream, Swatch, TaskId, TaskState, WorkspaceId};
+use octopus_proto::types::{Checkout, Color, PtyId, SessionId, Stream, Swatch, TaskId, TaskState, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody, Response};
 use tauri::{Runtime, State};
@@ -159,13 +159,15 @@ pub struct NewTask {
     pub state: TaskState,
     pub checkout: Checkout,
     pub harness: String,
+    /// An existing session for the agent to resume; none for a fresh one.
+    pub session: Option<SessionId>,
 }
 
 /// Resolves to the created task's key.
 #[tauri::command]
 pub async fn task_create(hub: Hubbed<'_>, task: NewTask) -> Result<String, String> {
-    let NewTask { server, workspace, title, parent, state, checkout, harness } = task;
-    let create = TaskCreate { workspace, title, parent, state, checkout, harness, session: None };
+    let NewTask { server, workspace, title, parent, state, checkout, harness, session } = task;
+    let create = TaskCreate { workspace, title, parent, state, checkout, harness, session };
     let created = hub.call(&server, &create).await?;
     Ok(TaskRef { server, task: created.task }.key())
 }

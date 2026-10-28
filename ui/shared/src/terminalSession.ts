@@ -39,6 +39,8 @@ function terminalTheme(current: Scheme): ITheme {
 const SCROLLBACK_LINES = 10_000;
 /** A dropped stream retries after this, by which time a server that went away reads as unreachable. */
 const REATTACH_MS = 500;
+/** A refusal waits this long for the lock's move that caused it to reach the model before it counts as a problem. */
+const LOCK_SETTLES_MS = 500;
 
 /** Whether the app shows anything: a hidden window, or a phone app in the background, shows no terminal. */
 export const [windowShown, setWindowShown] = createSignal(true);
@@ -119,17 +121,23 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
     attachment = null;
     setAttached(false);
   };
+  /**
+   * A resize or claim another client's lock outran is moot rather than a problem: the terminal shows that client as
+   * its holder once the lock's move reaches the model.
+   */
+  const unlessOutrun = (sent: Promise<void>, stillMine: () => boolean) =>
+    sent.catch((error) => setTimeout(() => stillMine() && report(error), LOCK_SETTLES_MS));
   /** A drag or a rotation resizes once per frame, since every resize the server takes is published. */
   let resizing = 0;
   const resize = () => {
     cancelAnimationFrame(resizing);
     resizing = requestAnimationFrame(() => {
-      if (mine()) act(backend.termResize(props.at, props.panel().id, xterm.cols, xterm.rows));
+      if (mine()) unlessOutrun(backend.termResize(props.at, props.panel().id, xterm.cols, xterm.rows), mine);
     });
   };
-  const atPaneSize = (send: (size: Cells) => Promise<void>, what: string) => {
+  const atPaneSize = (send: (size: Cells) => Promise<void>, what: string, stillMine: () => boolean) => {
     const size = pane();
-    if (size) act(send(size));
+    if (size) unlessOutrun(send(size), stillMine);
     else report(`the terminal's pane has no size to ${what} the terminal at yet`);
   };
   xterm.onResize(() => {
@@ -150,7 +158,11 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
   createEffect(
     on([attached, () => props.panel().lock_holder === null && props.panel().running], ([showing, free]) => {
       if (showing && free) {
-        atPaneSize((size) => backend.termClaim(props.at, props.panel().id, size.cols, size.rows), "claim");
+        atPaneSize(
+          (size) => backend.termClaim(props.at, props.panel().id, size.cols, size.rows),
+          "claim",
+          () => props.panel().lock_holder === null,
+        );
       }
     }),
   );
@@ -179,7 +191,12 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
     input: (keys) => {
       if (attachment !== null) act(backend.termInput(attachment, keys));
     },
-    take: () => atPaneSize((size) => backend.termTakeLock(props.at, props.panel().id, size.cols, size.rows), "take"),
+    take: () =>
+      atPaneSize(
+        (size) => backend.termTakeLock(props.at, props.panel().id, size.cols, size.rows),
+        "take",
+        () => true,
+      ),
     fit,
     open: (pane) => {
       xterm.open(pane);

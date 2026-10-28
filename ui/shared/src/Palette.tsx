@@ -1,15 +1,11 @@
-import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js";
-import { backend } from "./backend";
+import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js";
 import { autofocus } from "./Dialog";
-import type { Match } from "./generated";
+import { fileMatches } from "./fileMatches";
 import { commands as keyCommands, hint } from "./commands";
-import { model, openTask, openView, report, reveal, serverLabel, showModal } from "./state";
+import { model, openTask, openView, reveal, serverLabel, showModal } from "./state";
 
 type Item = { label: string; detail: string; run: () => void };
 
-const SEARCH_DELAY_MS = 150;
-/** File search starts at this many characters; shorter patterns match nearly every line. */
-const MIN_QUERY = 2;
 const RESULTS_PER_GROUP = 50;
 
 const commands: Item[] = Object.values(keyCommands)
@@ -19,24 +15,10 @@ const commands: Item[] = Object.values(keyCommands)
 export function Palette() {
   const [query, setQuery] = createSignal("");
   const [chosen, setChosen] = createSignal(0);
-  const [matches, setMatches] = createSignal<Match[]>([]);
   const needle = () => query().trim().toLowerCase();
 
-  createEffect(
-    on(needle, (text) => {
-      setChosen(0);
-      setMatches([]);
-      const open = openView();
-      if (text.length < MIN_QUERY || open === undefined) return;
-      const at = open.at;
-      const timer = setTimeout(() => {
-        backend.fileSearch(at, query().trim()).then((found) => {
-          if (needle() === text) setMatches(found.slice(0, RESULTS_PER_GROUP));
-        }, report);
-      }, SEARCH_DELAY_MS);
-      onCleanup(() => clearTimeout(timer));
-    }),
-  );
+  const matches = fileMatches(() => openView()?.at, query, RESULTS_PER_GROUP);
+  createEffect(on(needle, () => setChosen(0)));
 
   const groups = createMemo(() => {
     const text = needle();

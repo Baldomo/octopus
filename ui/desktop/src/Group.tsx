@@ -9,5 +9,3 @@ export const GroupHead = (props: { state: TaskState; count?: number }) => (
     </Show>
   </div>
 );
-
-export const dropHint = (state: TaskState) => `drop to mark ${state}`;
