@@ -282,6 +282,8 @@ pub struct Panel {
     pub lock_holder: Option<String>,
     pub cols: u16,
     pub rows: u16,
+    /// A program of the terminal records from its virtual microphone, so the holder sends its own on `mic:<pty>`.
+    pub listening: bool,
 }
 
 impl Panel {
@@ -366,7 +368,25 @@ pub enum Stream {
     },
     /// A TCP connection to a port on the server's machine.
     Tunnel(u16),
+    /// The lock holder's microphone, as `MIC_FORMAT`, into the terminal's virtual microphone.
+    Mic(PtyId),
 }
+
+/// The audio on a `mic:<pty>` stream.
+pub struct PcmFormat {
+    pub rate: u32,
+    pub channels: u16,
+    pub bytes_per_sample: usize,
+}
+
+impl PcmFormat {
+    pub const fn bytes_per_second(&self) -> usize {
+        self.rate as usize * self.channels as usize * self.bytes_per_sample
+    }
+}
+
+/// Signed 16-bit little-endian, 48 kHz, mono.
+pub const MIC_FORMAT: PcmFormat = PcmFormat { rate: 48_000, channels: 1, bytes_per_sample: 2 };
 
 impl Stream {
     pub fn name(&self) -> String {
@@ -374,6 +394,7 @@ impl Stream {
             Self::Pty(pty) => format!("pty:{pty}"),
             Self::File { task, path } => format!("file:{task}/{path}"),
             Self::Tunnel(port) => format!("tunnel:{port}"),
+            Self::Mic(pty) => format!("mic:{pty}"),
         }
     }
 
@@ -385,6 +406,7 @@ impl Stream {
                 Some(Self::File { task: TaskId(task.to_string()), path: path.to_string() })
             }
             ("tunnel", port) => Some(Self::Tunnel(port.parse().ok()?)),
+            ("mic", pty) => Some(Self::Mic(PtyId(pty.to_string()))),
             _ => None,
         }
     }

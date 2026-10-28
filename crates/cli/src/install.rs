@@ -36,6 +36,9 @@ pub struct ServerRun {
     /// e.g. https://euc1-1.relay.n0.iroh.link./, or one of your own.
     #[arg(long, value_parser = remote::relay)]
     pub relay: RelayUrl,
+    /// Give each terminal a virtual microphone that its lock holder feeds.
+    #[arg(long, action = clap::ArgAction::Set)]
+    pub microphone: bool,
 }
 
 impl ServerRun {
@@ -49,7 +52,7 @@ impl ServerRun {
         Ok(())
     }
 
-    fn flags(&self) -> [(&'static str, String); 7] {
+    fn flags(&self) -> [(&'static str, String); 8] {
         [
             ("--name", self.name.clone()),
             ("--socket", self.socket.display().to_string()),
@@ -58,6 +61,7 @@ impl ServerRun {
             ("--terminal-host", self.terminal_host.display().to_string()),
             ("--udp", self.udp.to_string()),
             ("--relay", self.relay.to_string()),
+            ("--microphone", self.microphone.to_string()),
         ]
     }
 }
@@ -73,6 +77,13 @@ pub struct Service {
 pub struct Registration {
     pub service: String,
     pub unit: PathBuf,
+}
+
+#[derive(Serialize)]
+pub struct Installed {
+    #[serde(flatten)]
+    pub registration: Registration,
+    pub microphone: microphone::Outcome,
 }
 
 /// Every service manager accepts ASCII letters, digits, '-', '_' and '.', so each other character becomes '-'.
@@ -100,6 +111,7 @@ impl Service {
             terminal_host: absolute(run.terminal_host)?,
             udp: run.udp,
             relay: run.relay,
+            microphone: run.microphone,
         };
         run.check()?;
         let service = Self { id, run, program: absolute(program)?, log: absolute(log)? };
@@ -173,20 +185,38 @@ fn systemd_word(word: &str) -> String {
 /// Text no argument holds, which shows where a word puts its argument.
 const MARK: &str = "\u{0}";
 
-/// The unit `text`, spelled word by word with `word` and `separator`, re-spelled from `--quic <address>`, which this
-/// binary no longer takes, to `--udp <address> --relay <n0's relay>`, keeping the address as the unit spells it;
-/// none for a unit already current.
-fn upgraded_unit(text: &str, word: impl Fn(&str) -> String, separator: &str) -> Option<String> {
-    let flag = word("--quic") + separator;
+/// Where `flag` and the value after it sit in `text`: the flag's start, the value as spelled, and the value's end.
+fn flag_value(
+    text: &str,
+    flag: &str,
+    word: &impl Fn(&str) -> String,
+    separator: &str,
+) -> Option<(usize, String, usize)> {
+    let flag = word(flag) + separator;
     let marked = word(MARK);
     let (prefix, suffix) = marked.split_once(MARK).expect("a word wraps its text");
     let start = text.find(&flag)?;
-    let address_start = start + flag.len() + prefix.len();
+    let value_start = start + flag.len() + prefix.len();
     text[start + flag.len()..].starts_with(prefix).then_some(())?;
-    let address_end = address_start + text[address_start..].find(suffix)?;
-    let address = format!("{prefix}{}{suffix}", &text[address_start..address_end]);
-    let current = [word("--udp"), address, word("--relay"), word(remote::N0_EU_RELAY)].join(separator);
-    Some(format!("{}{current}{}", &text[..start], &text[address_end + suffix.len()..]))
+    let value_end = value_start + text[value_start..].find(suffix)?;
+    Some((start, format!("{prefix}{}{suffix}", &text[value_start..value_end]), value_end + suffix.len()))
+}
+
+/// The unit `text`, spelled word by word with `word` and `separator`, re-spelled to the flags this binary takes:
+/// `--quic <address>` becomes `--udp <address> --relay <n0's relay>`, keeping the address as the unit spells it, and
+/// a unit without `--microphone` gains `--microphone true` after its relay. None for a unit already current.
+fn upgraded_unit(text: &str, word: impl Fn(&str) -> String, separator: &str) -> Option<String> {
+    let off_quic = flag_value(text, "--quic", &word, separator).map(|(start, address, end)| {
+        let current = [word("--udp"), address, word("--relay"), word(remote::N0_EU_RELAY)].join(separator);
+        format!("{}{current}{}", &text[..start], &text[end..])
+    });
+    let text = off_quic.as_deref().unwrap_or(text);
+    if text.contains(&(word("--microphone") + separator)) {
+        return off_quic;
+    }
+    let (_, _, relay_end) = flag_value(text, "--relay", &word, separator)?;
+    let microphone = [String::new(), word("--microphone"), word("true")].join(separator);
+    Some(format!("{}{microphone}{}", &text[..relay_end], &text[relay_end..]))
 }
 
 /// `KillMode=process` stops the server alone, so its terminal host and every agent outlive a restart.
@@ -233,6 +263,23 @@ fn remove_unit(path: &Path) -> anyhow::Result<()> {
     std::fs::remove_file(path).with_context(|| format!("remove {}", path.display()))
 }
 
+/// The user service manager serves the whole account, so a unit read or registered under any other HOME would run
+/// in the account's real session, beside and outliving the account's own server.
+fn account_home() -> anyhow::Result<PathBuf> {
+    let account = nix::unistd::User::from_uid(nix::unistd::getuid())
+        .context("look up this account")?
+        .ok_or_else(|| anyhow!("this user has no account entry"))?;
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("no home directory"))?;
+    if home != account.dir {
+        bail!(
+            "HOME is {}, not this account's home {}, so octopus manages no service here",
+            home.display(),
+            account.dir.display()
+        );
+    }
+    Ok(home)
+}
+
 fn unit_path(id: &str) -> anyhow::Result<PathBuf> {
     Ok(manager::unit_directory()?.join(format!("{id}{}", manager::EXTENSION)))
 }
@@ -240,8 +287,8 @@ fn unit_path(id: &str) -> anyhow::Result<PathBuf> {
 /// How long an upgrade may hold a unit before another takes it over.
 const UPGRADE_PATIENCE: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Registers again each octopus unit that runs this binary with `--quic`, which it no longer takes, so its server
-/// comes back up on `--udp` and n0's relay. A unit it cannot read is another program's. Every unit has its turn, and
+/// Registers again each octopus unit that runs this binary with flags it no longer takes, so its server
+/// comes back up on today's. A unit it cannot read is another program's. Every unit has its turn, and
 /// the error names each one that could not be registered.
 pub fn upgrade_units() -> anyhow::Result<()> {
     let directory = manager::unit_directory()?;
@@ -267,7 +314,7 @@ pub fn upgrade_units() -> anyhow::Result<()> {
         }
     }
     if !failed.is_empty() {
-        bail!("register the services installed with --quic again: {}", failed.join("; "));
+        bail!("register the services installed with older flags again: {}", failed.join("; "));
     }
     Ok(())
 }
@@ -293,12 +340,13 @@ pub fn upgrade_service(name: &str) -> anyhow::Result<()> {
     upgraded
 }
 
-/// A service an older binary installed starts `server run --quic`, which no longer parses. Its server hands the
-/// upgrade to `server upgrade` in a process group of its own, which outlives the service manager stopping this one.
+/// A service an older binary installed starts `server run` with `--quic` or without `--microphone`, which no longer
+/// parses. Its server hands the upgrade to `server upgrade` in a process group of its own, which outlives the service
+/// manager stopping this one.
 pub fn hand_off_old_service(argv: &[String]) {
     use std::os::unix::process::CommandExt;
-    let old_server =
-        argv.get(1..3) == Some(&["server".to_string(), "run".to_string()]) && argv.iter().any(|word| word == "--quic");
+    let old_flags = argv.iter().any(|word| word == "--quic") || !argv.iter().any(|word| word == "--microphone");
+    let old_server = argv.get(1..3) == Some(&["server".to_string(), "run".to_string()]) && old_flags;
     let Some(name) = argv.windows(2).find(|pair| pair[0] == "--name").map(|pair| &pair[1]) else { return };
     if !old_server {
         return;
@@ -308,28 +356,46 @@ pub fn hand_off_old_service(argv: &[String]) {
     });
     match upgrade {
         Ok(_) => {
-            eprintln!("octopus: service {name} was installed with --quic; registering it again with --udp and --relay")
+            eprintln!("octopus: service {name} was installed with older flags; registering it again with today's")
         }
         Err(error) => eprintln!("octopus: start `octopus server upgrade --name {name}`: {error}"),
     }
 }
 
-pub fn install(service: &Service) -> anyhow::Result<Registration> {
+/// The server installs whatever becomes of the Octopus Microphone.
+pub fn install(service: &Service) -> anyhow::Result<Installed> {
     let unit = unit_path(&service.id)?;
     for directory in [&unit, &service.log].map(|path| path.parent().expect("an absolute file path has a directory")) {
         std::fs::create_dir_all(directory).with_context(|| format!("create {}", directory.display()))?;
     }
     std::fs::write(&unit, manager::unit(service)).with_context(|| format!("write {}", unit.display()))?;
+    let microphone = if service.run.microphone { microphone::install() } else { microphone::Outcome::NotAsked };
+    if let microphone::Outcome::Failed { reason } = &microphone {
+        eprintln!("octopus: installed without the Octopus Microphone: {reason}");
+    }
     manager::register(&service.id, &unit)?;
-    Ok(Registration { service: service.id.clone(), unit })
+    Ok(Installed { registration: Registration { service: service.id.clone(), unit }, microphone })
 }
 
-/// The terminal host and its agents keep running; they end with the machine.
-pub fn uninstall(name: &str) -> anyhow::Result<Registration> {
+#[derive(Serialize)]
+pub struct Uninstalled {
+    #[serde(flatten)]
+    pub registration: Registration,
+    pub microphone: microphone::Outcome,
+}
+
+/// The terminal host and its agents keep running; they end with the machine. The user's input comes back, and the
+/// Octopus Microphone goes with the machine's last server.
+pub fn uninstall(name: &str) -> anyhow::Result<Uninstalled> {
     let id = service_id(name)?;
     let unit = unit_path(&id)?;
+    let terminal_host = microphone::terminal_host(&unit);
     manager::unregister(&id, &unit)?;
-    Ok(Registration { service: id, unit })
+    let microphone = microphone::uninstall(terminal_host.as_deref(), &unit);
+    if let microphone::Outcome::Failed { reason } = &microphone {
+        eprintln!("octopus: uninstalled, leaving the Octopus Microphone: {reason}");
+    }
+    Ok(Uninstalled { registration: Registration { service: id, unit }, microphone })
 }
 
 /// Registers again each service an older binary installed, then lists this machine's server when this client lists
@@ -358,6 +424,7 @@ fn list_or_install_this_machine() -> anyhow::Result<()> {
             terminal_host: local_socket(&home, "host"),
             udp: ([0, 0, 0, 0], 7300).into(),
             relay: remote::N0_EU_RELAY.parse().expect("n0's relay is a URL"),
+            microphone: true,
         };
         install(&Service::new(run, std::env::current_exe()?, home.join("server.log"))?)?;
     }
@@ -375,7 +442,7 @@ mod manager {
     pub const EXTENSION: &str = ".plist";
 
     pub fn unit_directory() -> anyhow::Result<PathBuf> {
-        Ok(dirs::home_dir().ok_or_else(|| anyhow!("no home directory"))?.join("Library").join("LaunchAgents"))
+        Ok(account_home()?.join("Library").join("LaunchAgents"))
     }
 
     pub fn upgraded(unit: &str) -> Option<String> {
@@ -420,7 +487,7 @@ mod manager {
     pub const EXTENSION: &str = ".service";
 
     pub fn unit_directory() -> anyhow::Result<PathBuf> {
-        Ok(dirs::config_dir().ok_or_else(|| anyhow!("no config directory"))?.join("systemd").join("user"))
+        Ok(account_home()?.join(".config").join("systemd").join("user"))
     }
 
     pub fn upgraded(unit: &str) -> Option<String> {
@@ -454,11 +521,221 @@ mod manager {
     }
 }
 
+/// The Octopus Microphone, the HAL plug-in a macOS server's terminals record from while a client on another
+/// machine holds them.
+pub mod microphone {
+    use super::*;
+
+    #[derive(Debug, PartialEq, Serialize)]
+    #[serde(tag = "state", rename_all = "snake_case")]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code, reason = "only macOS installs a plug-in"))]
+    pub enum Outcome {
+        /// This install gives terminals no virtual microphone, or the platform needs no plug-in.
+        NotAsked,
+        /// The same plug-in was already installed, so nothing was asked.
+        Unchanged,
+        Installed,
+        Removed,
+        /// Another server on this machine still uses it.
+        Kept,
+        /// The prompt was declined or the copy failed; the server installed or uninstalled all the same.
+        Failed {
+            reason: String,
+        },
+    }
+
+    #[cfg(any(target_os = "macos", test))]
+    const BUNDLE: &str = "OctopusMicrophone.driver";
+
+    #[cfg(target_os = "macos")]
+    const PLUG_INS: &str = "/Library/Audio/Plug-Ins/HAL";
+
+    #[cfg(target_os = "macos")]
+    macro_rules! built {
+        ($path:literal) => {
+            ($path, include_bytes!(concat!(env!("OUT_DIR"), "/OctopusMicrophone.driver/", $path)) as &[u8])
+        };
+    }
+
+    #[cfg(target_os = "macos")]
+    const FILES: [(&str, &[u8]); 3] = [
+        built!("Contents/Info.plist"),
+        built!("Contents/MacOS/OctopusMicrophone"),
+        built!("Contents/_CodeSignature/CodeResources"),
+    ];
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn install() -> Outcome {
+        Outcome::NotAsked
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn terminal_host(_unit: &Path) -> Option<PathBuf> {
+        None
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn uninstall(_terminal_host: Option<&Path>, _unit: &Path) -> Outcome {
+        Outcome::NotAsked
+    }
+
+    /// The --terminal-host the launchd agent at `unit` runs its server with.
+    #[cfg(target_os = "macos")]
+    pub fn terminal_host(unit: &Path) -> Option<PathBuf> {
+        let unit = unit.display().to_string();
+        let argv = run("plutil", &["-extract", "ProgramArguments", "json", "-o", "-", &unit]).ok()?;
+        let argv: Vec<String> = serde_json::from_str(&argv).ok()?;
+        argv.windows(2).find(|pair| pair[0] == "--terminal-host").map(|pair| PathBuf::from(&pair[1]))
+    }
+
+    /// Gives back the input the server's microphone stood in for, then removes the plug-in once no other octopus
+    /// launchd agent remains beside `unit`.
+    #[cfg(target_os = "macos")]
+    pub fn uninstall(terminal_host: Option<&Path>, unit: &Path) -> Outcome {
+        if let Some(terminal_host) = terminal_host
+            && let Err(error) = octopus_server::give_back_input(terminal_host)
+        {
+            eprintln!("octopus: give back the default input: {error:#}");
+        }
+        let agents = unit.parent().expect("a launchd agent sits in a directory");
+        let others = std::fs::read_dir(agents).into_iter().flatten().flatten().any(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            name.starts_with("octopus-") && name.ends_with(".plist")
+        });
+        let bundle = Path::new(PLUG_INS).join(BUNDLE);
+        if others {
+            return Outcome::Kept;
+        }
+        if !bundle.exists() {
+            return Outcome::NotAsked;
+        }
+        match run("osascript", &["-e", &applescript(&removal(&bundle))]) {
+            Ok(_) => Outcome::Removed,
+            Err(error) => Outcome::Failed { reason: format!("{error:#}") },
+        }
+    }
+
+    /// Run as root: coreaudiod drops a plug-in only as it restarts.
+    #[cfg(any(target_os = "macos", test))]
+    fn removal(bundle: &Path) -> String {
+        format!("rm -rf {}; killall coreaudiod || true", quote(bundle))
+    }
+
+    /// Asks for an administrator only when the installed plug-in differs from this build's.
+    #[cfg(target_os = "macos")]
+    pub fn install() -> Outcome {
+        let plug_ins = Path::new(PLUG_INS);
+        if up_to_date(&plug_ins.join(BUNDLE), &FILES) {
+            return Outcome::Unchanged;
+        }
+        match copy_as_administrator(plug_ins) {
+            Ok(()) => Outcome::Installed,
+            Err(error) => Outcome::Failed { reason: format!("{error:#}") },
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn copy_as_administrator(plug_ins: &Path) -> anyhow::Result<()> {
+        let stage = tempfile::tempdir().context("create a staging directory")?;
+        let staged = stage.path().join(BUNDLE);
+        for (path, bytes) in FILES {
+            let file = staged.join(path);
+            std::fs::create_dir_all(file.parent().expect("a bundle file sits in a directory"))?;
+            std::fs::write(&file, bytes).with_context(|| format!("stage {}", file.display()))?;
+        }
+        run("osascript", &["-e", &applescript(&script(&staged, plug_ins))]).map(drop)
+    }
+
+    #[cfg(any(target_os = "macos", test))]
+    fn up_to_date(bundle: &Path, files: &[(&str, &[u8])]) -> bool {
+        files.iter().all(|(path, bytes)| std::fs::read(bundle.join(path)).is_ok_and(|found| found == *bytes))
+    }
+
+    #[cfg(any(target_os = "macos", test))]
+    fn quote(path: &Path) -> String {
+        format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
+    }
+
+    /// Run as root: swaps the staged bundle in whole, then restarts coreaudiod, which loads plug-ins only as it
+    /// starts. launchd starts it again at once.
+    #[cfg(any(target_os = "macos", test))]
+    fn script(staged: &Path, plug_ins: &Path) -> String {
+        let (installed, fresh) = (plug_ins.join(BUNDLE), plug_ins.join(format!("{BUNDLE}.new")));
+        let (staged, plug_ins, installed, fresh) = (quote(staged), quote(plug_ins), quote(&installed), quote(&fresh));
+        format!(
+            "set -e; mkdir -p {plug_ins}; rm -rf {fresh}; cp -R {staged} {fresh}; chown -R root:wheel {fresh}; \
+             chmod -R go-w {fresh}; rm -rf {installed}; mv {fresh} {installed}; killall coreaudiod || true"
+        )
+    }
+
+    /// One prompt: AppleScript runs the whole script with the administrator's rights.
+    #[cfg(any(target_os = "macos", test))]
+    fn applescript(script: &str) -> String {
+        let escaped = script.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("do shell script \"{escaped}\" with administrator privileges")
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn only_a_plug_in_differing_from_this_build_is_installed_again() {
+            let bundle = tempfile::tempdir().expect("tempdir");
+            let files: [(&str, &[u8]); 2] = [("Contents/Info.plist", b"plist"), ("Contents/MacOS/Mic", b"binary")];
+            assert!(!up_to_date(bundle.path(), &files), "nothing installed");
+            for (path, bytes) in files {
+                let file = bundle.path().join(path);
+                std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+                std::fs::write(file, bytes).unwrap();
+            }
+            assert!(up_to_date(bundle.path(), &files));
+            std::fs::write(bundle.path().join("Contents/MacOS/Mic"), b"older").unwrap();
+            assert!(!up_to_date(bundle.path(), &files));
+        }
+
+        #[test]
+        fn the_install_script_survives_quotes_in_its_paths() {
+            let staged = Path::new("/tmp/it's \"staged\"/OctopusMicrophone.driver");
+            let script = script(staged, Path::new("/Library/Audio/Plug-Ins/HAL"));
+            let quoted = quote(staged);
+            let echoed = Command::new("sh").args(["-c", &format!("printf %s {quoted}")]).output().unwrap().stdout;
+            assert_eq!(String::from_utf8(echoed).unwrap(), staged.display().to_string());
+            assert!(
+                script.contains(&format!("cp -R {quoted} '/Library/Audio/Plug-Ins/HAL/OctopusMicrophone.driver.new'"))
+            );
+            assert!(script.ends_with("killall coreaudiod || true"));
+            let applescript = applescript(&script);
+            let inner = applescript
+                .strip_prefix("do shell script \"")
+                .and_then(|rest| rest.strip_suffix("\" with administrator privileges"))
+                .unwrap();
+            assert_eq!(inner.replace("\\\"", "\"").replace("\\\\", "\\"), script);
+            assert!(!inner.replace("\\\"", "").contains('"'), "every quote in the script is escaped");
+        }
+
+        #[test]
+        fn removing_the_plug_in_restarts_the_audio_service() {
+            let bundle = Path::new("/Library/Audio/Plug-Ins/HAL/OctopusMicrophone.driver");
+            assert_eq!(removal(bundle), format!("rm -rf {}; killall coreaudiod || true", quote(bundle)));
+        }
+
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn uninstall_finds_the_terminal_host_its_agent_runs_with() {
+            let dir = tempfile::tempdir().unwrap();
+            let unit = dir.path().join("octopus-mac-mini.plist");
+            std::fs::write(&unit, launchd_plist(&crate::install::tests::service("/var/octopus/server.log"))).unwrap();
+            assert_eq!(terminal_host(&unit), Some(PathBuf::from("/run/octopus/host.sock")));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn service(log: &str) -> Service {
+    pub(super) fn service(log: &str) -> Service {
         let run = ServerRun {
             name: "mac-mini".into(),
             socket: "/run/octopus/mac mini.sock".into(),
@@ -467,11 +744,12 @@ mod tests {
             terminal_host: "/run/octopus/host.sock".into(),
             udp: ([0, 0, 0, 0], 7300).into(),
             relay: remote::N0_EU_RELAY.parse().expect("n0's relay is a URL"),
+            microphone: true,
         };
         Service { id: "octopus-mac-mini".into(), run, program: "/opt/octopus/bin/octopus".into(), log: log.into() }
     }
 
-    const ARGV: [&str; 17] = [
+    const ARGV: [&str; 19] = [
         "/opt/octopus/bin/octopus",
         "server",
         "run",
@@ -489,6 +767,8 @@ mod tests {
         "0.0.0.0:7300",
         "--relay",
         "https://euc1-1.relay.n0.iroh.link./",
+        "--microphone",
+        "true",
     ];
 
     #[test]
@@ -533,10 +813,13 @@ WantedBy=default.target
             [(launchd_plist(&service), plist_word, ""), (systemd_unit(&service), systemd_word, " ")];
         for (current, word, separator) in formats {
             let flags = |words: &[&str]| words.iter().map(|text| word(text)).collect::<Vec<_>>().join(separator);
-            let now = flags(&["--udp", "0.0.0.0:7300", "--relay", remote::N0_EU_RELAY]);
-            let old = current.replace(&now, &flags(&["--quic", "0.0.0.0:7300"]));
-            assert_ne!(old, current);
-            assert_eq!(upgraded_unit(&old, word, separator), Some(current.clone()));
+            let now = flags(&["--udp", "0.0.0.0:7300", "--relay", remote::N0_EU_RELAY, "--microphone", "true"]);
+            let before_microphones = flags(&["--udp", "0.0.0.0:7300", "--relay", remote::N0_EU_RELAY]);
+            for old in [flags(&["--quic", "0.0.0.0:7300"]), before_microphones] {
+                let old = current.replace(&now, &old);
+                assert_ne!(old, current);
+                assert_eq!(upgraded_unit(&old, word, separator), Some(current.clone()));
+            }
             assert_eq!(upgraded_unit(&current, word, separator), None);
         }
     }
@@ -550,7 +833,7 @@ Restart=always
         let upgraded = upgraded_unit(old, systemd_word, " ").expect("an old unit");
         let relay = remote::N0_EU_RELAY;
         assert!(upgraded.contains(&format!(
-            r#""--udp" "[fe80::1%%2]:7300" "--relay" "{relay}"
+            r#""--udp" "[fe80::1%%2]:7300" "--relay" "{relay}" "--microphone" "true"
 Restart"#
         )));
         assert_eq!(upgraded_unit(&upgraded, systemd_word, " "), None);
@@ -561,9 +844,9 @@ Restart"#
         assert_eq!(service_id("mac-mini.2").expect("id"), "octopus-mac-mini.2");
         assert_eq!(service_id("Ada’s Mac").expect("id"), "octopus-Ada-s-Mac");
         assert!(service_id("").is_err());
-        let ServerRun { name, socket, store, worktrees, udp, relay, .. } = service("/log").run;
+        let ServerRun { name, socket, store, worktrees, udp, relay, microphone, .. } = service("/log").run;
         let host = PathBuf::from(socket.display().to_string().to_uppercase());
-        let shared = ServerRun { name, terminal_host: host, socket, store, worktrees, udp, relay };
+        let shared = ServerRun { name, terminal_host: host, socket, store, worktrees, udp, relay, microphone };
         assert!(shared.check().is_err(), "one socket, spelled in another case");
     }
 }

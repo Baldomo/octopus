@@ -20,6 +20,20 @@ fn a_call_missing_flags_names_all_of_them_at_once() {
     );
 }
 
+#[test]
+fn a_home_other_than_the_accounts_registers_no_service() {
+    let home = tempfile::tempdir().expect("tempdir");
+    for verb in ["uninstall", "upgrade"] {
+        let output = Command::new(OCTOPUS)
+            .env("HOME", home.path())
+            .args(["server", verb, "--name", "foreign-home"])
+            .output()
+            .expect("run octopus");
+        assert!(!output.status.success(), "{verb}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("not this account's home"), "{output:?}");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn every_command_sends_an_op_the_server_serves() {
     let dir = tempfile::tempdir().expect("tempdir");

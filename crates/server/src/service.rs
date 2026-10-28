@@ -449,13 +449,18 @@ impl Terminal {
         Ok(true)
     }
 
+    /// Fails `pty_locked` naming the holder when another client holds the lock, or `conflict` while it is free.
+    pub fn check_holder(&self, client: &str) -> Result<(), Error> {
+        match self.holder() {
+            Some(holder) if holder == client => Ok(()),
+            Some(holder) => Err(Error::PtyLocked { holder }),
+            None => Err(Error::conflict(format!("{client} holds no lock on {}; take it first", self.id))),
+        }
+    }
+
     /// Writes only while `client` still holds the lock it claimed earlier.
     pub fn write_as(&self, client: &str, bytes: &[u8]) -> Result<(), Error> {
-        match self.holder() {
-            Some(holder) if holder == client => {}
-            Some(holder) => return Err(Error::PtyLocked { holder }),
-            None => return Err(Error::conflict(format!("{client} holds no lock on {}; take it first", self.id))),
-        }
+        self.check_holder(client)?;
         if !self.running() {
             return Err(Error::conflict(format!("{} has exited", self.id)));
         }

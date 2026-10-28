@@ -12,7 +12,7 @@ workspace = true
 anyhow = "1.0.104"
 fastrand = "2.5.0"
 ignore = "0.4.33"
-nix = { version = "0.31.3", features = ["process", "signal", "user"] }
+nix = { version = "0.31.3", features = ["fs", "process", "signal", "socket", "user"] }
 notify = "8.2.0"
 octopus-proto.workspace = true
 portable-pty = "0.9.0"

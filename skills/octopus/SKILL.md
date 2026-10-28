@@ -260,6 +260,7 @@ Run this machine's server in the foreground.
 - `--terminal-host <terminal-host>`: Socket of the terminal host, the process that keeps this server's terminals running across restarts; started if nothing answers there.
 - `--udp <udp>`: The UDP address clients on other machines reach this server on directly, e.g. 0.0.0.0:7300, which takes IPv6 on the same port too.
 - `--relay <relay>`: The iroh relay this server is homed on, which clients on other machines dial it through: one of n0's, e.g. https://euc1-1.relay.n0.iroh.link./, or one of your own.
+- `--microphone true|false`: Give each terminal a virtual microphone that its lock holder feeds.
 
 ## `octopus server install`
 
@@ -272,6 +273,7 @@ Run the server at every login as a user service (launchd or systemd --user).
 - `--terminal-host <terminal-host>`: Socket of the terminal host, the process that keeps this server's terminals running across restarts; started if nothing answers there.
 - `--udp <udp>`: The UDP address clients on other machines reach this server on directly, e.g. 0.0.0.0:7300, which takes IPv6 on the same port too.
 - `--relay <relay>`: The iroh relay this server is homed on, which clients on other machines dial it through: one of n0's, e.g. https://euc1-1.relay.n0.iroh.link./, or one of your own.
+- `--microphone true|false`: Give each terminal a virtual microphone that its lock holder feeds.
 - `--log <log>`: The file the service's output is appended to.
 
 ## `octopus server uninstall`

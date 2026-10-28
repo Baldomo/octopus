@@ -1,0 +1,6 @@
+{
+  "identifier": "ui",
+  "description": "Both UI layers listen to the app's events and run the client app's core.",
+  "webviews": ["main", "float"],
+  "permissions": ["core:event:default", "octopus:default"]
+}

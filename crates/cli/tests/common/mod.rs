@@ -32,16 +32,21 @@ const NO_RELAY: &str = "http://127.0.0.1:9/";
 /// Serves `dir`'s store on `socket`, keeping terminals in the host at `host`. A second call on the same `dir` and
 /// `host` plays a server restart; a fresh `host` plays a machine restart: the server finds none of its terminals.
 pub async fn start(dir: &Path, socket: &str, host: &str) -> Running {
+    start_with(dir, socket, host, false).await
+}
+
+/// As `start`, giving each terminal a virtual microphone when `microphone` holds.
+pub async fn start_with(dir: &Path, socket: &str, host: &str, microphone: bool) -> Running {
     let mut config = iroh_relay::server::ServerConfig::default();
     config.relay = Some(iroh_relay::server::RelayConfig::new(([127, 0, 0, 1], 0)));
     let relay = iroh_relay::server::Server::spawn(config).await.expect("spawn a relay");
     let url = format!("http://{}", relay.http_addr().expect("the relay serves HTTP")).parse().expect("a URL");
-    serve_homed_on(dir, socket, host, url, Some(relay)).await
+    serve_homed_on(dir, socket, host, url, Some(relay), microphone).await
 }
 
 /// A server homed on a relay nobody answers at, which clients reach at its direct addresses alone.
 pub async fn start_unrelayed(dir: &Path) -> Running {
-    serve_homed_on(dir, "server.sock", "host.sock", NO_RELAY.parse().expect("a URL"), None).await
+    serve_homed_on(dir, "server.sock", "host.sock", NO_RELAY.parse().expect("a URL"), None, false).await
 }
 
 async fn serve_homed_on(
@@ -50,11 +55,12 @@ async fn serve_homed_on(
     host: &str,
     url: RelayUrl,
     relay: Option<iroh_relay::server::Server>,
+    microphone: bool,
 ) -> Running {
     let socket = dir.join(socket);
     let host = TerminalHost { program: OCTOPUS.into(), address: dir.join(host) };
-    let server =
-        Server::open(SERVER, &dir.join("store.db"), &dir.join("worktrees"), &host, url.clone()).expect("open server");
+    let server = Server::open(SERVER, &dir.join("store.db"), &dir.join("worktrees"), &host, url.clone(), microphone)
+        .expect("open server");
     let endpoint = remote::listen(([127, 0, 0, 1], 0).into(), url, server.device()).await.expect("bind iroh");
     tokio::spawn(serve(Arc::clone(&server), Listener::bind(&socket).expect("bind"), endpoint));
     Running { server, socket, relay }
@@ -86,7 +92,7 @@ fn server_run(dir: &Path) -> Command {
         .arg(dir.join("worktrees"))
         .arg("--terminal-host")
         .arg(dir.join("host.sock"))
-        .args(["--udp", "127.0.0.1:0", "--relay", NO_RELAY]);
+        .args(["--udp", "127.0.0.1:0", "--relay", NO_RELAY, "--microphone", "false"]);
     command
 }
 

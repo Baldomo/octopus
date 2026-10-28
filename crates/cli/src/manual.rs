@@ -80,10 +80,10 @@ impl ServerVerb {
         match self {
             Self::Run(run) => {
                 run.check()?;
-                let ServerRun { name, socket, store, worktrees, terminal_host, udp, relay } = run;
+                let ServerRun { name, socket, store, worktrees, terminal_host, udp, relay, microphone } = run;
                 let local = Listener::bind(&socket).with_context(|| format!("bind {}", socket.display()))?;
                 let host = TerminalHost { program: std::env::current_exe()?, address: terminal_host };
-                let server = octopus_server::Server::open(&name, &store, &worktrees, &host, relay.clone())
+                let server = octopus_server::Server::open(&name, &store, &worktrees, &host, relay.clone(), microphone)
                     .map_err(|error| anyhow!("{error}"))?;
                 let endpoint = remote::listen(udp, relay.clone(), server.device()).await?;
                 let key = server.device().public();

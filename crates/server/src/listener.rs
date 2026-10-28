@@ -5,7 +5,7 @@ use octopus_proto::device::PublicKey;
 use octopus_proto::local::{self, Listener};
 use octopus_proto::ops::{Paired, PairingPair, SessionHello, SessionPing};
 use octopus_proto::remote::{self, Connection, Endpoint};
-use octopus_proto::types::Stream;
+use octopus_proto::types::{PtyId, Stream};
 use octopus_proto::{
     Error, Op, Outcome, Request, Response, ServerFrame, StreamHeader, line, parse_args, parse_request, request_from,
 };
@@ -45,6 +45,10 @@ enum Peer {
 }
 
 impl Peer {
+    fn remote(&self) -> bool {
+        matches!(self, Self::Paired { .. })
+    }
+
     fn admit(&self, client: &str) -> Result<(), Error> {
         match self {
             Self::Paired { name, .. } if name != client => {
@@ -185,7 +189,7 @@ async fn serve_stream<S: AsyncRead + AsyncWrite + Send + 'static>(server: Arc<Se
             let header =
                 parse_args::<StreamHeader>(&value).and_then(|header| peer.admit(&header.client).map(|()| header));
             match header {
-                Ok(header) => return serve_data_stream(server, header, lines, write).await,
+                Ok(header) => return serve_data_stream(server, header, peer.remote(), lines, write).await,
                 Err(error) => line(&Outcome::Err(error)),
             }
         }
@@ -195,7 +199,7 @@ async fn serve_stream<S: AsyncRead + AsyncWrite + Send + 'static>(server: Arc<Se
                 respond(request.id, Outcome::from(claimed.map(|(_, paired)| paired)))
             }
             (Ok(request), _) => match hello(&request, &peer) {
-                Ok(client) => return serve_control(server, request, client, lines, write).await,
+                Ok(client) => return serve_control(server, request, client, peer.remote(), lines, write).await,
                 Err(error) => respond(request.id, Outcome::Err(error)),
             },
             (Err((id, error)), _) => respond(id, Outcome::Err(error)),
@@ -214,12 +218,18 @@ fn hello(request: &Request, peer: &Peer) -> Result<String, Error> {
     Ok(hello.client)
 }
 
-async fn serve_control<R, W>(server: Arc<Server>, hello: Request, client: String, mut lines: BufReader<R>, mut write: W)
-where
+async fn serve_control<R, W>(
+    server: Arc<Server>,
+    hello: Request,
+    client: String,
+    remote: bool,
+    mut lines: BufReader<R>,
+    mut write: W,
+) where
     R: AsyncRead + Unpin + Send,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    server.client_connected(&client);
+    server.client_connected(&client, remote);
     let (out, mut outbox) = mpsc::unbounded_channel::<String>();
     let mut pushes = server.subscribe();
     let _client_gone = out.send(respond(hello.id, server.handle(&client, &hello)));
@@ -292,31 +302,43 @@ enum Opened {
     File(Vec<u8>),
     Pty(Arc<Terminal>, local::Stream),
     Tunnel(tokio::net::TcpStream),
+    Mic(Arc<Terminal>),
 }
 
-async fn open(server: &Arc<Server>, name: &str) -> Result<Opened, Error> {
+fn find_terminal(server: &Server, id: &PtyId) -> Result<Arc<Terminal>, Error> {
+    server.terminal(id).ok_or_else(|| Error::not_found(id))
+}
+
+async fn open(server: &Arc<Server>, name: &str, client: &str) -> Result<Opened, Error> {
     match Stream::parse(name).ok_or_else(|| Error::invalid(format!("no stream named {name}")))? {
         Stream::File { task, path } => {
             Ok(Opened::File(blocking(server, move |server| server.read_file(&task, &path)).await?))
         }
         Stream::Pty(id) => {
-            let lookup = id.clone();
-            let terminal =
-                blocking(server, move |server| server.terminal(&lookup).ok_or_else(|| Error::not_found(&lookup)))
-                    .await?;
+            let terminal = blocking(server, move |server| find_terminal(server, &id)).await?;
             let output = terminal.attach().await?;
             Ok(Opened::Pty(terminal, output))
+        }
+        Stream::Mic(id) => {
+            let terminal = blocking(server, move |server| find_terminal(server, &id)).await?;
+            terminal.check_holder(client)?;
+            Ok(Opened::Mic(terminal))
         }
         Stream::Tunnel(port) => Ok(Opened::Tunnel(crate::browser::dial(port).await?)),
     }
 }
 
-async fn serve_data_stream<R, W>(server: Arc<Server>, header: StreamHeader, input: BufReader<R>, mut write: W)
-where
+async fn serve_data_stream<R, W>(
+    server: Arc<Server>,
+    header: StreamHeader,
+    remote: bool,
+    input: BufReader<R>,
+    mut write: W,
+) where
     R: AsyncRead + Unpin + Send,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    let opened = open(&server, &header.open).await;
+    let opened = open(&server, &header.open, &header.client).await;
     // The client counts as showing a terminal before it hears the stream opened, so a claim it sends next always
     // finds it showing.
     if let Ok(Opened::Pty(terminal, _)) = &opened {
@@ -336,7 +358,10 @@ where
                 let _peer_gone = write.shutdown().await;
             }
         }
-        Opened::Pty(terminal, output) => relay_terminal(server, header.client, terminal, output, input, write).await,
+        Opened::Pty(terminal, output) => {
+            relay_terminal(server, header.client, remote, terminal, output, input, write).await;
+        }
+        Opened::Mic(terminal) => hear(&server, &header.client, &terminal, input).await,
         Opened::Tunnel(mut port) => {
             let _either_side_closed =
                 tokio::io::copy_bidirectional(&mut tokio::io::join(input, write), &mut port).await;
@@ -350,6 +375,7 @@ where
 async fn relay_terminal<R, W>(
     server: Arc<Server>,
     client: String,
+    remote: bool,
     terminal: Arc<Terminal>,
     mut terminal_output: local::Stream,
     mut input: BufReader<R>,
@@ -358,7 +384,7 @@ async fn relay_terminal<R, W>(
     R: AsyncRead + Unpin + Send,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    server.client_connected(&client);
+    server.client_connected(&client, remote);
     let mut output = tokio::spawn(async move {
         tokio::io::copy(&mut terminal_output, &mut write).await?;
         write.shutdown().await
@@ -388,6 +414,17 @@ async fn relay_terminal<R, W>(
         server.client_disconnected(&client);
     })
     .await;
+}
+
+/// Takes the holder's audio until it closes the stream or the lock leaves it, which closes the stream.
+async fn hear<R: AsyncRead + Unpin>(server: &Server, client: &str, terminal: &Terminal, mut input: BufReader<R>) {
+    server.sending(terminal, true);
+    let mut buffer = [0u8; INPUT_BYTES];
+    while let Ok(read) = input.read(&mut buffer).await
+        && read > 0
+        && server.hear(client, terminal, &buffer[..read]).is_ok()
+    {}
+    server.sending(terminal, false);
 }
 
 async fn blocking<T: Send + 'static>(server: &Arc<Server>, work: impl FnOnce(&Server) -> T + Send + 'static) -> T {

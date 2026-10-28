@@ -3,6 +3,7 @@ mod checkouts;
 mod files;
 mod listener;
 mod login;
+mod mic;
 mod pairing;
 mod pty;
 mod service;
@@ -34,6 +35,9 @@ use tokio::sync::broadcast;
 
 pub use checkouts::WORKTREE_LIFETIME_MS;
 pub use listener::serve;
+use mic::Microphones;
+#[cfg(target_os = "macos")]
+pub use mic::give_back_input;
 use pairing::Offers;
 use service::{HostClient, Terminal};
 pub use service::{TerminalHost, run_terminal_host};
@@ -65,6 +69,8 @@ struct State {
     /// The store's browser panels, which every task view carries.
     browsers: HashMap<TaskId, Vec<BrowserPanel>>,
     watchers: HashMap<TaskId, notify::RecommendedWatcher>,
+    /// The terminals a program records from the virtual microphone of.
+    listening: HashSet<PtyId>,
 }
 
 pub struct Server {
@@ -79,6 +85,9 @@ pub struct Server {
     host: Arc<HostClient>,
     state: Mutex<State>,
     clients: Mutex<HashMap<String, usize>>,
+    /// The clients whose newest connection came over QUIC, from another machine.
+    remote: Mutex<HashSet<String>>,
+    mic: Microphones,
     pushes: broadcast::Sender<Push>,
     file_changes: mpsc::Sender<(TaskId, String)>,
 }
@@ -183,6 +192,7 @@ impl State {
                     lock_holder: screen.holder,
                     cols: screen.cols,
                     rows: screen.rows,
+                    listening: self.listening.contains(&terminal.id),
                 }
             })
             .collect()
@@ -238,23 +248,30 @@ impl State {
 }
 
 impl Server {
-    /// Reattaches the hosted terminals the store records and ends the ones it doesn't.
+    /// Reattaches the hosted terminals the store records and ends the ones it doesn't. With `microphone`, every
+    /// terminal gets a virtual microphone its lock holder feeds.
     pub fn open(
         name: &str,
         store: &Path,
         worktrees: &Path,
         host: &TerminalHost,
         relay: RelayUrl,
+        microphone: bool,
     ) -> Result<Arc<Self>, Error> {
         let mut store = Store::open(store)?;
         let device = store.device_key()?;
         let browsers = store.browsers()?;
+        let host_address = host.address.clone();
         let host = Arc::new(HostClient::reach_or_start(host)?);
         let mut hosted: HashMap<PtyId, bool> =
             host.list()?.into_iter().map(|hosted| (hosted.id, hosted.running)).collect();
         let recorded = store.reattach(&hosted.keys().cloned().collect())?;
         let (pushes, _) = broadcast::channel(PUSH_BACKLOG);
         let (file_changes, changed) = mpsc::channel::<(TaskId, String)>();
+        let (listening_changes, listening_changed) = mpsc::channel::<(PtyId, bool)>();
+        let mic = Microphones::start(microphone, &host_address, move |id, listening| {
+            let _server_gone = listening_changes.send((id.clone(), listening));
+        });
         let server = Arc::new_cyclic(|me| Self {
             me: me.clone(),
             name: name.to_string(),
@@ -270,14 +287,21 @@ impl Server {
                 shells: HashMap::new(),
                 browsers,
                 watchers: HashMap::new(),
+                listening: HashSet::new(),
             }),
             clients: Mutex::new(HashMap::new()),
+            remote: Mutex::default(),
+            mic,
             pushes,
             file_changes,
         });
+        let mut adopted = Vec::new();
         let mut state = lock(&server.state);
         for row in recorded {
             let running = hosted.remove(&row.id).expect("reattach keeps only hosted terminals");
+            if running {
+                adopted.push(row.id.clone());
+            }
             let terminal = server.adopt(&row.task, row.id, running);
             if running && let Err(error) = terminal.reset_size() {
                 report!("reset the size of {}: {error}", terminal.id);
@@ -293,6 +317,14 @@ impl Server {
             report!("ending terminal {orphan}, which this server's store does not record");
             server.host.forget(&orphan)?;
         }
+        server.mic.adopt(&adopted);
+        let listener = Weak::clone(&server.me);
+        std::thread::spawn(move || {
+            for (id, listening) in listening_changed {
+                let Some(server) = listener.upgrade() else { break };
+                server.listening_changed(&id, listening);
+            }
+        });
         // Watcher callbacks only send here: a callback that owned the server could drop it on the watcher's own thread.
         let publisher = Weak::clone(&server.me);
         std::thread::spawn(move || {
@@ -413,9 +445,17 @@ impl Server {
         self.publish(state, row.rev, Event::TaskUpdated { task: Box::new(state.view(row)) });
     }
 
+    /// Every change of a lock touches its task, so whether a remote client holds one is decided here.
     fn touch_task(&self, state: &mut State, task: &TaskId) -> Result<u64, Error> {
         let row = state.store.touch_task(task)?;
         self.publish_task(state, &row);
+        let remote = lock(&self.remote);
+        let held = state
+            .every_terminal()
+            .filter(|(_, terminal)| terminal.screen().holder.is_some_and(|holder| remote.contains(&holder)))
+            .map(|(_, terminal)| terminal.id.clone())
+            .collect();
+        self.mic.remote_held(held);
         Ok(row.rev)
     }
 
@@ -706,7 +746,9 @@ impl Server {
             ]
             .map(|(key, value)| (key.to_string(), value.to_string())),
         );
-        self.host.spawn(&panel.id, argv, directory, env)?;
+        env.extend(self.mic.prepare(&panel.id));
+        self.host.spawn(&panel.id, argv, directory, env).inspect_err(|_| self.mic.remove(&panel.id))?;
+        self.mic.started(&panel.id);
         state.store.record_panel(panel)?;
         Ok(self.adopt(&panel.task, panel.id.clone(), true))
     }
@@ -778,6 +820,7 @@ impl Server {
                 report!("lost the terminal host while {} ran: {error}", terminal.id);
             }
             let Some(server) = server.upgrade() else { return };
+            server.mic.remove(&terminal.id);
             let mut state = lock(&server.state);
             if let Err(error) = server.terminal_exited(&mut state, &task, &terminal.id) {
                 report!("publish the exit of {}: {error}", terminal.id);
@@ -833,6 +876,28 @@ impl Server {
             .map_err(|error| Error::internal(format!("watch {}: {error}", directory.display())))?;
         state.watchers.insert(row.id.clone(), watcher);
         Ok(())
+    }
+
+    fn listening_changed(&self, id: &PtyId, listening: bool) {
+        let mut state = lock(&self.state);
+        let task = state.terminal_by_id(id).map(|(task, _)| task);
+        let changed =
+            if listening { task.is_some() && state.listening.insert(id.clone()) } else { state.listening.remove(id) };
+        let Some(task) = task else { return };
+        if changed && let Err(error) = self.touch_task(&mut state, &task) {
+            report!("publish whether {id} is listening: {error}");
+        }
+    }
+
+    /// Audio from `client` for the terminal's virtual microphone, taken only while `client` holds the lock.
+    pub(crate) fn hear(&self, client: &str, terminal: &Terminal, bytes: &[u8]) -> Result<(), Error> {
+        terminal.check_holder(client)?;
+        self.mic.feed(&terminal.id, bytes);
+        Ok(())
+    }
+
+    pub(crate) fn sending(&self, terminal: &Terminal, sending: bool) {
+        self.mic.streaming(&terminal.id, sending);
     }
 
     fn file_changed(&self, task: &TaskId, path: &str) {
@@ -961,8 +1026,15 @@ impl Server {
         }
     }
 
-    pub(crate) fn client_connected(&self, client: &str) {
+    pub(crate) fn client_connected(&self, client: &str, remote: bool) {
         self.saw(client);
+        let mut remotes = lock(&self.remote);
+        if remote {
+            remotes.insert(client.to_string())
+        } else {
+            remotes.remove(client)
+        };
+        drop(remotes);
         *lock(&self.clients).entry(client.to_string()).or_default() += 1;
     }
 

@@ -1,0 +1,36 @@
+[package]
+name = "octopus-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+cpal = "0.18.2"
+octopus-client.workspace = true
+octopus-proto.workspace = true
+octopus-shell.workspace = true
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tauri = { version = "2.12.5", features = ["devtools", "unstable"] }
+tokio = { version = "1.54.1", features = ["full"] }
+ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }
+url = "2.5.8"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSEvent", "NSResponder", "NSTrackingArea", "NSView", "NSWindow"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18.2"
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dev-dependencies]
+tauri = { version = "2.12.5", features = ["test"] }
