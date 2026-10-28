@@ -25,7 +25,29 @@ type Tree = {
   loaded: Record<string, boolean>;
   dirty: Record<string, boolean>;
   unreadable: Record<string, string>;
+  rendered: Record<string, boolean>;
+  /** The tree row to scroll into view once it shows. */
+  revealing: string | null;
 };
+
+export const extensionOf = (path: string) => {
+  const name = nameOf(path);
+  return name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
+};
+const RENDERINGS = new Map<string, "markdown" | "page" | "image">([
+  ["md", "markdown"],
+  ["markdown", "markdown"],
+  ["html", "page"],
+  ["htm", "page"],
+  ["svg", "image"],
+]);
+export const renderingOf = (path: string) => RENDERINGS.get(extensionOf(path));
+export const renderable = (path: string) => renderingOf(path) !== undefined;
+const ancestorsOf = (path: string) =>
+  path
+    .split("/")
+    .slice(0, -1)
+    .map((_, at, dirs) => dirs.slice(0, at + 1).join("/"));
 
 /** One task's file tree and editor tabs, kept while the task stays among the recent ones. */
 export class TaskFiles {
@@ -45,6 +67,8 @@ export class TaskFiles {
       loaded: {},
       dirty: {},
       unreadable: {},
+      rendered: {},
+      revealing: null,
     });
     this.list(".");
   }
@@ -54,16 +78,36 @@ export class TaskFiles {
   }
 
   toggle(dir: string) {
-    const expanding = !this.state.expanded[dir];
+    this.revealed();
+    this.expand(dir, !this.state.expanded[dir]);
+  }
+
+  private expand(dir: string, expanding: boolean) {
     this.set("expanded", dir, expanding);
     if (expanding && this.state.listings[dir] === undefined) this.list(dir);
+  }
+
+  /** Expands the tree down to `path`, and `path` itself when it is a directory, and scrolls its row into view. */
+  reveal(path: string, directory: boolean) {
+    for (const dir of directory ? [...ancestorsOf(path), path] : ancestorsOf(path)) this.expand(dir, true);
+    this.set("revealing", path);
+  }
+
+  revealed() {
+    this.set("revealing", null);
+  }
+
+  /** Flips the selected tab between its code and its rendered view. */
+  toggleRendered() {
+    const path = this.state.active;
+    if (path !== null && renderable(path)) this.set("rendered", path, !this.state.rendered[path]);
   }
 
   async open(path: string) {
     if (!this.state.tabs.includes(path)) this.set("tabs", (tabs) => [...tabs, path]);
     this.set("active", path);
     if (this.opened.has(path)) return;
-    const [{ monaco }, text] = await Promise.all([loadMonaco(), backend.fileRead(this.at, path)]).catch((error) => {
+    const [{ monaco }, text] = await Promise.all([loadMonaco(), backend.fileText(this.at, path)]).catch((error) => {
       this.set("unreadable", path, String(error));
       throw error;
     });
@@ -87,6 +131,7 @@ export class TaskFiles {
       produce((state) => {
         const at = state.tabs.indexOf(path);
         state.tabs = state.tabs.filter((tab) => tab !== path);
+        delete state.rendered[path];
         if (state.active === path) state.active = state.tabs[Math.min(at, state.tabs.length - 1)] ?? null;
       }),
     );
@@ -127,7 +172,7 @@ export class TaskFiles {
     for (const path of paths) {
       const opened = this.opened.get(path);
       if (opened === undefined || this.state.dirty[path]) continue;
-      backend.fileRead(this.at, path).then(
+      backend.fileText(this.at, path).then(
         (text) => {
           this.set(produce((state) => delete state.unreadable[path]));
           if (this.state.dirty[path] || opened.model.getValue() === text) return;

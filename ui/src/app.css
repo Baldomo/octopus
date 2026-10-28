@@ -152,6 +152,27 @@ body {
   inset: 0;
   background: var(--term);
 }
+.files:focus,
+.rendered:focus {
+  outline: none;
+}
+.fhead {
+  flex: none;
+  cursor: default;
+}
+.rendered {
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+.rendered-page,
+.rendered-image {
+  flex: 1;
+  min-height: 0;
+}
+.rendered-page {
+  width: 100%;
+}
 
 .browser {
   flex: 1;

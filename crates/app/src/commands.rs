@@ -13,7 +13,7 @@ use octopus_proto::types::{
     BrowserId, BrowserTarget, Checkout, Color, PtyId, Stream, Swatch, TaskId, TaskState, WorkspaceId,
 };
 use serde::{Deserialize, Serialize};
-use tauri::ipc::{Channel, InvokeResponseBody};
+use tauri::ipc::{Channel, InvokeResponseBody, Response};
 use tauri::{AppHandle, State};
 use tokio::io::AsyncReadExt;
 use ts_rs::TS;
@@ -226,13 +226,13 @@ pub async fn file_list(hub: Hubbed<'_>, at: TaskRef, path: String) -> Result<Vec
 }
 
 #[tauri::command]
-pub async fn file_read(hub: Hubbed<'_>, at: TaskRef, path: String) -> Result<String, String> {
+pub async fn file_read(hub: Hubbed<'_>, at: TaskRef, path: String) -> Result<Response, String> {
     let connection = hub.connection(&at.server)?;
     let stream = Stream::File { task: at.task, path: path.clone() };
     let mut opened = connection.open_data_stream(&stream).await.map_err(|error| hub.failure(&at.server, error))?;
     let mut bytes = Vec::new();
     opened.read_to_end(&mut bytes).await.map_err(|error| format!("read {path}: {error}"))?;
-    String::from_utf8(bytes).map_err(|_| format!("{path} is not UTF-8 text"))
+    Ok(Response::new(bytes))
 }
 
 #[tauri::command]

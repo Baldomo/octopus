@@ -24,6 +24,9 @@ import type {
   WorkspaceId,
 } from "./generated";
 
+const UTF8 = new TextDecoder("utf-8", { fatal: true });
+const fileBytes = (at: TaskRef, path: string) => invoke<ArrayBuffer>("file_read", { at, path });
+
 export const backend = {
   boot: () => invoke<Boot>("boot"),
   ready: () => invoke<void>("ready"),
@@ -68,7 +71,15 @@ export const backend = {
   termResize: (at: TaskRef, panel: PtyId, cols: number, rows: number) =>
     invoke<void>("term_resize", { at, panel, cols, rows }),
   fileList: (at: TaskRef, path: string) => invoke<Entry[]>("file_list", { at, path }),
-  fileRead: (at: TaskRef, path: string) => invoke<string>("file_read", { at, path }),
+  fileBytes,
+  fileText: (at: TaskRef, path: string) =>
+    fileBytes(at, path).then((bytes) => {
+      try {
+        return UTF8.decode(bytes);
+      } catch {
+        throw new Error(`${path} is not UTF-8 text`);
+      }
+    }),
   fileWrite: (at: TaskRef, path: string, content: string) => invoke<void>("file_write", { at, path, content }),
   fileSearch: (at: TaskRef, pattern: string) => invoke<Match[]>("file_search", { at, pattern }),
   /** Resolves to the id of the panel that shows `url` on the task's server. */
