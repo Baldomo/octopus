@@ -9,48 +9,55 @@ use octopus_client::tunnel::Tunnel;
 use octopus_client::{CallError, Connection, Identity};
 use octopus_proto::device::DeviceKey;
 use octopus_proto::ops::{BrowserOpen, HarnessSet, PairingForget, PairingList, PairingOffer, TaskFocus, TermSend};
-use octopus_proto::pairing::Code;
+use octopus_proto::pairing::Invite;
 use octopus_proto::types::{BrowserId, BrowserPanel, BrowserTarget, Checkout, Stream, TaskId};
 use octopus_proto::{Error, Event};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-async fn offer(running: &Running) -> Code {
-    connect(running, "owner").await.call(&PairingOffer {}).await.expect("pairing.offer").code
+async fn offer(running: &Running) -> Invite {
+    connect(running, "owner").await.call(&PairingOffer {}).await.expect("pairing.offer").invite
 }
 
+/// The server as a client reaches it through its relay alone.
 fn remote(running: &Running) -> Address {
-    Address::Quic { endpoint: running.quic.to_string(), key: running.server.device().public() }
+    Address::Remote { key: running.server.device().public(), relay: running.server.relay().clone(), addresses: vec![] }
 }
 
 async fn paired(running: &Running, me: &Identity) -> Connection {
-    let listed = servers::pair(&running.quic.to_string(), &offer(running).await, me).await.expect("pair");
-    assert_eq!(listed, servers::Server { name: SERVER.into(), address: remote(running) });
-    Connection::connect(&listed.address, me).await.expect("connect over QUIC")
+    let invite = offer(running).await;
+    assert!(!invite.addresses.is_empty(), "an invite carries the server's direct addresses");
+    let listed = servers::pair(&invite, me).await.expect("pair");
+    let (key, relay, addresses) = (invite.server, running.server.relay().clone(), invite.addresses.clone());
+    let address = Address::Remote { key, relay, addresses };
+    assert_eq!(listed, servers::Server { name: SERVER.into(), address });
+    Connection::connect(&listed.address, me).await.expect("connect over iroh")
 }
 
 fn twin(of: &Identity, name: &str) -> Identity {
-    Identity { name: name.into(), key: DeviceKey::from_pkcs8(of.key.pkcs8()).expect("same key") }
+    Identity::new(name.into(), DeviceKey::from_pkcs8(of.key.pkcs8()).expect("same key"))
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn only_a_client_that_spent_a_code_reaches_a_remote_server() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = identity("laptop");
 
+    let closed = Connection::connect(&remote(&running), &laptop).await.err().expect("no code is on offer");
+    assert!(format!("{closed:#}").contains("no pairing code is on offer"), "{closed:#}");
+
+    let invite = offer(&running).await;
     let refused = Connection::connect(&remote(&running), &laptop).await.err().expect("an unpaired client is refused");
     assert!(format!("{refused:#}").contains("not paired"), "{refused:#}");
-
-    let code = offer(&running).await;
-    servers::pair(&running.quic.to_string(), &code, &laptop).await.expect("pair");
-    let spent = servers::pair(&running.quic.to_string(), &code, &identity("desk")).await.expect_err("spent");
-    assert!(format!("{spent:#}").contains("code is spent"), "{spent:#}");
+    servers::pair(&invite, &laptop).await.expect("pair");
+    let spent = servers::pair(&invite, &identity("desk")).await.expect_err("spent");
+    assert!(format!("{spent:#}").contains("no pairing code is on offer"), "{spent:#}");
     let (fresh, namesake) = (offer(&running).await, identity("laptop"));
-    let refused = servers::pair(&running.quic.to_string(), &fresh, &namesake).await;
+    let refused = servers::pair(&fresh, &namesake).await;
     assert!(format!("{:#}", refused.expect_err("a namesake")).contains("another device's key"));
     connect(&running, "owner").await.call(&PairingForget { client: "laptop".into() }).await.expect("forget");
-    servers::pair(&running.quic.to_string(), &fresh, &namesake).await.expect("the refusal left the code unspent");
+    servers::pair(&fresh, &namesake).await.expect("the refusal left the code unspent");
     let laptop = namesake;
 
     let connection = Connection::connect(&remote(&running), &laptop).await.expect("a paired client is accepted");
@@ -63,15 +70,16 @@ async fn only_a_client_that_spent_a_code_reaches_a_remote_server() {
     let impostor = Connection::connect(&remote(&running), &twin(&laptop, "desk")).await.err().expect("impostor");
     assert!(format!("{impostor:#}").contains("paired as laptop"), "{impostor:#}");
 
-    let moved = Address::Quic { endpoint: running.quic.to_string(), key: DeviceKey::generate().public() };
-    let mismatch = Connection::connect(&moved, &laptop).await.err().expect("the client refuses a changed key");
-    assert!(format!("{mismatch:#}").contains("not its pinned key"), "{mismatch:#}");
+    let second_process = Connection::connect(&remote(&running), &twin(&laptop, "laptop")).await.expect("a second");
+    for open in [&connection, &second_process] {
+        open.call(&PairingList {}).await.expect("both processes of one device stay connected");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_task_runs_over_quic_and_a_stalled_file_transfer_never_blocks_its_terminal() {
+async fn a_task_runs_over_iroh_and_a_stalled_file_transfer_never_blocks_its_terminal() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = paired(&running, &identity("laptop")).await;
     let workspace = workspace(&laptop, dir.path()).await;
     let harness = HarnessSet {
@@ -92,9 +100,9 @@ async fn a_task_runs_over_quic_and_a_stalled_file_transfer_never_blocks_its_term
     let mut transfer = laptop.open_data_stream(&Stream::File { task: id.clone(), path: "large.bin".into() }).await;
     let mut terminal = laptop.open_data_stream(&agent).await.expect("attach");
     read_until(&mut terminal, "agent:up").await;
-    let send = TermSend { task: id, panel: "agent".into(), text: "over-quic".into(), enter: true, take_lock: true };
+    let send = TermSend { task: id, panel: "agent".into(), text: "over-iroh".into(), enter: true, take_lock: true };
     laptop.call(&send).await.expect("term.send");
-    read_until(&mut terminal, "over-quic").await;
+    read_until(&mut terminal, "over-iroh").await;
 
     let mut received = Vec::new();
     transfer.as_mut().expect("open the transfer").read_to_end(&mut received).await.expect("read the transfer");
@@ -108,7 +116,7 @@ fn open(task: &TaskId, url: &str, panel: BrowserTarget) -> BrowserOpen {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_browser_panel_is_task_state_and_its_localhost_page_tunnels_to_the_servers_port() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = Arc::new(paired(&running, &identity("laptop")).await);
     let desk = connect(&running, "desk").await;
     let mut pushes = desk.pushes();
@@ -156,4 +164,34 @@ async fn a_browser_panel_is_task_state_and_its_localhost_page_tunnels_to_the_ser
     let mut reply = Vec::new();
     browser.read_to_end(&mut reply).await.expect("read the reply");
     assert_eq!(reply, b"echo:GET / HTTP/1.1");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connection_whose_device_proof_fails_is_closed_unread() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
+    let relay = running.server.relay().clone();
+    let forger = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .relay_mode(iroh::RelayMode::Custom(iroh::RelayMap::from(relay.clone())))
+        .bind()
+        .await
+        .expect("bind");
+    let server = running.server.device().public().endpoint();
+    let connection = forger.connect(iroh::EndpointAddr::new(server).with_relay_url(relay), b"octopus/1").await;
+    let connection = connection.expect("the handshake completes");
+    let mut proof = connection.open_uni().await.expect("open the proof stream");
+    let unsigned = [identity("laptop").key.public().as_bytes().as_slice(), &[0u8; 64]].concat();
+    proof.write_all(&unsigned).await.expect("send the proof");
+    proof.finish().expect("finish the proof");
+    let closed = tokio::time::timeout(Duration::from_secs(5), connection.closed()).await.expect("closed");
+    assert!(closed.to_string().contains("no valid device proof"), "{closed}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_on_the_same_network_pairs_and_connects_with_no_relay_reachable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = common::start_unrelayed(dir.path()).await;
+    let laptop = paired(&running, &identity("laptop")).await;
+    laptop.call(&PairingList {}).await.expect("a call over the direct path");
+    assert!(!laptop.server_addresses().is_empty(), "each hello names where the server is reachable now");
 }

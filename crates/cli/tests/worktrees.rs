@@ -27,7 +27,7 @@ async fn a_worktree_lives_on_its_branch_until_its_lifetime_after_the_task_ends()
     std::fs::create_dir(&repo).expect("mkdir repo");
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "root"]);
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, &repo).await;
 
@@ -66,7 +66,7 @@ async fn a_workspace_renames_and_recolors_in_place_and_goes_with_its_tasks_once_
     std::fs::create_dir(&repo).expect("mkdir repo");
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "root"]);
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
     let teal = Color::Picked(Swatch { hue: Hue::Teal, tone: Tone::Deep });
     let add =
@@ -124,7 +124,7 @@ async fn a_workspace_renames_and_recolors_in_place_and_goes_with_its_tasks_once_
 #[tokio::test(flavor = "multi_thread")]
 async fn only_an_ended_task_archives_and_a_move_unarchives_it() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
     let id = create(&laptop, &workspace(&laptop, dir.path()).await, Checkout::Root, "none").await;
     let archive = TaskArchive { task: id.clone() };

@@ -4,10 +4,10 @@ use anyhow::{Context, anyhow};
 use clap::builder::{PossibleValuesParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, ArgMatches, Command, FromArgMatches, Subcommand};
-use octopus_proto::Outcome;
 use octopus_proto::ops::{self, WorkspaceList};
 use octopus_proto::schema::{Field, Shape};
 use octopus_proto::types::WorkspaceId;
+use octopus_proto::{Op, Outcome};
 use serde_json::Value;
 
 use crate::manual::{FileVerb, PairingVerb, ServerVerb, TermVerb};
@@ -141,6 +141,11 @@ async fn call_op(command: &ops::Command, matches: &ArgMatches) -> anyhow::Result
         args.insert(field.name.to_string(), value);
     }
     match connection.call_raw(command.op, Value::Object(args)).await.context(command.op)? {
+        Outcome::Ok(result) if command.op == ops::PairingOffer::NAME => {
+            let offer: ops::Offer = serde_json::from_value(result.clone()).context("decode the offer")?;
+            eprintln!("{}", octopus_client::qr::text(&offer.invite));
+            print(&result)
+        }
         Outcome::Ok(result) => print(&result),
         Outcome::Err(error) => Err(server_error(&error)),
     }

@@ -123,7 +123,7 @@ export const openView = (): TaskView | undefined => {
 
 export const serverView = (name: string) => servers().find((server) => server.name === name);
 
-export const isLocal = (name: string) => serverView(name)?.endpoint === null;
+export const isLocal = (name: string) => serverView(name)?.relay === null;
 
 export const serverLabel = (name: string) => serverView(name)?.label ?? name;
 

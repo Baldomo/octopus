@@ -226,7 +226,7 @@ Show a page in one of a task's browser panels, on every client that renders the 
 
 ## `octopus pairing offer`
 
-Show a one-time code that pairs one client with this server.
+Show a one-time invite that pairs one client with this server.
 
 - `--server <server>`: The paired server's name.
 
@@ -238,17 +238,16 @@ List the clients this server has paired with.
 
 ## `octopus pairing forget`
 
-Forget a paired client, which must pair with a code again; its open connections stay until they close.
+Forget a paired client, which must pair with a new invite; its open connections stay until they close.
 
 - `--server <server>`: The paired server's name.
 - `--client <client>`: The client's name, as it paired.
 
 ## `octopus pairing accept`
 
-Pair with a server on another machine using the code its `pairing offer` showed, and list it under its name.
+Pair with a server on another machine using the invite its `pairing offer` showed, and list it under its name.
 
-- `--address <address>`: The server's --quic address as this machine reaches it, host:port.
-- `--code <code>`: The one-time code.
+- `--invite <invite>`: The one-time invite `pairing offer` printed: octopus://<server key>?code=…&relay=…&addr=….
 
 ## `octopus server run`
 
@@ -259,7 +258,8 @@ Run this machine's server in the foreground.
 - `--store <store>`: The SQLite file the server keeps its state in.
 - `--worktrees <worktrees>`: Where task worktrees live: <worktrees>/<workspace>/<task>.
 - `--terminal-host <terminal-host>`: Socket of the terminal host, the process that keeps this server's terminals running across restarts; started if nothing answers there.
-- `--quic <quic>`: The UDP address QUIC listens on for clients on other machines, e.g. 0.0.0.0:7300.
+- `--udp <udp>`: The UDP address clients on other machines reach this server on directly, e.g. 0.0.0.0:7300, which takes IPv6 on the same port too.
+- `--relay <relay>`: The iroh relay this server is homed on, which clients on other machines dial it through: one of n0's, e.g. https://euc1-1.relay.n0.iroh.link./, or one of your own.
 
 ## `octopus server install`
 
@@ -270,7 +270,8 @@ Run the server at every login as a user service (launchd or systemd --user).
 - `--store <store>`: The SQLite file the server keeps its state in.
 - `--worktrees <worktrees>`: Where task worktrees live: <worktrees>/<workspace>/<task>.
 - `--terminal-host <terminal-host>`: Socket of the terminal host, the process that keeps this server's terminals running across restarts; started if nothing answers there.
-- `--quic <quic>`: The UDP address QUIC listens on for clients on other machines, e.g. 0.0.0.0:7300.
+- `--udp <udp>`: The UDP address clients on other machines reach this server on directly, e.g. 0.0.0.0:7300, which takes IPv6 on the same port too.
+- `--relay <relay>`: The iroh relay this server is homed on, which clients on other machines dial it through: one of n0's, e.g. https://euc1-1.relay.n0.iroh.link./, or one of your own.
 - `--log <log>`: The file the service's output is appended to.
 
 ## `octopus server uninstall`

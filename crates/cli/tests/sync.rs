@@ -11,7 +11,7 @@ use octopus_proto::{Event, Push};
 #[tokio::test(flavor = "multi_thread")]
 async fn clients_moving_tasks_at_once_converge_on_one_server_state() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
     let desk = connect(&running, "desk").await;
     let mut pushes = laptop.pushes();

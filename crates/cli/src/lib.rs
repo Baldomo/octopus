@@ -17,7 +17,9 @@ const USAGE: u8 = 2;
 
 async fn connect(server: &str) -> anyhow::Result<Connection> {
     let servers = Servers::load()?;
-    Connection::connect(&servers.get(server)?.address, &Identity::load()?).await
+    let connection = Connection::connect(&servers.get(server)?.address, &Identity::load()?).await?;
+    Servers::refresh(server, connection.server_addresses())?;
+    Ok(connection)
 }
 
 /// A server error prints as its JSON wire shape so scripts can match its code.
@@ -51,7 +53,10 @@ pub fn main() -> ExitCode {
                 eprintln!("error: {missing}");
                 return ExitCode::from(USAGE);
             }
-            None => error.exit(),
+            None => {
+                install::hand_off_old_service(&argv);
+                error.exit()
+            }
         },
     };
     let outcome = match matches.subcommand() {

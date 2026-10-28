@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use octopus_client::cache::{Cache, PushEffect};
 use octopus_client::servers::{Address, Server, Servers};
 use octopus_client::{CallError, Connection, Identity};
+use octopus_proto::device::PublicKey;
 use octopus_proto::ops::{SessionSync, WorkspaceRename, WorkspaceSetColor};
 use octopus_proto::types::{Color, WorkspaceId};
 use octopus_proto::{Event, Op, Push};
@@ -34,8 +35,8 @@ pub struct ServerView {
     pub name: String,
     /// What the window calls the server: "local" for one on the local socket, else its name.
     pub label: String,
-    /// The QUIC endpoint as host:port; none for a server on the local socket.
-    pub endpoint: Option<String>,
+    /// The relay a remote server is dialled through; none for a server on the local socket.
+    pub relay: Option<String>,
     pub reachable: bool,
     /// When `reachable` last changed, in milliseconds since 1970.
     pub since: i64,
@@ -166,6 +167,9 @@ impl Hub {
     /// Runs one connection until it ends, keeping the server's cache current, and resolves to why it closed.
     async fn session(&self, server: &Server) -> anyhow::Result<String> {
         let connection = Arc::new(Connection::connect(&server.address, &self.me).await?);
+        if let Err(error) = Servers::refresh(&server.name, connection.server_addresses()) {
+            eprintln!("octopus app: keep the addresses {} reported: {error:#}", server.name);
+        }
         let mut pushes = connection.pushes();
         self.resync(&server.name, &connection).await?;
         let mut refresh = tokio::time::interval(RTT_REFRESH);
@@ -224,15 +228,15 @@ impl Hub {
 
     /// Re-pairing a listed server, to pin a new key, is the CLI's `pairing accept`; this window keeps the pins it
     /// started with.
-    pub fn refuse_listed(&self, endpoint: &str) -> anyhow::Result<()> {
+    pub fn refuse_listed(&self, key: &PublicKey) -> anyhow::Result<()> {
         let state = lock(&self.state);
         let listed = state
             .links
             .iter()
-            .find(|(_, link)| matches!(&link.address, Address::Quic { endpoint: listed, .. } if listed == endpoint));
+            .find(|(_, link)| matches!(&link.address, Address::Remote { key: listed, .. } if listed == key));
         match listed {
             Some((name, _)) => {
-                anyhow::bail!("{endpoint} is listed as {name}; re-pair it with `octopus pairing accept`")
+                anyhow::bail!("{key} is listed as {name}; re-pair it with `octopus pairing accept`")
             }
             None => Ok(()),
         }
@@ -333,18 +337,16 @@ impl Hub {
 
     /// Whether the server runs on another machine, where its ports are reached through a tunnel.
     pub fn is_another_machine(&self, server: &str) -> bool {
-        lock(&self.state).links.get(server).is_some_and(|link| link.address.is_another_machine())
+        lock(&self.state).links.get(server).is_some_and(|link| matches!(link.address, Address::Remote { .. }))
     }
 
     pub fn connection(&self, server: &str) -> Result<Arc<Connection>, String> {
         let state = lock(&self.state);
         match state.links.get(server) {
             Some(Link { connection: Some(connection), .. }) => Ok(Arc::clone(connection)),
-            Some(Link { problem, .. }) => Err(format!(
-                "{} is unreachable: {}",
-                state.label(server),
-                problem.as_deref().unwrap_or("connecting")
-            )),
+            Some(Link { problem, .. }) => {
+                Err(format!("{} is unreachable: {}", state.label(server), problem.as_deref().unwrap_or("connecting")))
+            }
             None => Err(format!("no server named {server} in the list")),
         }
     }
@@ -363,9 +365,9 @@ impl Hub {
             .map(|(name, link)| ServerView {
                 name: name.clone(),
                 label: state.label(name).to_string(),
-                endpoint: match &link.address {
+                relay: match &link.address {
                     Address::Local { .. } => None,
-                    Address::Quic { endpoint, .. } => Some(endpoint.clone()),
+                    Address::Remote { relay, .. } => Some(relay.to_string()),
                 },
                 reachable: link.connection.is_some(),
                 since: link.since,

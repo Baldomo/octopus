@@ -1,6 +1,7 @@
-//! One connection from this client to one server, over the local socket or QUIC with the same protocol on both.
+//! One connection from this client to one server, over the local socket or iroh with the same protocol on both.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
@@ -9,11 +10,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, anyhow};
 use octopus_proto::device::DeviceKey;
 use octopus_proto::ops::{SessionHello, SessionPing};
+use octopus_proto::remote::{Connection as RemoteConnection, Dialer};
 use octopus_proto::types::Stream;
-use octopus_proto::{Error, Op, Outcome, Push, Request, ServerFrame, StreamHeader, line, local, quic};
+use octopus_proto::{Error, Op, Outcome, Push, Request, ServerFrame, StreamHeader, line, local};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, WriteHalf};
-use tokio::sync::{broadcast, oneshot, watch};
+use tokio::sync::{OnceCell, broadcast, oneshot, watch};
 
 use crate::Task;
 use crate::servers::Address;
@@ -23,10 +25,22 @@ const HEARTBEAT: Duration = Duration::from_secs(2);
 /// A server that has not answered a ping by then is treated as gone, so the client reconnects.
 const HEARTBEAT_PATIENCE: Duration = Duration::from_secs(5);
 
-/// This client as servers know it: its name and the key it pairs with.
+/// This client as servers know it: its name, the key it pairs with, and this process's iroh endpoint, which every
+/// remote server is dialled from, bound on the first dial.
 pub struct Identity {
     pub name: String,
     pub key: DeviceKey,
+    dialer: OnceCell<Dialer>,
+}
+
+impl Identity {
+    pub fn new(name: String, key: DeviceKey) -> Self {
+        Self { name, key, dialer: OnceCell::new() }
+    }
+
+    pub async fn dialer(&self) -> std::io::Result<&Dialer> {
+        self.dialer.get_or_try_init(Dialer::bind).await
+    }
 }
 
 pub trait Duplex: AsyncRead + AsyncWrite + Send + Unpin {}
@@ -47,18 +61,19 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
-/// Where each stream is opened: a fresh local socket connection, or a fresh stream of the one QUIC connection.
-/// Either way each stream flows on its own, so a large file transfer never blocks a terminal's bytes.
+/// Where each stream is opened: a fresh local socket connection, or a fresh stream of the one iroh connection.
+/// Either way each stream flows on its own, so a large file transfer never blocks a terminal's bytes. A remote link
+/// holds its endpoint, whose last drop ends every connection dialled from it.
 enum Link {
     Local(PathBuf),
-    Quic(quinn::Connection),
+    Remote { connection: RemoteConnection, _dialer: Dialer },
 }
 
 impl Link {
     async fn open(&self) -> std::io::Result<DataStream> {
         match self {
             Self::Local(socket) => Ok(Box::new(local::connect(socket).await?)),
-            Self::Quic(connection) => {
+            Self::Remote { connection, .. } => {
                 let (send, receive) = connection.open_bi().await?;
                 Ok(Box::new(tokio::io::join(receive, send)))
             }
@@ -102,7 +117,10 @@ impl Control {
         }
         let request = line(&Request { id, op: op.to_string(), args });
         self.write.lock().await.write_all(request.as_bytes()).await.context("send request")?;
-        outcome.await.context("connection closed before the response")
+        outcome.await.map_err(|_| {
+            let reason = self.closed.borrow().clone().expect("close records its reason before dropping the waiters");
+            anyhow!("the connection closed before the response: {reason}")
+        })
     }
 }
 
@@ -110,6 +128,7 @@ impl Control {
 pub struct Connection {
     link: Link,
     client: String,
+    server_addresses: Vec<SocketAddr>,
     control: Arc<Control>,
     pushes: broadcast::Sender<Push>,
     _reader: Task,
@@ -137,7 +156,7 @@ async fn read_frames(read: impl AsyncRead + Unpin, control: Weak<Control>, pushe
         let frame = match lines.next_line().await {
             Ok(Some(frame)) => frame,
             Ok(None) => break "the server closed the connection".to_string(),
-            Err(error) => break format!("reading from the server failed: {error}"),
+            Err(error) => break format!("reading from the server failed: {:#}", anyhow::Error::from(error)),
         };
         let Some(control) = control.upgrade() else { return };
         match serde_json::from_str::<ServerFrame>(&frame) {
@@ -158,11 +177,15 @@ async fn read_frames(read: impl AsyncRead + Unpin, control: Weak<Control>, pushe
 }
 
 impl Connection {
-    /// Opens the control stream and says hello. Over QUIC, the server must prove the key `address` pins.
+    /// Opens the control stream and says hello. Over iroh, only the holder of the key `address` pins answers.
     pub async fn connect(address: &Address, me: &Identity) -> anyhow::Result<Self> {
         let link = match address {
             Address::Local { socket } => Link::Local(socket.clone()),
-            Address::Quic { endpoint, key } => Link::Quic(quic::connect(endpoint, &me.key, Some(*key)).await?),
+            Address::Remote { key, relay, addresses } => {
+                let dialer = me.dialer().await?;
+                let connection = dialer.connect(&me.key, *key, relay, addresses).await?;
+                Link::Remote { connection, _dialer: dialer.clone() }
+            }
         };
         let stream = link.open().await.with_context(|| format!("connect {address}"))?;
         let (read, write) = tokio::io::split(stream);
@@ -176,9 +199,19 @@ impl Connection {
         });
         let (pushes, _) = broadcast::channel(PUSH_BACKLOG);
         let reader = Task(tokio::spawn(read_frames(read, Arc::downgrade(&control), pushes.clone())));
-        control.call(&SessionHello { client: me.name.clone() }).await.map_err(|error| anyhow!("{address}: {error}"))?;
+        let welcome = control
+            .call(&SessionHello { client: me.name.clone() })
+            .await
+            .map_err(|error| anyhow!("{address}: {error}"))?;
         let heartbeat = Task(tokio::spawn(heartbeat(Arc::downgrade(&control))));
-        Ok(Self { link, client: me.name.clone(), control, pushes, _reader: reader, _heartbeat: heartbeat })
+        let client = me.name.clone();
+        let server_addresses = welcome.addresses;
+        Ok(Self { link, client, server_addresses, control, pushes, _reader: reader, _heartbeat: heartbeat })
+    }
+
+    /// Where the server said, as this connection opened, a client on another machine reaches it directly.
+    pub fn server_addresses(&self) -> &[SocketAddr] {
+        &self.server_addresses
     }
 
     pub fn pushes(&self) -> broadcast::Receiver<Push> {

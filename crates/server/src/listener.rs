@@ -4,10 +4,10 @@ use std::time::Duration;
 use octopus_proto::device::PublicKey;
 use octopus_proto::local::{self, Listener};
 use octopus_proto::ops::{Paired, PairingPair, SessionHello, SessionPing};
+use octopus_proto::remote::{self, Connection, Endpoint};
 use octopus_proto::types::Stream;
 use octopus_proto::{
-    Error, Op, Outcome, Request, Response, ServerFrame, StreamHeader, line, parse_args, parse_request, quic,
-    request_from,
+    Error, Op, Outcome, Request, Response, ServerFrame, StreamHeader, line, parse_args, parse_request, request_from,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -26,6 +26,15 @@ const PAIRING_LINE_BYTES: u64 = 4096;
 const QUEUED_REQUESTS: usize = 64;
 /// Connections at once whose client is not yet known to be paired.
 const UNPAIRED_CONNECTIONS: usize = 16;
+/// Connections at once whose device proof has not arrived yet.
+const UNPROVEN_CONNECTIONS: usize = 64;
+
+const NO_PROOF: &[u8] = b"no valid device proof";
+const NO_CODE_ON_OFFER: &[u8] = b"unpaired, and no pairing code is on offer: offer a fresh invite";
+const UNPAIRED: &[u8] = b"unpaired";
+const TOO_MANY_UNPROVEN: &[u8] = b"too many connections awaiting their device proof";
+const TOO_MANY_UNPAIRED: &[u8] = b"too many unpaired connections";
+const INTERNAL: &[u8] = b"internal error";
 
 /// Who a stream comes from. The local socket admits only the server's own OS user, who names any client; a paired
 /// client is the name it paired under.
@@ -46,48 +55,64 @@ impl Peer {
     }
 }
 
-/// Serves the local socket and QUIC at once, with one protocol on both.
-pub async fn serve(server: Arc<Server>, local: Listener, quic: quinn::Endpoint) {
+/// Serves the local socket and iroh at once, with one protocol on both.
+pub async fn serve(server: Arc<Server>, local: Listener, remote: Endpoint) {
     tokio::spawn(remove_expired_worktrees(Arc::clone(&server)));
-    tokio::spawn(serve_quic(Arc::clone(&server), quic));
+    server.reach_at(remote.clone());
+    tokio::spawn(serve_remote(Arc::clone(&server), remote));
     local::accept_forever(local, |stream| drop(tokio::spawn(serve_stream(Arc::clone(&server), stream, Peer::Local))))
         .await
 }
 
-async fn serve_quic(server: Arc<Server>, endpoint: quinn::Endpoint) {
+async fn serve_remote(server: Arc<Server>, endpoint: Endpoint) {
+    let unproven = Arc::new(Semaphore::new(UNPROVEN_CONNECTIONS));
     let unpaired = Arc::new(Semaphore::new(UNPAIRED_CONNECTIONS));
     while let Some(incoming) = endpoint.accept().await {
-        let (server, unpaired) = (Arc::clone(&server), Arc::clone(&unpaired));
+        let (server, unproven, unpaired) = (Arc::clone(&server), Arc::clone(&unproven), Arc::clone(&unpaired));
         tokio::spawn(async move {
             match incoming.await {
-                Ok(connection) => serve_quic_connection(server, connection, &unpaired).await,
-                Err(error) => report!("a QUIC handshake failed: {error}"),
+                Ok(connection) => serve_remote_connection(server, connection, &unproven, &unpaired).await,
+                Err(error) => report!("an iroh handshake failed: {error}"),
             }
         });
     }
 }
 
-/// Every stream of a paired connection carries the control frames or one data stream, as a local connection does.
-async fn serve_quic_connection(server: Arc<Server>, connection: quinn::Connection, unpaired: &Semaphore) {
-    let key = quic::peer_key(&connection);
+/// A device the server has not pinned is closed before any stream but its device proof is read, unless a code is on
+/// offer. Every stream of a paired connection carries the control frames or one data stream, as a local connection
+/// does.
+async fn serve_remote_connection(
+    server: Arc<Server>,
+    connection: Connection,
+    unproven: &Semaphore,
+    unpaired: &Semaphore,
+) {
+    let Ok(proving) = unproven.try_acquire() else {
+        return connection.close(remote::REFUSED, TOO_MANY_UNPROVEN);
+    };
+    let Some(key) = remote::proven_device(&connection, server.device().public()).await else {
+        return connection.close(remote::REFUSED, NO_PROOF);
+    };
+    drop(proving);
     let pinned = blocking(&server, move |server| server.paired_name(&key)).await;
     let name = match pinned {
         Ok(Some(name)) => name,
+        Ok(None) if !server.offering() => return connection.close(remote::REFUSED, NO_CODE_ON_OFFER),
         Ok(None) => {
             let Ok(_pairing) = unpaired.try_acquire() else {
-                return connection.close(quic::REFUSED, b"too many unpaired connections");
+                return connection.close(remote::REFUSED, TOO_MANY_UNPAIRED);
             };
             match pair(&server, &connection, key).await {
                 Some(name) => name,
-                None => return connection.close(quic::REFUSED, b"unpaired"),
+                None => return connection.close(remote::REFUSED, UNPAIRED),
             }
         }
         Err(error) => {
             report!("look up the pin of {key}: {error}");
-            return connection.close(quic::REFUSED, b"internal error");
+            return connection.close(remote::REFUSED, INTERNAL);
         }
     };
-    connection.set_max_concurrent_bi_streams(quic::PAIRED_STREAMS);
+    remote::admit(&connection);
     while let Ok((send, receive)) = connection.accept_bi().await {
         let peer = Peer::Paired { name: name.clone(), key };
         tokio::spawn(serve_stream(Arc::clone(&server), tokio::io::join(receive, send), peer));
@@ -95,7 +120,7 @@ async fn serve_quic_connection(server: Arc<Server>, connection: quinn::Connectio
 }
 
 /// An unpaired client's first stream carries one `pairing.pair`; the client is paired once it proves a code.
-async fn pair(server: &Arc<Server>, connection: &quinn::Connection, key: PublicKey) -> Option<String> {
+async fn pair(server: &Arc<Server>, connection: &Connection, key: PublicKey) -> Option<String> {
     let (mut send, receive) = tokio::time::timeout(PAIRING_PATIENCE, connection.accept_bi()).await.ok()?.ok()?;
     let mut first = String::new();
     let mut bounded = BufReader::new(receive.take(PAIRING_LINE_BYTES));

@@ -1,15 +1,16 @@
 //! The servers this client knows, the only server data it persists, and pairing, which adds a remote one.
 
 use std::fmt;
-use std::net::IpAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
 use octopus_proto::device::{DeviceKey, PublicKey};
 use octopus_proto::ops::{Paired, PairingPair};
-use octopus_proto::pairing::{Code, Side};
-use octopus_proto::{Op, Outcome, Request, Response, line, quic};
+use octopus_proto::pairing::{Invite, Side};
+use octopus_proto::remote::{self, RelayUrl};
+use octopus_proto::{Op, Outcome, Request, Response, line};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
@@ -20,31 +21,17 @@ use crate::connection::Identity;
 pub enum Address {
     /// A server on this machine, which admits this OS user with no pairing.
     Local { socket: PathBuf },
-    /// A paired server on another machine at `endpoint`, `host:port`, which must prove `key`.
-    Quic { endpoint: String, key: PublicKey },
+    /// A paired server on another machine, dialled by its pinned `key` at its direct `addresses` and through its
+    /// `relay` at once.
+    Remote { key: PublicKey, relay: RelayUrl, addresses: Vec<SocketAddr> },
 }
 
 impl Address {
-    /// Whether the server's ports are another machine's. A QUIC endpoint on a loopback host is this machine, and a
-    /// tunnel to it would dial its own listener.
-    pub fn is_another_machine(&self) -> bool {
-        match self {
-            Self::Local { .. } => false,
-            Self::Quic { endpoint, .. } => {
-                let host = endpoint.rsplit_once(':').map_or(endpoint.as_str(), |(host, _)| host);
-                let host = host.trim_start_matches('[').trim_end_matches(']');
-                !(host == "localhost" || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()))
-            }
-        }
-    }
-}
-
-impl Address {
-    /// The same socket, or the same QUIC endpoint whatever key it pins.
+    /// The same socket, or the same server key whatever relay it names.
     pub fn same_place(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Local { socket }, Self::Local { socket: other }) => socket == other,
-            (Self::Quic { endpoint, .. }, Self::Quic { endpoint: other, .. }) => endpoint == other,
+            (Self::Remote { key, .. }, Self::Remote { key: other, .. }) => key == other,
             _ => false,
         }
     }
@@ -54,7 +41,7 @@ impl fmt::Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Local { socket } => write!(f, "{}", socket.display()),
-            Self::Quic { endpoint, .. } => f.write_str(endpoint),
+            Self::Remote { key, relay, .. } => write!(f, "{key} at {relay}"),
         }
     }
 }
@@ -75,11 +62,6 @@ impl Server {
         match &self.address {
             Address::Local { socket } if !socket.is_absolute() => {
                 bail!("the socket of {} must be an absolute path: {}", self.name, socket.display())
-            }
-            Address::Quic { endpoint, .. }
-                if endpoint.rsplit_once(':').is_none_or(|(_, port)| port.parse::<u16>().is_err()) =>
-            {
-                bail!("the endpoint of {} must be host:port: {endpoint}", self.name)
             }
             _ => Ok(()),
         }
@@ -108,17 +90,59 @@ pub fn create_parent(path: &std::path::Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))
 }
 
+/// Rewrites each entry paired over QUIC, `{"path":"quic","endpoint":"<host:port>","key"}`, to dial the same key at
+/// the addresses the endpoint resolves to and through n0's relay, which every server installed then is homed on once
+/// upgraded. The key stays, so neither side pairs again. Returns whether any entry changed.
+pub(crate) fn migrate_quic_entries(listed: &mut serde_json::Value) -> anyhow::Result<bool> {
+    let Some(servers) = listed.get_mut("servers").and_then(serde_json::Value::as_array_mut) else { return Ok(false) };
+    let mut migrated = false;
+    for server in servers.iter_mut() {
+        let name = server.get("name").and_then(serde_json::Value::as_str).unwrap_or("a server").to_string();
+        let Some(address) = server.get_mut("address") else { continue };
+        if address.get("path").and_then(serde_json::Value::as_str) != Some("quic") {
+            continue;
+        }
+        let (Some(endpoint), Some(key)) =
+            (address.get("endpoint").and_then(serde_json::Value::as_str), address.get("key"))
+        else {
+            bail!("{name} is listed over QUIC without both an endpoint and a key; pair it again with an invite");
+        };
+        let addresses: Vec<String> = match endpoint.to_socket_addrs() {
+            Ok(resolved) => resolved.map(|address| address.to_string()).collect(),
+            Err(error) => {
+                eprintln!(
+                    "octopus: {name} keeps only n0's relay: its QUIC endpoint {endpoint} does not resolve: {error}"
+                );
+                Vec::new()
+            }
+        };
+        *address = serde_json::json!({
+            "path": "remote", "key": key, "relay": remote::N0_EU_RELAY, "addresses": addresses,
+        });
+        migrated = true;
+    }
+    Ok(migrated)
+}
+
 impl Servers {
     pub fn load() -> anyhow::Result<Self> {
         let path = config(SERVERS_FILE)?;
         match std::fs::read_to_string(&path) {
             Ok(text) => {
-                let servers: Self = serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+                let mut listed: serde_json::Value =
+                    serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+                let migrated =
+                    migrate_quic_entries(&mut listed).with_context(|| format!("migrate {}", path.display()))?;
+                let servers: Self =
+                    serde_json::from_value(listed).with_context(|| format!("parse {}", path.display()))?;
                 servers
                     .servers
                     .iter()
                     .try_for_each(Server::validate)
                     .with_context(|| format!("check {}", path.display()))?;
+                if migrated {
+                    servers.save()?;
+                }
                 Ok(servers)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
@@ -130,6 +154,22 @@ impl Servers {
         let path = config(SERVERS_FILE)?;
         create_parent(&path)?;
         std::fs::write(&path, serde_json::to_string_pretty(self)?).with_context(|| format!("write {}", path.display()))
+    }
+
+    /// Points the listed remote server `name` at the direct `addresses` it reported, saving the list when they
+    /// changed, so a server whose network moved stays reachable with no relay.
+    pub fn refresh(name: &str, addresses: &[SocketAddr]) -> anyhow::Result<()> {
+        let mut servers = Self::load()?;
+        let Some(Address::Remote { addresses: listed, .. }) =
+            servers.servers.iter_mut().find(|server| server.name == name).map(|server| &mut server.address)
+        else {
+            return Ok(());
+        };
+        if listed.as_slice() == addresses {
+            return Ok(());
+        }
+        *listed = addresses.to_vec();
+        servers.save()
     }
 
     /// Replaces a listed server only at the same place, as re-pairing does to pin a new key; a name listed for
@@ -194,7 +234,7 @@ impl Identity {
             }
             Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
         };
-        Ok(Self { name: hostname(), key })
+        Ok(Self::new(hostname(), key))
     }
 }
 
@@ -208,36 +248,39 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?.write_all(bytes)
 }
 
-/// Pairs with the server at `endpoint` using a code it offered, and returns the entry that pins its key. Both sides
-/// prove the code over their own handshake's keys, so a peer in the middle gets pinned by neither.
-pub async fn pair(endpoint: &str, code: &Code, me: &Identity) -> anyhow::Result<Server> {
-    tokio::time::timeout(PAIRING_PATIENCE, exchange(endpoint, code, me))
+/// Pairs with the server `invite` names and returns the entry that pins its key. Both sides prove the code over
+/// their own handshake's keys, so a peer in the middle gets pinned by neither.
+pub async fn pair(invite: &Invite, me: &Identity) -> anyhow::Result<Server> {
+    let server = invite.server;
+    tokio::time::timeout(PAIRING_PATIENCE, exchange(invite, me))
         .await
-        .map_err(|_| anyhow!("{endpoint} did not finish pairing within {PAIRING_PATIENCE:?}"))?
+        .map_err(|_| anyhow!("{server} did not finish pairing within {PAIRING_PATIENCE:?}"))?
 }
 
-async fn exchange(endpoint: &str, code: &Code, me: &Identity) -> anyhow::Result<Server> {
-    let connection = quic::connect(endpoint, &me.key, None).await?;
-    let (server, client) = (quic::peer_key(&connection), me.key.public());
-    let op = PairingPair { client: me.name.clone(), proof: code.prove(Side::Client, &server, &client) };
+async fn exchange(invite: &Invite, me: &Identity) -> anyhow::Result<Server> {
+    let Invite { code, server, relay, addresses } = invite;
+    let connection = me.dialer().await?.connect(&me.key, *server, relay, addresses).await?;
+    let client = me.key.public();
+    let op = PairingPair { client: me.name.clone(), proof: code.prove(Side::Client, server, &client) };
     let request = Request { id: 1, op: PairingPair::NAME.to_string(), args: serde_json::to_value(op)? };
     let (mut send, receive) = connection.open_bi().await.context("open the pairing stream")?;
     send.write_all(line(&request).as_bytes()).await.context("send the pairing request")?;
     let mut reply = String::new();
     BufReader::new(receive.take(PAIRING_REPLY_BYTES)).read_line(&mut reply).await.context("read the pairing reply")?;
-    connection.close(quic::DONE, b"paired");
-    let response: Response = serde_json::from_str(&reply).with_context(|| format!("{endpoint} did not answer"))?;
+    connection.close(remote::DONE, b"paired");
+    let response: Response = serde_json::from_str(&reply).with_context(|| format!("{server} did not answer"))?;
     if response.id != request.id {
-        bail!("{endpoint} answered request {}, not {}", response.id, request.id);
+        bail!("{server} answered request {}, not {}", response.id, request.id);
     }
     let paired: Paired = match response.outcome {
         Outcome::Ok(value) => serde_json::from_value(value).context("decode the pairing reply")?,
-        Outcome::Err(error) => bail!("{endpoint} refused to pair: {error}"),
+        Outcome::Err(error) => bail!("{server} refused to pair: {error}"),
     };
-    if !code.proves(&paired.proof, Side::Server, &server, &client) {
-        bail!("{endpoint} did not prove it holds the code, so its key {server} was not pinned");
+    if !code.proves(&paired.proof, Side::Server, server, &client) {
+        bail!("{server} did not prove it holds the code, so it was not pinned");
     }
-    let server = Server { name: paired.server, address: Address::Quic { endpoint: endpoint.to_string(), key: server } };
+    let address = Address::Remote { key: *server, relay: relay.clone(), addresses: addresses.clone() };
+    let server = Server { name: paired.server, address };
     server.validate()?;
     Ok(server)
 }

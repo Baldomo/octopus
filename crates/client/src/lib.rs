@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod connection;
+pub mod qr;
 pub mod servers;
 pub mod tunnel;
 
@@ -31,18 +32,23 @@ mod tests {
     }
 
     #[test]
-    fn a_server_on_a_loopback_endpoint_is_this_machine() {
+    fn an_entry_paired_over_quic_keeps_its_key_and_dials_its_endpoint_directly() {
+        use crate::servers::{Servers, migrate_quic_entries};
         let key = DeviceKey::generate().public();
-        let endpoints = [
-            ("127.0.0.1:7300", false),
-            ("[::1]:7300", false),
-            ("localhost:7300", false),
-            ("10.0.0.2:7300", true),
-            ("mac-mini.tailnet.ts.net:7300", true),
-        ];
-        for (endpoint, another) in endpoints {
-            assert_eq!(Address::Quic { endpoint: endpoint.into(), key }.is_another_machine(), another, "{endpoint}");
-        }
+        let mut listed = serde_json::json!({"servers": [
+            {"name": "laptop", "address": {"path": "local", "socket": "/tmp/octopus.sock"}},
+            {"name": "mac-mini", "address": {"path": "quic", "endpoint": "127.0.0.1:7300", "key": key}},
+        ]});
+        assert!(migrate_quic_entries(&mut listed).expect("migrate"));
+        let servers: Servers = serde_json::from_value(listed.clone()).expect("the migrated list parses");
+        let relay = octopus_proto::remote::N0_EU_RELAY.parse().expect("n0's relay");
+        let addresses = vec!["127.0.0.1:7300".parse().expect("an address")];
+        assert_eq!(servers.servers[1].address, Address::Remote { key, relay, addresses });
+        assert!(!migrate_quic_entries(&mut listed).expect("migrate again"), "a migrated list stays as it is");
+        let mut keyless = serde_json::json!({"servers": [
+            {"name": "desk", "address": {"path": "quic", "endpoint": "127.0.0.1:7300"}},
+        ]});
+        assert!(migrate_quic_entries(&mut keyless).is_err(), "an entry with no key has nothing to pin");
     }
 
     #[test]
@@ -66,9 +72,12 @@ mod tests {
             let (read, mut write) = tokio::io::split(listener.accept().await.expect("accept"));
             let mut hello = String::new();
             BufReader::new(read).read_line(&mut hello).await.expect("hello");
-            write.write_all(b"{\"id\":1,\"ok\":{\"server\":\"s\",\"rev\":0}}\n").await.expect("welcome");
+            write
+                .write_all(b"{\"id\":1,\"ok\":{\"server\":\"s\",\"rev\":0,\"addresses\":[]}}\n")
+                .await
+                .expect("welcome");
         });
-        let me = Identity { name: "laptop".into(), key: DeviceKey::generate() };
+        let me = Identity::new("laptop".into(), DeviceKey::generate());
         let connection = Connection::connect(&Address::Local { socket }, &me).await.expect("connect");
         tokio::time::timeout(Duration::from_secs(5), connection.closed()).await.expect("closed resolves");
         let call = connection.call_raw("workspace.list", serde_json::json!({}));

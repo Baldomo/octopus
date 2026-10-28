@@ -36,11 +36,13 @@ export type Entry = { name: string, kind: EntryKind, };
 
 export type Match = { path: string, line: number, text: string, };
 
-export type Offer = { code: string, 
+export type Offer = { invite: string, 
 /**
- * When the code stops pairing, in milliseconds since 1970.
+ * When the invite stops pairing, in milliseconds since 1970.
  */
 expires_at: number, };
+
+export type ShownOffer = { offer: Offer, qr: string, };
 
 export type PairedClient = { 
 /**
@@ -110,9 +112,9 @@ export type ServerView = { name: string,
  */
 label: string, 
 /**
- * The QUIC endpoint as host:port; none for a server on the local socket.
+ * The relay a remote server is dialled through; none for a server on the local socket.
  */
-endpoint: string | null, reachable: boolean, 
+relay: string | null, reachable: boolean, 
 /**
  * When `reachable` last changed, in milliseconds since 1970.
  */

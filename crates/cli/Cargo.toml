@@ -30,4 +30,6 @@ nix = { version = "0.31.3", features = ["user"] }
 
 [dev-dependencies]
 futures = "0.3.34"
+iroh.workspace = true
+iroh-relay.workspace = true
 tempfile = "3.27.0"

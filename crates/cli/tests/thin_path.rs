@@ -33,7 +33,7 @@ fn locked<T: std::fmt::Debug>(outcome: Result<T, CallError>, holder: &str) {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_focused_task_runs_its_agent_terminal_end_to_end() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "echo", echo_agent(&format!("agent:${ENV_TASK}@${ENV_SERVER}")), true).await;
@@ -90,7 +90,7 @@ fn conflict<T: std::fmt::Debug>(outcome: Result<T, CallError>, what: &str) {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_shell_panel_follows_the_agent_until_its_shell_exits_or_it_closes() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "echo", echo_agent("agent:up"), false).await;
@@ -129,7 +129,7 @@ async fn a_shell_panel_follows_the_agent_until_its_shell_exits_or_it_closes() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_missing_harness_runs_nothing_and_reports_its_install_command() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     let install = "npm install -g @anthropic-ai/claude-code".to_string();
@@ -165,7 +165,7 @@ async fn a_missing_harness_runs_nothing_and_reports_its_install_command() {
 async fn concurrent_focuses_start_one_agent() {
     let dir = tempfile::tempdir().expect("tempdir");
     let starts = dir.path().join("starts");
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
     let desk = connect(&running, "desk").await;
     let workspace = workspace(&laptop, dir.path()).await;
@@ -214,7 +214,7 @@ async fn an_agent_outlives_a_restart_of_its_server_process() {
 #[tokio::test(flavor = "multi_thread")]
 async fn after_a_machine_restart_the_next_focus_starts_the_agent_again() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let before = start(dir.path(), "before.sock", "host.sock");
+    let before = start(dir.path(), "before.sock", "host.sock").await;
     let laptop = connect(&before, "laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "echo", echo_agent("agent:up"), false).await;
@@ -222,7 +222,7 @@ async fn after_a_machine_restart_the_next_focus_starts_the_agent_again() {
     laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
     assert!(task(&laptop, &id).await.focused_at.is_some());
 
-    let after = start(dir.path(), "after.sock", "rebooted-host.sock");
+    let after = start(dir.path(), "after.sock", "rebooted-host.sock").await;
     let laptop = connect(&after, "laptop").await;
     let forgotten = task(&laptop, &id).await;
     assert_eq!((forgotten.focused_at, forgotten.agent, forgotten.panels), (None, Agent::NotStarted, vec![]));
@@ -245,7 +245,7 @@ async fn an_agent_owns_its_terminal_and_answers_for_its_own_privacy_permissions(
         print "probe:$$:", (tcgetpgrp(0) == $$ ? 'foreground' : 'not foreground'), ":end\n";
         sleep 1 while 1;"#;
     let dir = tempfile::tempdir().expect("tempdir");
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "probe", vec!["perl".into(), "-e".into(), PROBE.into()], false).await;
@@ -277,7 +277,7 @@ async fn an_agent_that_cannot_start_fails_the_focus_with_the_reason() {
     let garbage = dir.path().join("garbage");
     std::fs::write(&garbage, [0u8, 1, 2]).expect("write");
     std::fs::set_permissions(&garbage, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "garbage", vec![garbage.to_string_lossy().into()], false).await;
@@ -293,7 +293,7 @@ async fn an_agent_that_cannot_start_fails_the_focus_with_the_reason() {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_agent_that_ignores_sigterm_and_sighup_is_killed_after_the_grace() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "stubborn", echo_agent("trapped; trap '' TERM HUP; echo ignoring"), false).await;
@@ -321,7 +321,7 @@ async fn focus_prints(connection: &Connection, id: &TaskId, line: &str) {
 #[tokio::test(flavor = "multi_thread")]
 async fn every_start_after_a_session_s_first_resumes_it() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     let [start, resume] =

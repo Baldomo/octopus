@@ -14,7 +14,7 @@ async fn a_client_works_on_a_tasks_files_through_its_server() {
     let dir = tempfile::tempdir().expect("tempdir");
     let checkout = dir.path().join("repo");
     std::fs::create_dir(&checkout).expect("mkdir");
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, &checkout).await;
     let task = create(&laptop, &workspace, Checkout::Root, "none").await;

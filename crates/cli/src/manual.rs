@@ -9,8 +9,8 @@ use octopus_client::Identity;
 use octopus_client::servers::{self, Address, Server as KnownServer, Servers};
 use octopus_proto::local::Listener;
 use octopus_proto::ops::{TaskGet, TermTakeLock};
-use octopus_proto::pairing::Code;
-use octopus_proto::quic;
+use octopus_proto::pairing::Invite;
+use octopus_proto::remote;
 use octopus_proto::types::{Stream, TaskId};
 use octopus_server::TerminalHost;
 use tokio::io::AsyncReadExt;
@@ -44,6 +44,13 @@ pub enum ServerVerb {
         #[arg(long)]
         address: PathBuf,
     },
+    /// Register again the service an older binary installed with --quic; its server hands itself here.
+    #[command(hide = true)]
+    Upgrade {
+        /// The --name the service was installed with.
+        #[arg(long)]
+        name: String,
+    },
     /// Remember a server on this machine's local socket under a name.
     Add {
         /// The name to call the server by.
@@ -73,19 +80,23 @@ impl ServerVerb {
         match self {
             Self::Run(run) => {
                 run.check()?;
-                let ServerRun { name, socket, store, worktrees, terminal_host, quic } = run;
+                let ServerRun { name, socket, store, worktrees, terminal_host, udp, relay } = run;
                 let local = Listener::bind(&socket).with_context(|| format!("bind {}", socket.display()))?;
                 let host = TerminalHost { program: std::env::current_exe()?, address: terminal_host };
-                let server = octopus_server::Server::open(&name, &store, &worktrees, &host)
+                let server = octopus_server::Server::open(&name, &store, &worktrees, &host, relay.clone())
                     .map_err(|error| anyhow!("{error}"))?;
-                let remote = quic::listen(quic, server.device()).with_context(|| format!("bind QUIC on {quic}"))?;
+                let endpoint = remote::listen(udp, relay.clone(), server.device()).await?;
                 let key = server.device().public();
-                eprintln!("octopus server {name} listening on {} and QUIC {quic}, key {key}", socket.display());
-                octopus_server::serve(server, local, remote).await;
+                eprintln!(
+                    "octopus server {name} listening on {}, and as {key} on UDP {udp} and {relay}",
+                    socket.display()
+                );
+                octopus_server::serve(server, local, endpoint).await;
                 Ok(())
             }
             Self::Install { run, log } => print(&install::install(&Service::new(run, std::env::current_exe()?, log)?)?),
             Self::Uninstall { name } => print(&install::uninstall(&name)?),
+            Self::Upgrade { name } => install::upgrade_service(&name),
             Self::TerminalHost { address } => {
                 octopus_server::run_terminal_host(&address).await.with_context(|| format!("host {}", address.display()))
             }
@@ -176,21 +187,18 @@ impl FileVerb {
 
 #[derive(Subcommand)]
 pub enum PairingVerb {
-    /// Pair with a server on another machine using the code its `pairing offer` showed, and list it under its name.
+    /// Pair with a server on another machine using the invite its `pairing offer` showed, and list it under its name.
     Accept {
-        /// The server's --quic address as this machine reaches it, host:port.
+        /// The one-time invite `pairing offer` printed: octopus://<server key>?code=…&relay=…&addr=….
         #[arg(long)]
-        address: String,
-        /// The one-time code.
-        #[arg(long)]
-        code: Code,
+        invite: Invite,
     },
 }
 
 impl PairingVerb {
     pub async fn run(self) -> anyhow::Result<()> {
-        let Self::Accept { address, code } = self;
-        let server = servers::pair(&address, &code, &Identity::load()?).await?;
+        let Self::Accept { invite } = self;
+        let server = servers::pair(&invite, &Identity::load()?).await?;
         Servers::remember(server.clone())?;
         print(&server)
     }

@@ -8,7 +8,7 @@ use octopus_proto::ops::{
     PairingOffer, TaskArchive, TaskCreate, TaskFocus, TaskMove, TaskRename, TermClaim, TermClose, TermOpen, TermResize,
     TermTakeLock, WorkspaceAdd, WorkspaceRemove,
 };
-use octopus_proto::pairing::Code;
+use octopus_proto::pairing::Invite;
 use octopus_proto::types::{
     BrowserId, BrowserTarget, Checkout, Color, PtyId, Stream, Swatch, TaskId, TaskState, WorkspaceId,
 };
@@ -29,6 +29,13 @@ type Uis<'a> = State<'a, Arc<UiStore>>;
 type Browsing<'a> = State<'a, Browsers>;
 
 pub struct Launched(pub Instant);
+
+/// An offer as the window shows it, beside its invite drawn as an SVG QR code.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+pub struct ShownOffer {
+    pub offer: Offer,
+    pub qr: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 pub struct Boot {
@@ -54,19 +61,20 @@ pub fn ui_act(ui: Uis, act: UiAct) -> Result<(), String> {
     ui.act(act)
 }
 
-/// Pairs with the server at `address` using the code it offered, lists it, and resolves to its name.
+/// Pairs with the server `invite` names, lists it, and resolves to its name.
 #[tauri::command]
-pub async fn server_pair(hub: Hubbed<'_>, address: String, code: Code) -> Result<String, String> {
-    hub.refuse_listed(&address).map_err(|error| format!("{error:#}"))?;
-    let server = servers::pair(&address, &code, &hub.me).await.map_err(|error| format!("{error:#}"))?;
+pub async fn server_pair(hub: Hubbed<'_>, invite: Invite) -> Result<String, String> {
+    hub.refuse_listed(&invite.server).map_err(|error| format!("{error:#}"))?;
+    let server = servers::pair(&invite, &hub.me).await.map_err(|error| format!("{error:#}"))?;
     let name = server.name.clone();
     hub.add(server).map_err(|error| format!("{error:#}"))?;
     Ok(name)
 }
 
 #[tauri::command]
-pub async fn server_offer(hub: Hubbed<'_>, server: String) -> Result<Offer, String> {
-    hub.call(&server, &PairingOffer {}).await
+pub async fn server_offer(hub: Hubbed<'_>, server: String) -> Result<ShownOffer, String> {
+    let offer = hub.call(&server, &PairingOffer {}).await?;
+    Ok(ShownOffer { qr: octopus_client::qr::svg(&offer.invite), offer })
 }
 
 #[tauri::command]

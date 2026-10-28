@@ -1,35 +1,60 @@
-//! The ed25519 key each device holds, which pairing pins and every QUIC handshake proves.
+//! The ed25519 key each device holds, which pairing pins. A server's is its iroh endpoint id; a client proves its own
+//! on each connection.
 
 use std::fmt;
 use std::str::FromStr;
 
 use ring::rand::SystemRandom;
-use ring::signature::{Ed25519KeyPair, KeyPair};
+use ring::signature::Ed25519KeyPair;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 const PREFIX: &str = "ed25519:";
-/// The DER of an ed25519 SubjectPublicKeyInfo up to the key itself (RFC 8410).
-const SPKI_PREFIX: [u8; 12] = [0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00];
+/// The DER of the PKCS#8 v2 ed25519 key ring writes, up to the 32-byte seed (RFC 8410).
+const PKCS8_SEED_PREFIX: [u8; 16] =
+    [0x30, 0x51, 0x02, 0x01, 0x01, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20];
 
-/// A device's public key, spelled `ed25519:<hex>`.
+/// A device's public key, a point on the ed25519 curve spelled `ed25519:<hex>`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PublicKey(pub [u8; 32]);
+pub struct PublicKey(iroh::EndpointId);
 
 impl PublicKey {
-    /// The key as TLS carries a raw public key (RFC 7250).
-    pub fn spki(&self) -> Vec<u8> {
-        [SPKI_PREFIX.as_slice(), &self.0].concat()
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        self.0.as_bytes()
     }
 
-    pub fn from_spki(spki: &[u8]) -> Option<Self> {
-        let key = spki.strip_prefix(SPKI_PREFIX.as_slice())?;
-        Some(Self(key.try_into().ok()?))
+    /// The iroh endpoint this key is.
+    pub fn endpoint(&self) -> iroh::EndpointId {
+        self.0
+    }
+
+    pub fn hex(&self) -> String {
+        hex::encode(self.as_bytes())
+    }
+
+    pub fn from_bytes(bytes: &[u8; 32]) -> Result<Self, String> {
+        iroh::EndpointId::from_bytes(bytes)
+            .map(Self)
+            .map_err(|_| format!("{} is not an ed25519 point", hex::encode(bytes)))
+    }
+
+    pub fn from_hex(encoded: &str) -> Result<Self, String> {
+        let bytes: [u8; 32] = hex::decode(encoded)
+            .map_err(|error| format!("{encoded:?}: {error}"))?
+            .try_into()
+            .map_err(|_| format!("{encoded:?} is not 32 bytes"))?;
+        Self::from_bytes(&bytes)
+    }
+}
+
+impl From<iroh::EndpointId> for PublicKey {
+    fn from(id: iroh::EndpointId) -> Self {
+        Self(id)
     }
 }
 
 impl fmt::Display for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{PREFIX}{}", hex::encode(self.0))
+        write!(f, "{PREFIX}{}", self.hex())
     }
 }
 
@@ -43,9 +68,7 @@ impl FromStr for PublicKey {
     type Err = String;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        let encoded = text.strip_prefix(PREFIX).ok_or_else(|| format!("{text:?} does not start with {PREFIX}"))?;
-        let bytes = hex::decode(encoded).map_err(|error| format!("{text:?}: {error}"))?;
-        Ok(Self(bytes.try_into().map_err(|_| format!("{text:?} is not 32 bytes"))?))
+        Self::from_hex(text.strip_prefix(PREFIX).ok_or_else(|| format!("{text:?} does not start with {PREFIX}"))?)
     }
 }
 
@@ -64,7 +87,7 @@ impl<'de> Deserialize<'de> for PublicKey {
 /// This device's key pair, kept as PKCS#8.
 pub struct DeviceKey {
     pkcs8: Vec<u8>,
-    public: PublicKey,
+    secret: iroh::SecretKey,
 }
 
 impl DeviceKey {
@@ -74,9 +97,12 @@ impl DeviceKey {
     }
 
     pub fn from_pkcs8(pkcs8: &[u8]) -> Result<Self, String> {
-        let pair = Ed25519KeyPair::from_pkcs8(pkcs8).map_err(|error| format!("an ed25519 PKCS#8 key: {error}"))?;
-        let public = PublicKey(pair.public_key().as_ref().try_into().expect("an ed25519 public key is 32 bytes"));
-        Ok(Self { pkcs8: pkcs8.to_vec(), public })
+        Ed25519KeyPair::from_pkcs8(pkcs8).map_err(|error| format!("an ed25519 PKCS#8 key: {error}"))?;
+        let seed = pkcs8
+            .strip_prefix(PKCS8_SEED_PREFIX.as_slice())
+            .and_then(<[u8]>::first_chunk::<32>)
+            .ok_or("an ed25519 key in the PKCS#8 v2 layout ring writes")?;
+        Ok(Self { pkcs8: pkcs8.to_vec(), secret: iroh::SecretKey::from_bytes(seed) })
     }
 
     pub fn pkcs8(&self) -> &[u8] {
@@ -84,6 +110,10 @@ impl DeviceKey {
     }
 
     pub fn public(&self) -> PublicKey {
-        self.public
+        self.secret.public().into()
+    }
+
+    pub fn secret(&self) -> &iroh::SecretKey {
+        &self.secret
     }
 }

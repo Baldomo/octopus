@@ -1,8 +1,10 @@
+use std::net::SocketAddr;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::frames::Op;
-use crate::pairing::{Code, Proof};
+use crate::pairing::{Invite, Proof};
 use crate::schema::{Field, record};
 use crate::types::{
     AgentStatus, BrowserId, BrowserTarget, Checkout, Color, PtyId, SessionId, Task, TaskId, TaskState, Workspace,
@@ -33,6 +35,8 @@ pub struct Revised {
 pub struct Welcome {
     pub server: String,
     pub rev: u64,
+    /// Where a client on another machine reaches the server directly now, which it dials next time.
+    pub addresses: Vec<SocketAddr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -90,8 +94,8 @@ op!(
 #[serde(deny_unknown_fields)]
 pub struct Offer {
     #[ts(type = "string")]
-    pub code: Code,
-    /// When the code stops pairing, in milliseconds since 1970.
+    pub invite: Invite,
+    /// When the invite stops pairing, in milliseconds since 1970.
     pub expires_at: i64,
 }
 
@@ -121,7 +125,7 @@ pub struct Paired {
 }
 
 op!(
-    /// Show a one-time code that pairs one client with this server.
+    /// Show a one-time invite that pairs one client with this server.
     PairingOffer = "pairing.offer" -> Offer {}
 );
 op!(
@@ -129,14 +133,14 @@ op!(
     PairingList = "pairing.list" -> Clients {}
 );
 op!(
-    /// Forget a paired client, which must pair with a code again; its open connections stay until they close.
+    /// Forget a paired client, which must pair with a new invite; its open connections stay until they close.
     PairingForget = "pairing.forget" -> Done {
         /// The client's name, as it paired.
         client: String,
     }
 );
 op!(
-    /// Pair with a code: the one request an unpaired client may send, on its connection's first stream.
+    /// Pair with an invite's code: the one request an unpaired client may send, on its connection's first stream.
     PairingPair = "pairing.pair" -> Paired {
         /// The client's name, as terminal lock holders see it.
         client: String,

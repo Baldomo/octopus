@@ -108,7 +108,7 @@ pub enum Error {
     Conflict { message: String },
     #[error("internal: {message}")]
     Internal { message: String },
-    #[error("this client is not paired with the server; pair it with a code first")]
+    #[error("this client is not paired with the server; pair it with an invite first")]
     Unpaired,
     #[error("the pairing code is spent, expired, or another server's")]
     CodeRefused,

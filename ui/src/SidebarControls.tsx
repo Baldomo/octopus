@@ -6,6 +6,7 @@ import {
   TASK_STATES,
   TONES,
   type Offer,
+  type ShownOffer,
   type PairedClient,
   type Row,
   type Section,
@@ -117,21 +118,23 @@ const copyKey = mac ? "⌘C" : "Ctrl+C";
 
 const grouped = (code: string) => code.match(/.{1,4}/g)?.join(" ") ?? code;
 
+const inviteCode = (offered: Offer) => new URL(offered.invite).searchParams.get("code") ?? "";
+
 export function ServerMenu(props: { name: string }) {
   const server = () => serverView(props.name);
   const label = serverLabel(props.name);
   const now = ticking();
-  const [mode, setMode] = createSignal<"main" | "forget" | Offer>("main");
+  const [mode, setMode] = createSignal<"main" | "forget" | ShownOffer>("main");
   const offer = () => {
     const shown = mode();
     return typeof shown === "string" ? null : shown;
   };
-  const copyCode = (offered: Offer) => copy(offered.code, "the pairing code").then(closeMenu, report);
+  const copyInvite = (offered: Offer) => copy(offered.invite, "the pairing invite").then(closeMenu, report);
   const copyShortcut = (event: KeyboardEvent) => {
-    const code = offer();
-    if (code === null || event.key !== "c" || !(mac ? event.metaKey : event.ctrlKey)) return;
+    const offered = offer();
+    if (offered === null || event.key !== "c" || !(mac ? event.metaKey : event.ctrlKey)) return;
     event.preventDefault();
-    copyCode(code);
+    copyInvite(offered.offer);
   };
   document.addEventListener("keydown", copyShortcut);
   onCleanup(() => document.removeEventListener("keydown", copyShortcut));
@@ -176,7 +179,7 @@ export function ServerMenu(props: { name: string }) {
       <Head
         title={props.name}
         lines={[
-          server()?.endpoint ?? "local socket",
+          server()?.relay ?? "local socket",
           server()?.reachable
             ? `reachable · ${server()?.rtt_ms ?? "–"} ms`
             : `unreachable since ${clock(server()?.since ?? now())}`,
@@ -186,13 +189,14 @@ export function ServerMenu(props: { name: string }) {
         {(offered) => (
           <>
             <div class="code">
-              <div class="digits">{grouped(offered().code)}</div>
+              <div class="qr" innerHTML={offered().qr} />
+              <div class="digits">{grouped(inviteCode(offered().offer))}</div>
               <div class="exp">
-                {left(offered()) === "0:00" ? "expired" : `one pairing · expires in ${left(offered())}`}
+                {left(offered().offer) === "0:00" ? "expired" : `one pairing · expires in ${left(offered().offer)}`}
               </div>
             </div>
-            <Item kbd={copyKey} run={() => copyCode(offered())}>
-              Copy code
+            <Item kbd={copyKey} run={() => copyInvite(offered().offer)}>
+              Copy invite
             </Item>
           </>
         )}
@@ -201,7 +205,7 @@ export function ServerMenu(props: { name: string }) {
         <div class="confirm">
           <span>
             Forget {label}? Its tasks leave this client's lists; they keep running on {label}.{" "}
-            {isLocal(props.name) ? "It returns when the app next starts." : "Pairing again needs a new code."}
+            {isLocal(props.name) ? "It returns when the app next starts." : "Pairing again needs a new invite."}
           </span>
           <div class="row">
             <button class="btn" onClick={() => setMode("main")}>

@@ -11,7 +11,7 @@ import type {
   Model,
   Navigated,
   NewTask,
-  Offer,
+  ShownOffer,
   OnScreen,
   PairedClient,
   PtyId,
@@ -34,8 +34,8 @@ export const backend = {
   titleBarDoubleClick: () => invoke<void>("title_bar_double_click"),
   quit: () => invoke<void>("quit"),
   /** Resolves to the paired server's name. */
-  serverPair: (address: string, code: string) => invoke<string>("server_pair", { address, code }),
-  serverOffer: (server: string) => invoke<Offer>("server_offer", { server }),
+  serverPair: (invite: string) => invoke<string>("server_pair", { invite }),
+  serverOffer: (server: string) => invoke<ShownOffer>("server_offer", { server }),
   serverClients: (server: string) => invoke<PairedClient[]>("server_clients", { server }),
   serverRevoke: (server: string, client: string) => invoke<void>("server_revoke", { server, client }),
   /** Renames the server in this client's list only. */

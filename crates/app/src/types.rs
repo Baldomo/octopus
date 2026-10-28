@@ -11,7 +11,7 @@ use ts_rs::{Config, TS};
 
 use crate::browser::{Go, NAVIGATED_EVENT, Navigated, OnScreen};
 use crate::client_menu::{Appearance, Zoom, ZoomStep};
-use crate::commands::{Boot, NewTask};
+use crate::commands::{Boot, NewTask, ShownOffer};
 use crate::hub::{FILES_CHANGED_EVENT, FilesChanged, MODEL_EVENT, Model, SERVERS_EVENT, ServerView};
 use crate::layers::{Bounds, FLOAT, Floated, SHOWN_EVENT, Viewport, title_bar_height};
 use crate::task_lists::{Column, Glyph, Lists, Row, Section, TaskRef, WorkspaceRef};
@@ -54,6 +54,7 @@ pub fn render() -> String {
         Entry,
         Match,
         Offer,
+        ShownOffer,
         PairedClient,
         TaskRef,
         Glyph,

@@ -11,7 +11,7 @@ mod tasks;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, Weak, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use octopus_proto::device::{DeviceKey, PublicKey};
@@ -23,7 +23,8 @@ use octopus_proto::ops::{
     WorkspaceAdd, WorkspaceCreated, WorkspaceList, WorkspaceRemove, WorkspaceRename, WorkspaceSetColor, Workspaces,
     Written,
 };
-use octopus_proto::pairing::Side;
+use octopus_proto::pairing::{Invite, Side};
+use octopus_proto::remote::{self, Endpoint, RelayUrl};
 use octopus_proto::types::{
     AGENT_PANEL, Agent, AgentStatus, BrowserPanel, Checkout, ENV_SERVER, ENV_TASK, Panel, PtyId, SessionId, Task,
     TaskId, web_page,
@@ -70,6 +71,9 @@ pub struct Server {
     me: Weak<Server>,
     name: String,
     device: DeviceKey,
+    relay: RelayUrl,
+    /// Set once `serve` takes the endpoint, before any client can ask for an invite.
+    endpoint: OnceLock<Endpoint>,
     offers: Mutex<Offers>,
     worktrees: PathBuf,
     host: Arc<HostClient>,
@@ -235,7 +239,13 @@ impl State {
 
 impl Server {
     /// Reattaches the hosted terminals the store records and ends the ones it doesn't.
-    pub fn open(name: &str, store: &Path, worktrees: &Path, host: &TerminalHost) -> Result<Arc<Self>, Error> {
+    pub fn open(
+        name: &str,
+        store: &Path,
+        worktrees: &Path,
+        host: &TerminalHost,
+        relay: RelayUrl,
+    ) -> Result<Arc<Self>, Error> {
         let mut store = Store::open(store)?;
         let device = store.device_key()?;
         let browsers = store.browsers()?;
@@ -249,6 +259,8 @@ impl Server {
             me: me.clone(),
             name: name.to_string(),
             device,
+            relay,
+            endpoint: OnceLock::new(),
             offers: Mutex::default(),
             worktrees: worktrees.to_path_buf(),
             host,
@@ -292,9 +304,33 @@ impl Server {
         Ok(server)
     }
 
-    /// The key this server proves to every client over QUIC.
+    /// The key this server proves to every client over iroh.
     pub fn device(&self) -> &DeviceKey {
         &self.device
+    }
+
+    /// The relay this server is homed on, which its invites name.
+    pub fn relay(&self) -> &RelayUrl {
+        &self.relay
+    }
+
+    pub(crate) fn reach_at(&self, endpoint: Endpoint) {
+        self.endpoint.set(endpoint).expect("a server is served once");
+    }
+
+    fn direct_addresses(&self) -> Vec<std::net::SocketAddr> {
+        remote::direct_addresses(self.endpoint.get().expect("a client reaches a server that serves"))
+    }
+
+    fn offer(&self) -> Offer {
+        let (code, expires_at) = lock(&self.offers).offer(now());
+        let (server, relay) = (self.device.public(), self.relay.clone());
+        Offer { invite: Invite { code, server, relay, addresses: self.direct_addresses() }, expires_at }
+    }
+
+    /// Whether an unspent code is on offer, the one time an unpaired client gets past the handshake.
+    pub(crate) fn offering(&self) -> bool {
+        lock(&self.offers).offering(now())
     }
 
     pub(crate) fn paired_name(&self, client: &PublicKey) -> Result<Option<String>, Error> {
@@ -327,7 +363,7 @@ impl Server {
             PairingForget::NAME => {
                 call::<PairingForget>(args, |op| lock(&self.state).store.forget_client(&op.client).map(|()| Done {}))
             }
-            PairingOffer::NAME => call::<PairingOffer>(args, |_| Ok::<Offer, Error>(lock(&self.offers).offer(now()))),
+            PairingOffer::NAME => call::<PairingOffer>(args, |_| Ok::<Offer, Error>(self.offer())),
             PairingList::NAME => call::<PairingList>(args, |_| self.pairing_list()),
             WorkspaceAdd::NAME => call::<WorkspaceAdd>(args, |op| self.workspace_add(op)),
             WorkspaceList::NAME => {
@@ -384,7 +420,8 @@ impl Server {
     }
 
     fn welcome(&self) -> Result<Welcome, Error> {
-        Ok(Welcome { server: self.name.clone(), rev: lock(&self.state).store.rev()? })
+        let rev = lock(&self.state).store.rev()?;
+        Ok(Welcome { server: self.name.clone(), rev, addresses: self.direct_addresses() })
     }
 
     fn snapshot(&self) -> Result<Snapshot, Error> {

@@ -3,7 +3,7 @@ pub mod frames;
 pub mod local;
 pub mod ops;
 pub mod pairing;
-pub mod quic;
+pub mod remote;
 pub mod schema;
 pub mod types;
 

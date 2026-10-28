@@ -233,7 +233,13 @@ impl State {
     fn native(&self) -> Native {
         let zoom = self.ui.prefs.zoom;
         let (float, input) = float_cover(&self.out.values().map(|out| out.at).collect::<Vec<_>>(), zoom);
-        Native { float, input, modal: self.out.values().any(|out| out.modal), zoom, appearance: self.ui.prefs.appearance }
+        Native {
+            float,
+            input,
+            modal: self.out.values().any(|out| out.modal),
+            zoom,
+            appearance: self.ui.prefs.appearance,
+        }
     }
 
     fn fit_viewport(&mut self) {

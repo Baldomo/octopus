@@ -23,7 +23,7 @@ fn a_call_missing_flags_names_all_of_them_at_once() {
 #[tokio::test(flavor = "multi_thread")]
 async fn every_command_sends_an_op_the_server_serves() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let running = start(dir.path(), "server.sock", "host.sock");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
     for command in commands() {
         let outcome = laptop.call_raw(command.op, json!({})).await.expect("call");

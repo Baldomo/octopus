@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Arc;
@@ -11,7 +10,7 @@ use octopus_client::{Connection, Identity};
 use octopus_proto::device::DeviceKey;
 use octopus_proto::local::Listener;
 use octopus_proto::ops::{TaskCreate, TaskGet, WorkspaceAdd};
-use octopus_proto::quic;
+use octopus_proto::remote::{self, RelayUrl};
 use octopus_proto::types::{Checkout, Color, Task, TaskId, TaskState, WorkspaceId};
 use octopus_server::{Server, TerminalHost, serve};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -22,25 +21,48 @@ pub const OCTOPUS: &str = env!("CARGO_BIN_EXE_octopus");
 pub struct Running {
     pub server: Arc<Server>,
     pub socket: PathBuf,
-    /// Where QUIC listens, on loopback.
-    pub quic: SocketAddr,
+    /// The relay the server is homed on, served on loopback over plain HTTP for as long as the server runs; none
+    /// for a server homed on a relay nobody answers at.
+    pub relay: Option<iroh_relay::server::Server>,
 }
+
+/// A relay URL that refuses every connection, for a server whose tests reach it over the local socket alone.
+const NO_RELAY: &str = "http://127.0.0.1:9/";
 
 /// Serves `dir`'s store on `socket`, keeping terminals in the host at `host`. A second call on the same `dir` and
 /// `host` plays a server restart; a fresh `host` plays a machine restart: the server finds none of its terminals.
-pub fn start(dir: &Path, socket: &str, host: &str) -> Running {
+pub async fn start(dir: &Path, socket: &str, host: &str) -> Running {
+    let mut config = iroh_relay::server::ServerConfig::default();
+    config.relay = Some(iroh_relay::server::RelayConfig::new(([127, 0, 0, 1], 0)));
+    let relay = iroh_relay::server::Server::spawn(config).await.expect("spawn a relay");
+    let url = format!("http://{}", relay.http_addr().expect("the relay serves HTTP")).parse().expect("a URL");
+    serve_homed_on(dir, socket, host, url, Some(relay)).await
+}
+
+/// A server homed on a relay nobody answers at, which clients reach at its direct addresses alone.
+pub async fn start_unrelayed(dir: &Path) -> Running {
+    serve_homed_on(dir, "server.sock", "host.sock", NO_RELAY.parse().expect("a URL"), None).await
+}
+
+async fn serve_homed_on(
+    dir: &Path,
+    socket: &str,
+    host: &str,
+    url: RelayUrl,
+    relay: Option<iroh_relay::server::Server>,
+) -> Running {
     let socket = dir.join(socket);
     let host = TerminalHost { program: OCTOPUS.into(), address: dir.join(host) };
-    let server = Server::open(SERVER, &dir.join("store.db"), &dir.join("worktrees"), &host).expect("open server");
-    let remote = quic::listen(([127, 0, 0, 1], 0).into(), server.device()).expect("listen on QUIC");
-    let quic = remote.local_addr().expect("the QUIC address");
-    tokio::spawn(serve(Arc::clone(&server), Listener::bind(&socket).expect("bind"), remote));
-    Running { server, socket, quic }
+    let server =
+        Server::open(SERVER, &dir.join("store.db"), &dir.join("worktrees"), &host, url.clone()).expect("open server");
+    let endpoint = remote::listen(([127, 0, 0, 1], 0).into(), url, server.device()).await.expect("bind iroh");
+    tokio::spawn(serve(Arc::clone(&server), Listener::bind(&socket).expect("bind"), endpoint));
+    Running { server, socket, relay }
 }
 
 /// A client named `name` with a key of its own.
 pub fn identity(name: &str) -> Identity {
-    Identity { name: name.into(), key: DeviceKey::generate() }
+    Identity::new(name.into(), DeviceKey::generate())
 }
 
 pub fn local(socket: &Path) -> Address {
@@ -64,7 +86,7 @@ fn server_run(dir: &Path) -> Command {
         .arg(dir.join("worktrees"))
         .arg("--terminal-host")
         .arg(dir.join("host.sock"))
-        .args(["--quic", "127.0.0.1:0"]);
+        .args(["--udp", "127.0.0.1:0", "--relay", NO_RELAY]);
     command
 }
 
