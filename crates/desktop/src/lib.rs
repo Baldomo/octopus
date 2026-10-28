@@ -6,6 +6,10 @@ pub mod types;
 use std::sync::Arc;
 
 use anyhow::Context;
+use octopus_client::Identity;
+use octopus_client::servers::{Config, Servers};
+use octopus_shell::Client;
+use octopus_shell::microphone::Access;
 use octopus_shell::ui::UiStore;
 use tauri::{Manager, Runtime};
 
@@ -19,8 +23,16 @@ fn context<R: Runtime>() -> tauri::Context<R> {
 
 /// Opens the window and blocks until it closes.
 pub fn run(launch_problem: Option<String>) -> anyhow::Result<()> {
+    let config = Config::user()?;
+    let client = Client {
+        me: Identity::load(&config)?,
+        servers: Servers::load(&config)?,
+        config,
+        // macOS asks for the microphone itself, the first time a capture opens it.
+        microphone_access: Box::new(|| Ok(Access::Granted)),
+    };
     tauri::Builder::default()
-        .plugin(octopus_shell::plugin(launch_problem)?)
+        .plugin(octopus_shell::plugin())
         .invoke_handler(tauri::generate_handler![
             commands::title_bar_double_click,
             commands::browser_open,
@@ -29,7 +41,8 @@ pub fn run(launch_problem: Option<String>) -> anyhow::Result<()> {
             commands::browser_go,
             commands::browser_close,
         ])
-        .setup(|app| {
+        .setup(move |app| {
+            octopus_shell::start(app.handle(), client, launch_problem);
             let ui = Arc::clone(app.state::<Arc<UiStore>>().inner());
             app.manage(Browsers::new(Layers::open(app, ui)?));
             Ok(())

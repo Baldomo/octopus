@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use octopus_client::{CallError, servers};
+use octopus_client::CallError;
 use octopus_proto::Error;
 use octopus_proto::ops::{
     Entry, FileList, FileSearch, FileWrite, Match, Offer, PairedClient, PairingForget, PairingList, PairingOffer,
@@ -44,7 +44,7 @@ pub struct Boot {
 
 #[tauri::command]
 pub fn boot(hub: Hubbed, ui: Uis) -> Boot {
-    Boot { me: hub.me.name.clone(), servers: hub.servers(), model: hub.model(), ui: ui.ui() }
+    Boot { me: hub.me.name(), servers: hub.servers(), model: hub.model(), ui: ui.ui() }
 }
 
 #[tauri::command]
@@ -57,14 +57,14 @@ pub fn ui_act(ui: Uis, act: UiAct) -> Result<(), String> {
     ui.act(act)
 }
 
-/// Pairs with the server `invite` names, lists it, and resolves to its name.
+/// Pairs with the server `invite` names, lists it, and resolves to its name. Re-pairing a listed server, to pin a new
+/// key, is the CLI's `pairing accept`; this window keeps the pins it started with.
 #[tauri::command]
 pub async fn server_pair(hub: Hubbed<'_>, invite: Invite) -> Result<String, String> {
-    hub.refuse_listed(&invite.server).map_err(|error| format!("{error:#}"))?;
-    let server = servers::pair(&invite, &hub.me).await.map_err(|error| format!("{error:#}"))?;
-    let name = server.name.clone();
-    hub.add(server).map_err(|error| format!("{error:#}"))?;
-    Ok(name)
+    if let Some(name) = hub.listed_as(&invite.server) {
+        return Err(format!("{} is listed as {name}; re-pair it with `octopus pairing accept`", invite.server));
+    }
+    hub.pair(&invite).await.map_err(|error| format!("{error:#}"))
 }
 
 #[tauri::command]

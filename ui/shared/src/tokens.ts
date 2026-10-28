@@ -2,15 +2,17 @@
 
 import { createSignal } from "solid-js";
 import type { Swatch } from "./generated";
+import { ui } from "./state";
 
 export type Scheme = "light" | "dark";
 
 const darkAppearance = matchMedia("(prefers-color-scheme: dark)");
 const schemeNow = (): Scheme => (darkAppearance.matches ? "dark" : "light");
-/** The OS appearance every color token resolves against, tracked live. */
-const [scheme, setScheme] = createSignal<Scheme>(schemeNow());
-darkAppearance.addEventListener("change", () => setScheme(schemeNow()));
-export { scheme };
+const [osScheme, setOsScheme] = createSignal<Scheme>(schemeNow());
+darkAppearance.addEventListener("change", () => setOsScheme(schemeNow()));
+
+/** The scheme every color token resolves against: the client menu's appearance, or the OS's while it picks System. */
+export const scheme = (): Scheme => (ui.prefs.appearance === "system" ? osScheme() : ui.prefs.appearance);
 
 export const swatchColor = (swatch: Swatch) => `var(--ws-${swatch.hue}-${swatch.tone})`;
 

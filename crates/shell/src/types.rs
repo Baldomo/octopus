@@ -12,6 +12,7 @@ use ts_rs::Config;
 use crate::client_menu::{Appearance, Zoom, ZoomStep};
 use crate::commands::{Boot, NewTask, ShownOffer};
 use crate::hub::{FILES_CHANGED_EVENT, FilesChanged, MODEL_EVENT, Model, SERVERS_EVENT, ServerView};
+use crate::microphone::MICROPHONE_DENIED_EVENT;
 use crate::task_lists::{Column, Glyph, Lists, Row, Section, TaskRef, WorkspaceRef};
 use crate::task_view::TaskView;
 use crate::ui::{Bounds, Floated, Modal, Prefs, Reveal, SHOWN_EVENT, Surface, UI_EVENT, Ui, UiAct, View, Viewport};
@@ -99,6 +100,7 @@ pub fn render() -> String {
                 "filesChanged": FILES_CHANGED_EVENT,
                 "ui": UI_EVENT,
                 "windowShown": SHOWN_EVENT,
+                "microphoneDenied": MICROPHONE_DENIED_EVENT,
             }),
         ),
     ];

@@ -195,6 +195,10 @@ mod disclaimed {
     unsafe extern "C" {
         fn responsibility_spawnattrs_setdisclaim(attrs: *mut libc::posix_spawnattr_t, disclaim: c_int) -> c_int;
         fn posix_spawn_file_actions_addinherit_np(actions: *mut libc::posix_spawn_file_actions_t, fd: c_int) -> c_int;
+        fn posix_spawn_file_actions_addchdir_np(
+            actions: *mut libc::posix_spawn_file_actions_t,
+            path: *const libc::c_char,
+        ) -> c_int;
     }
 
     fn c_string(text: impl AsRef<OsStr>) -> anyhow::Result<CString> {
@@ -244,7 +248,7 @@ mod disclaimed {
                 for stdio in STDIO {
                     check("keep the terminal", posix_spawn_file_actions_addinherit_np(&mut actions, stdio))?;
                 }
-                check("enter the directory", libc::posix_spawn_file_actions_addchdir_np(&mut actions, cwd.as_ptr()))?;
+                check("enter the directory", posix_spawn_file_actions_addchdir_np(&mut actions, cwd.as_ptr()))?;
                 let (mut reader, writer) = std::io::pipe().context("open a pipe for the start's failure")?;
                 match libc::fork() {
                     -1 => Err(std::io::Error::last_os_error()).context("fork"),

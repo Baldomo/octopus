@@ -92,6 +92,8 @@ export const events = {
   ui: (handle: (ui: Ui) => void) => listen<Ui>(EVENTS.ui, (event) => handle(event.payload)),
   windowShown: (handle: (shown: boolean) => void) =>
     listen<boolean>(EVENTS.windowShown, (event) => handle(event.payload)),
+  microphoneDenied: (handle: (denied: boolean) => void) =>
+    listen<boolean>(EVENTS.microphoneDenied, (event) => handle(event.payload)),
 };
 
 export { Channel };

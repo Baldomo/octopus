@@ -11,6 +11,9 @@ use tokio::sync::broadcast;
 
 use crate::lock;
 
+/// Whether the OS refuses this client its microphone, which the UI marks on a listening terminal it holds.
+pub const MICROPHONE_DENIED_EVENT: &str = "microphone_denied";
+
 /// Chunks of captured audio waiting for a slow stream; one that falls further behind skips ahead.
 const BACKLOG: usize = 64;
 
@@ -54,15 +57,24 @@ impl Resampler {
     }
 }
 
-/// The default input device, captured on a thread of its own, since a capture stream stays on the thread that made
-/// it. Dropping it stops the capture.
-struct Capture {
+/// A source of `MIC_FORMAT` audio, which runs until it is dropped.
+pub struct Capture {
     audio: broadcast::Sender<Chunk>,
-    _stop: std::sync::mpsc::Sender<()>,
+    _running: Box<dyn Send>,
 }
 
+/// Opens the source a capture sends.
+pub type OpenCapture = Box<dyn Fn() -> Result<Capture, String> + Send + Sync>;
+
 impl Capture {
-    fn start() -> Result<Self, String> {
+    /// A source whose audio comes on `audio` while `running` lives.
+    pub fn new(audio: broadcast::Sender<Chunk>, running: impl Send + 'static) -> Self {
+        Self { audio, _running: Box::new(running) }
+    }
+
+    /// The default input device, captured on a thread of its own, since a capture stream stays on the thread that
+    /// made it.
+    pub fn microphone() -> Result<Self, String> {
         let (audio, _) = broadcast::channel(BACKLOG);
         let (stop, stopped) = std::sync::mpsc::channel::<()>();
         let (started, outcome) = std::sync::mpsc::channel::<Result<(), String>>();
@@ -78,7 +90,7 @@ impl Capture {
             }
         });
         outcome.recv().map_err(|_| "the capture thread ended".to_string())??;
-        Ok(Self { audio, _stop: stop })
+        Ok(Self::new(audio, stop))
     }
 }
 
@@ -131,26 +143,101 @@ fn open_input(audio: broadcast::Sender<Chunk>) -> Result<cpal::Stream, String> {
     Ok(stream)
 }
 
-/// A capture that failed to start is tried again once no terminal listens.
+/// Whether the OS lets this client record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    Granted,
+    Denied,
+}
+
+/// Asks the OS whether this client may record, which may ask the user and wait for the answer; an OS that fails to
+/// answer says why.
+pub type AskAccess = Box<dyn Fn() -> Result<Access, String> + Send + Sync>;
+
+type Listeners = BTreeMap<Listener, Arc<Connection>>;
+
+/// A capture that failed to start, or that the OS refused, is tried again once no terminal listens.
 #[derive(Default)]
 enum Capturing {
     #[default]
     Idle,
+    /// The OS is asking the user, off the thread that keeps the UI current.
+    Asking,
     Running(Capture),
     Failed,
+    Denied,
 }
 
 #[derive(Default)]
+struct Sending {
+    /// The listeners of the newest `send_to`, which an answer from the OS applies.
+    wanted: Listeners,
+    tasks: BTreeMap<Listener, tauri::async_runtime::JoinHandle<()>>,
+}
+
+/// Hears whether access is denied, each time that changes.
+pub type DeniedChanged = Box<dyn Fn(bool) + Send + Sync>;
+
 pub struct Microphone {
+    ask: AskAccess,
+    open: OpenCapture,
+    denied_changed: DeniedChanged,
     capture: Mutex<Capturing>,
-    sending: Mutex<BTreeMap<Listener, tauri::async_runtime::JoinHandle<()>>>,
+    sending: Mutex<Sending>,
 }
 
 impl Microphone {
+    pub fn new(ask: AskAccess, open: OpenCapture, denied_changed: DeniedChanged) -> Arc<Self> {
+        Arc::new(Self { ask, open, denied_changed, capture: Mutex::default(), sending: Mutex::default() })
+    }
+
+    /// Moves to `next`, telling `denied_changed` whenever access starts or stops being denied.
+    fn set(&self, capture: &mut Capturing, next: Capturing) {
+        let (was, is) = (matches!(capture, Capturing::Denied), matches!(next, Capturing::Denied));
+        *capture = next;
+        if was != is {
+            (self.denied_changed)(is);
+        }
+    }
+
+    /// Starts the capture the OS answered for, unless no terminal listens any more, then sends to whoever does now.
+    fn answered(self: &Arc<Self>, answer: Result<Access, String>) {
+        {
+            let mut capture = lock(&self.capture);
+            if !matches!(*capture, Capturing::Asking) {
+                return;
+            }
+            let next = match answer {
+                Ok(Access::Denied) => Capturing::Denied,
+                Ok(Access::Granted) => (self.open)().map_or_else(
+                    |error| {
+                        eprintln!("octopus app: {error}");
+                        Capturing::Failed
+                    },
+                    Capturing::Running,
+                ),
+                Err(error) => {
+                    eprintln!("octopus app: ask for the microphone: {error}");
+                    Capturing::Failed
+                }
+            };
+            self.set(&mut capture, next);
+        }
+        let mut sending = lock(&self.sending);
+        let wanted = sending.wanted.clone();
+        self.apply(&mut sending, wanted);
+    }
+
     /// Sends the microphone to exactly `listeners`, each over its server's `connection`; the capture runs while any
     /// listener does.
-    pub fn send_to(&self, listeners: BTreeMap<Listener, Arc<Connection>>) {
+    pub fn send_to(self: &Arc<Self>, listeners: Listeners) {
         let mut sending = lock(&self.sending);
+        sending.wanted.clone_from(&listeners);
+        self.apply(&mut sending, listeners);
+    }
+
+    fn apply(self: &Arc<Self>, sending: &mut Sending, listeners: Listeners) {
+        let sending = &mut sending.tasks;
         sending.retain(|listener, task| {
             let keep = listeners.contains_key(listener) && !task.inner().is_finished();
             if !keep {
@@ -163,17 +250,14 @@ impl Microphone {
             listeners.into_iter().filter(|(listener, _)| !started.contains(listener)).collect();
         let mut capture = lock(&self.capture);
         if sending.is_empty() && fresh.is_empty() {
-            *capture = Capturing::Idle;
+            self.set(&mut capture, Capturing::Idle);
             return;
         }
         if !fresh.is_empty() && matches!(*capture, Capturing::Idle) {
-            *capture = Capture::start().map_or_else(
-                |error| {
-                    eprintln!("octopus app: {error}");
-                    Capturing::Failed
-                },
-                Capturing::Running,
-            );
+            self.set(&mut capture, Capturing::Asking);
+            let microphone = Arc::clone(self);
+            tauri::async_runtime::spawn_blocking(move || microphone.answered((microphone.ask)()));
+            return;
         }
         let Capturing::Running(running) = &*capture else { return };
         for (listener, connection) in fresh {

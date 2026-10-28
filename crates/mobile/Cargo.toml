@@ -1,0 +1,54 @@
+[package]
+name = "octopus-mobile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "octopus_mobile"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+anyhow = "1.0.104"
+serde = { version = "1.0.229", features = ["derive"] }
+octopus-client.workspace = true
+octopus-proto.workspace = true
+octopus-shell.workspace = true
+tauri = { version = "2.12.5", features = [] }
+
+[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
+tauri-plugin-barcode-scanner = "2.5.3"
+
+[target.'cfg(target_os = "ios")'.dependencies]
+# Exact, and so for the whole workspace, which resolves one libc: from 0.2.190 libc declares the route and `in6_ifreq`
+# items iroh's netwatch and netdev read on iOS for macOS alone.
+libc = "=0.2.189"
+objc2 = "0.6.5"
+objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "UIDevice",
+  "UIInterface",
+  "UIResponder",
+  "UIScrollView",
+  "UIView",
+  "UIWindow",
+] }
+block2 = "0.6.2"
+objc2-avf-audio = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "block2",
+  "AVAudioApplication",
+  "AVAudioSession",
+  "AVAudioSessionTypes",
+] }
+security-framework = "3.7.0"
+
+[target.'cfg(target_os = "android")'.dependencies]
+base64 = "0.22.1"
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }

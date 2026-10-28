@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, anyhow, bail};
-use octopus_client::servers::{Address, Server, Servers};
+use octopus_client::servers::{Address, Config, Server, Servers};
 use octopus_proto::local;
 use octopus_proto::remote::{self, RelayUrl};
 use serde::Serialize;
@@ -408,7 +408,8 @@ pub fn list_this_machine() -> anyhow::Result<()> {
 
 /// The server already answering on this machine's local socket, or else a fresh install named after the computer.
 fn list_or_install_this_machine() -> anyhow::Result<()> {
-    let mut servers = Servers::load()?;
+    let config = Config::user()?;
+    let mut servers = Servers::load(&config)?;
     if servers.servers.iter().any(|server| matches!(server.address, Address::Local { .. })) {
         return Ok(());
     }
@@ -428,7 +429,7 @@ fn list_or_install_this_machine() -> anyhow::Result<()> {
         };
         install(&Service::new(run, std::env::current_exe()?, home.join("server.log"))?)?;
     }
-    servers.save()
+    servers.save(&config)
 }
 
 fn local_socket(home: &Path, name: &str) -> PathBuf {

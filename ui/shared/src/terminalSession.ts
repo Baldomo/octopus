@@ -1,0 +1,195 @@
+import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
+import { type ITheme, Terminal } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
+import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
+import { backend, Channel } from "./backend";
+import type { Panel, TaskRef } from "./generated";
+import { act, me, report, serverView } from "./state";
+import { colors, px, type Scheme, scheme, token } from "./tokens";
+
+const themes: Partial<Record<Scheme, ITheme>> = {};
+function terminalTheme(current: Scheme): ITheme {
+  const color = colors(current);
+  return (themes[current] ??= {
+    background: color("--term"),
+    foreground: color("--term-text"),
+    cursor: color("--text"),
+    selectionBackground: color("--line2"),
+    overviewRulerBorder: "#00000000",
+    black: color("--ansi-black"),
+    red: color("--err"),
+    green: color("--working"),
+    yellow: color("--needs"),
+    blue: color("--info"),
+    magenta: color("--violet"),
+    cyan: color("--info"),
+    white: color("--dim"),
+    brightBlack: color("--faint"),
+    brightRed: color("--err"),
+    brightGreen: color("--working"),
+    brightYellow: color("--needs"),
+    brightBlue: color("--info"),
+    brightMagenta: color("--violet"),
+    brightCyan: color("--info"),
+    brightWhite: color("--text"),
+  });
+}
+
+const SCROLLBACK_LINES = 10_000;
+/** A dropped stream retries after this, by which time a server that went away reads as unreachable. */
+const REATTACH_MS = 500;
+
+/** Whether the app shows anything: a hidden window, or a phone app in the background, shows no terminal. */
+export const [windowShown, setWindowShown] = createSignal(true);
+
+type Cells = { cols: number; rows: number };
+
+export type TerminalSession = {
+  xterm: Terminal;
+  mine: () => boolean;
+  shown: () => boolean;
+  /** Writes `keys` to the terminal while this client streams it. */
+  input: (keys: string) => void;
+  /** Moves the lock here at the pane's size. */
+  take: () => void;
+  /** Sizes the terminal to its pane, which only the lock holder does. */
+  fit: () => void;
+  /** Opens the terminal in `pane`, the element whose size is the pane's, drawing through WebGL where it can. */
+  open: (pane: HTMLElement) => void;
+};
+
+/**
+ * A terminal keeps its screen while it stays mounted, and holds a data stream only while it is `shown`, the app shows
+ * it, and its server is reachable; the server reads that stream as this client showing the terminal. A shown terminal
+ * with a free lock is claimed at the pane's size. The holder fits the PTY to its pane; every other client draws it at
+ * the holder's size.
+ */
+export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown: () => boolean }): TerminalSession {
+  const mine = createMemo(() => props.panel().lock_holder === me());
+  const shown = createMemo(props.shown);
+  const fitter = new FitAddon();
+  const pane = (): Cells | undefined => fitter.proposeDimensions();
+  const fit = () => fitter.fit();
+  const xterm = new Terminal({
+    fontFamily: token("--mono-terminal"),
+    fontSize: px("--fs-mono"),
+    cursorBlink: true,
+    scrollback: SCROLLBACK_LINES,
+    overviewRuler: { width: px("--scrollbar-w") },
+  });
+  xterm.loadAddon(fitter);
+  let attachment: number | null = null;
+  /** Whether the server has this client's stream open, so a claim always reaches it showing the terminal. */
+  const [attached, setAttached] = createSignal(false);
+  let generation = 0;
+  /** Counts streams that ended under a running PTY, each of which calls for a fresh attachment. */
+  const [drops, setDrops] = createSignal(0);
+
+  /** The server sends the scrollback first, so the screen resets on the first chunk; an empty chunk ends the stream. */
+  const attach = async () => {
+    const current = ++generation;
+    const output = new Channel<ArrayBuffer>();
+    let replaying = true;
+    let ended = false;
+    output.onmessage = (bytes) => {
+      if (current !== generation) return;
+      if (bytes.byteLength === 0) {
+        ended = true;
+        attachment = null;
+        setAttached(false);
+        if (props.panel().running) setTimeout(() => setDrops((count) => count + 1), REATTACH_MS);
+        return;
+      }
+      if (replaying) {
+        xterm.reset();
+        replaying = false;
+      }
+      xterm.write(new Uint8Array(bytes));
+    };
+    const opened = await backend.termAttach(props.at, props.panel().id, output);
+    if (current === generation && !ended) {
+      attachment = opened;
+      setAttached(true);
+    } else if (current !== generation) act(backend.termDetach(opened));
+  };
+  const detach = () => {
+    generation++;
+    if (attachment !== null) act(backend.termDetach(attachment));
+    attachment = null;
+    setAttached(false);
+  };
+  /** A drag or a rotation resizes once per frame, since every resize the server takes is published. */
+  let resizing = 0;
+  const resize = () => {
+    cancelAnimationFrame(resizing);
+    resizing = requestAnimationFrame(() => {
+      if (mine()) act(backend.termResize(props.at, props.panel().id, xterm.cols, xterm.rows));
+    });
+  };
+  const atPaneSize = (send: (size: Cells) => Promise<void>, what: string) => {
+    const size = pane();
+    if (size) act(send(size));
+    else report(`the terminal's pane has no size to ${what} the terminal at yet`);
+  };
+  xterm.onResize(() => {
+    if (mine()) resize();
+  });
+
+  const streaming = createMemo(() => shown() && windowShown() && serverView(props.at.server)?.reachable === true);
+  createEffect(
+    on([streaming, drops], ([stream]) => {
+      if (!stream) return;
+      attach().catch(report);
+      onCleanup(detach);
+    }),
+  );
+  createEffect(() => {
+    xterm.options.theme = terminalTheme(scheme());
+  });
+  createEffect(
+    on([attached, () => props.panel().lock_holder === null && props.panel().running], ([showing, free]) => {
+      if (showing && free) {
+        atPaneSize((size) => backend.termClaim(props.at, props.panel().id, size.cols, size.rows), "claim");
+      }
+    }),
+  );
+  createEffect(
+    on([mine, shown], ([holding, visible]) => {
+      if (!visible || !holding) return;
+      fit();
+      resize();
+    }),
+  );
+  createEffect(
+    on([mine, shown, () => props.panel().cols, () => props.panel().rows], ([holding, visible]) => {
+      if (visible && !holding) xterm.resize(props.panel().cols, props.panel().rows);
+    }),
+  );
+  onCleanup(() => {
+    cancelAnimationFrame(resizing);
+    detach();
+    xterm.dispose();
+  });
+
+  return {
+    xterm,
+    mine,
+    shown,
+    input: (keys) => {
+      if (attachment !== null) act(backend.termInput(attachment, keys));
+    },
+    take: () => atPaneSize((size) => backend.termTakeLock(props.at, props.panel().id, size.cols, size.rows), "take"),
+    fit,
+    open: (pane) => {
+      xterm.open(pane);
+      try {
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => webgl.dispose());
+        xterm.loadAddon(webgl);
+      } catch (error) {
+        report(`WebGL is unavailable, so terminals draw through the DOM: ${error}`);
+      }
+    },
+  };
+}

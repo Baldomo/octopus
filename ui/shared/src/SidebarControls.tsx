@@ -97,7 +97,7 @@ async function copy(text: string, what: JSX.Element) {
   toast(<>Copied {what}</>);
 }
 
-const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+export const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 function ago(at: number, now: number) {
   const minutes = Math.floor((now - at) / 60_000);
@@ -107,7 +107,7 @@ function ago(at: number, now: number) {
   return hours < 24 ? `${hours} h ago` : `${Math.floor(hours / 24)} d ago`;
 }
 
-function ticking() {
+export function ticking() {
   const [now, setNow] = createSignal(Date.now());
   const timer = setInterval(() => setNow(Date.now()), 1000);
   onCleanup(() => clearInterval(timer));
@@ -116,9 +116,27 @@ function ticking() {
 
 const copyKey = mac ? "⌘C" : "Ctrl+C";
 
-const grouped = (code: string) => code.match(/.{1,4}/g)?.join(" ") ?? code;
+export const grouped = (code: string) => code.match(/.{1,4}/g)?.join(" ") ?? code;
 
-const inviteCode = (offered: Offer) => new URL(offered.invite).searchParams.get("code") ?? "";
+export const inviteCode = (offered: Offer) => new URL(offered.invite).searchParams.get("code") ?? "";
+
+/** What a paired client's row says of it beside its name. */
+export const clientStatus = (client: PairedClient, now: number) =>
+  client.name === me()
+    ? "this client"
+    : client.connected
+      ? "connected"
+      : client.seen_at === null
+        ? "never connected"
+        : `seen ${ago(client.seen_at, now)}`;
+
+/** The time left on an offer as m:ss, or "expired". */
+export function expiry(offered: Offer, now: number) {
+  const seconds = Math.max(0, Math.ceil((offered.expires_at - now) / 1000));
+  return seconds === 0
+    ? "expired"
+    : `one pairing · expires in ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
 
 export function ServerMenu(props: { name: string }) {
   const server = () => serverView(props.name);
@@ -143,18 +161,6 @@ export function ServerMenu(props: { name: string }) {
     backend.serverClients,
   );
   const showCode = () => backend.serverOffer(props.name).then(setMode, report);
-  const left = (offered: Offer) => {
-    const seconds = Math.max(0, Math.ceil((offered.expires_at - now()) / 1000));
-    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-  };
-  const status = (client: PairedClient) =>
-    client.name === me()
-      ? "this client"
-      : client.connected
-        ? "connected"
-        : client.seen_at === null
-          ? "never connected"
-          : `seen ${ago(client.seen_at, now())}`;
   const revoke = (client: string) =>
     backend.serverRevoke(props.name, client).then(() => {
       refetch();
@@ -191,9 +197,7 @@ export function ServerMenu(props: { name: string }) {
             <div class="code">
               <div class="qr" innerHTML={offered().qr} />
               <div class="digits">{grouped(inviteCode(offered().offer))}</div>
-              <div class="exp">
-                {left(offered().offer) === "0:00" ? "expired" : `one pairing · expires in ${left(offered().offer)}`}
-              </div>
+              <div class="exp">{expiry(offered().offer, now())}</div>
             </div>
             <Item kbd={copyKey} run={() => copyInvite(offered().offer)}>
               Copy invite
@@ -244,7 +248,7 @@ export function ServerMenu(props: { name: string }) {
               <div class="client">
                 <span class="dot" classList={{ idle: !client.connected }} />
                 <span class="name">{client.name}</span>
-                <span class="mono">{status(client)}</span>
+                <span class="mono">{clientStatus(client, now())}</span>
                 <Show when={client.name !== me()}>
                   <button class="mini" onClick={() => revoke(client.name)}>
                     Revoke

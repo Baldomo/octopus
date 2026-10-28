@@ -4,11 +4,12 @@
   "type": "module",
   "workspaces": [
     "shared",
-    "desktop"
+    "desktop",
+    "mobile"
   ],
   "scripts": {
-    "build": "npm --workspace desktop run build",
-    "typecheck": "tsc --noEmit -p shared && tsc --noEmit -p desktop",
+    "build": "npm --workspace desktop run build && npm --workspace mobile run build",
+    "typecheck": "tsc --noEmit -p shared && tsc --noEmit -p desktop && tsc --noEmit -p mobile",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

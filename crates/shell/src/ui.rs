@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::Context;
-use octopus_client::servers::{config, create_parent};
+use octopus_client::servers::{Config, create_parent};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use ts_rs::TS;
@@ -294,6 +294,7 @@ type Follower = Box<dyn Fn(&Native, &Native) -> Result<(), String> + Send + Sync
 
 pub struct UiStore {
     app: AppHandle,
+    config: Config,
     state: Mutex<State>,
     /// Counts problems shown, so a problem's timer clears only the problem it showed.
     problems: AtomicU64,
@@ -301,8 +302,8 @@ pub struct UiStore {
     follower: OnceLock<Follower>,
 }
 
-fn load_prefs() -> anyhow::Result<Prefs> {
-    let path = config(PREFS_FILE)?;
+fn load_prefs(config: &Config) -> anyhow::Result<Prefs> {
+    let path = config.file(PREFS_FILE);
     match std::fs::read_to_string(&path) {
         Ok(text) => parse_prefs(&text).with_context(|| format!("parse {}", path.display())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Prefs::default()),
@@ -322,22 +323,23 @@ fn parse_prefs(text: &str) -> anyhow::Result<Prefs> {
     Ok(serde_json::from_value(serde_json::Value::Object(prefs))?)
 }
 
-fn save_prefs(prefs: &Prefs) -> anyhow::Result<()> {
-    let path = config(PREFS_FILE)?;
+fn save_prefs(config: &Config, prefs: &Prefs) -> anyhow::Result<()> {
+    let path = config.file(PREFS_FILE);
     create_parent(&path)?;
     std::fs::write(&path, serde_json::to_string_pretty(prefs)?).with_context(|| format!("write {}", path.display()))
 }
 
 impl UiStore {
     /// Prefs the app cannot parse start the window from the defaults, and the status bar says so.
-    pub fn load(app: AppHandle, launch_problem: Option<String>) -> Arc<Self> {
-        let (prefs, prefs_problem) = match load_prefs() {
+    pub fn load(app: AppHandle, config: Config, launch_problem: Option<String>) -> Arc<Self> {
+        let (prefs, prefs_problem) = match load_prefs(&config) {
             Ok(prefs) => (prefs, None),
             Err(error) => (Prefs::default(), Some(format!("{error:#}; started from the default prefs"))),
         };
         let problem = [launch_problem, prefs_problem].into_iter().flatten().reduce(|a, b| format!("{a}; {b}"));
         let store = Arc::new(Self {
             app,
+            config,
             state: Mutex::new(State::starting(prefs)),
             problems: AtomicU64::new(0),
             follower: OnceLock::new(),
@@ -366,7 +368,7 @@ impl UiStore {
         if before.prefs == after.prefs {
             return Ok(());
         }
-        save_prefs(&after.prefs).map_err(|error| format!("{error:#}"))
+        save_prefs(&self.config, &after.prefs).map_err(|error| format!("{error:#}"))
     }
 
     /// Takes the window's size in points.

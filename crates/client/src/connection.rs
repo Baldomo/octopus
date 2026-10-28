@@ -28,14 +28,23 @@ const HEARTBEAT_PATIENCE: Duration = Duration::from_secs(5);
 /// This client as servers know it: its name, the key it pairs with, and this process's iroh endpoint, which every
 /// remote server is dialled from, bound on the first dial.
 pub struct Identity {
-    pub name: String,
+    name: Mutex<String>,
     pub key: DeviceKey,
     dialer: OnceCell<Dialer>,
 }
 
 impl Identity {
     pub fn new(name: String, key: DeviceKey) -> Self {
-        Self { name, key, dialer: OnceCell::new() }
+        Self { name: Mutex::new(name), key, dialer: OnceCell::new() }
+    }
+
+    pub fn name(&self) -> String {
+        lock(&self.name).clone()
+    }
+
+    /// Names this client on every connection and pairing it opens from now on.
+    pub fn rename(&self, name: String) {
+        *lock(&self.name) = name;
     }
 
     pub async fn dialer(&self) -> std::io::Result<&Dialer> {
@@ -199,12 +208,10 @@ impl Connection {
         });
         let (pushes, _) = broadcast::channel(PUSH_BACKLOG);
         let reader = Task(tokio::spawn(read_frames(read, Arc::downgrade(&control), pushes.clone())));
-        let welcome = control
-            .call(&SessionHello { client: me.name.clone() })
-            .await
-            .map_err(|error| anyhow!("{address}: {error}"))?;
+        let welcome =
+            control.call(&SessionHello { client: me.name() }).await.map_err(|error| anyhow!("{address}: {error}"))?;
         let heartbeat = Task(tokio::spawn(heartbeat(Arc::downgrade(&control))));
-        let client = me.name.clone();
+        let client = me.name();
         let server_addresses = welcome.addresses;
         Ok(Self { link, client, server_addresses, control, pushes, _reader: reader, _heartbeat: heartbeat })
     }

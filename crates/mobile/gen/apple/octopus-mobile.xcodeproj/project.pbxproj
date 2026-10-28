@@ -1,0 +1,484 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		147CB5546CE3AE7F6FFDE543 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4197E8E21374FB8BEE906F65 /* Security.framework */; };
+		1B72639E70E381D33225906A /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E96F734DD88B314FE19134E1 /* SystemConfiguration.framework */; };
+		221F838A032F5B12843EFF2D /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C08EDD6C4F8B99F55DA32DFB /* Metal.framework */; };
+		4C9E10A9E04A8DBAAF191560 /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = B6DB9E1B7C5B5D2F6ACF1C9E /* libapp.a */; };
+		5EBDC4C677A5EAC1CB5FE9E5 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BE3023EC58773F01DCC5F88C /* CoreGraphics.framework */; };
+		68C733D91058E80F1A3CBCF2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2BBD4DB163898DE2140CBE1F /* Assets.xcassets */; };
+		826DA9519D7BFC7F8FCE3F11 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 687843A87287B80BF41375D3 /* QuartzCore.framework */; };
+		95ECAF724F28F5759EE43ED7 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 77863908EE0647D00FBEBC31 /* assets */; };
+		9771B6CE3FD5B86E5F590EE5 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 9F5BD4B431450CBA315E925B /* main.mm */; };
+		CD5CF72E7A9F9542B677FCB1 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CC144E555861A408526E818E /* UIKit.framework */; };
+		D75C6416D41C52BC8A6635FA /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DBCCCF1D6E4B625D2560630F /* WebKit.framework */; };
+		EB7A881AE05081B7184289DA /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 8D9D39FF25DFAECFCC6F22B9 /* LaunchScreen.storyboard */; };
+		FA8665A346381D6454C5F3D5 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 39E4D24F872C39B48A10463F /* MetalKit.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0706F3A27F120BDB2A6AED81 /* webview.rs */ = {isa = PBXFileReference; path = webview.rs; sourceTree = "<group>"; };
+		2BBD4DB163898DE2140CBE1F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		39E4D24F872C39B48A10463F /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		4197E8E21374FB8BEE906F65 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		54CF2A9B1EE31B172582C848 /* octopus-mobile_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "octopus-mobile_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		687843A87287B80BF41375D3 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		68F17BA708884E71BD57830B /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+		701D653990EAB0A1E0775B03 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
+		72338C7C6CD900756C9ADB83 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		77863908EE0647D00FBEBC31 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
+		87F55BC6F390D7469B624789 /* device.rs */ = {isa = PBXFileReference; path = device.rs; sourceTree = "<group>"; };
+		8D9D39FF25DFAECFCC6F22B9 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		988EDCF880B7F79EF38FBE43 /* client_menu.rs */ = {isa = PBXFileReference; path = client_menu.rs; sourceTree = "<group>"; };
+		9F5BD4B431450CBA315E925B /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
+		B6DB9E1B7C5B5D2F6ACF1C9E /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		BE3023EC58773F01DCC5F88C /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		C08EDD6C4F8B99F55DA32DFB /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		C3284EF1077230D6243A2DB3 /* octopus-mobile_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "octopus-mobile_iOS.entitlements"; sourceTree = "<group>"; };
+		CC144E555861A408526E818E /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		DBCCCF1D6E4B625D2560630F /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+		E96F734DD88B314FE19134E1 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
+		ECC97B37D9684FFB11858A88 /* app.rs */ = {isa = PBXFileReference; path = app.rs; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		462437D6CD80D878606104F0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4C9E10A9E04A8DBAAF191560 /* libapp.a in Frameworks */,
+				5EBDC4C677A5EAC1CB5FE9E5 /* CoreGraphics.framework in Frameworks */,
+				221F838A032F5B12843EFF2D /* Metal.framework in Frameworks */,
+				FA8665A346381D6454C5F3D5 /* MetalKit.framework in Frameworks */,
+				826DA9519D7BFC7F8FCE3F11 /* QuartzCore.framework in Frameworks */,
+				147CB5546CE3AE7F6FFDE543 /* Security.framework in Frameworks */,
+				1B72639E70E381D33225906A /* SystemConfiguration.framework in Frameworks */,
+				CD5CF72E7A9F9542B677FCB1 /* UIKit.framework in Frameworks */,
+				D75C6416D41C52BC8A6635FA /* WebKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		28FCDDE340628ABAA32D4929 /* octopus-mobile */ = {
+			isa = PBXGroup;
+			children = (
+				9F5BD4B431450CBA315E925B /* main.mm */,
+				9BE5278CD133C3B0DDF895AE /* bindings */,
+			);
+			path = "octopus-mobile";
+			sourceTree = "<group>";
+		};
+		39EEE9BB1B1B60A8DA7B39B5 = {
+			isa = PBXGroup;
+			children = (
+				77863908EE0647D00FBEBC31 /* assets */,
+				2BBD4DB163898DE2140CBE1F /* Assets.xcassets */,
+				8D9D39FF25DFAECFCC6F22B9 /* LaunchScreen.storyboard */,
+				74BDB9AE55EF13834F5C2FCE /* Externals */,
+				3AEA79B18F59F9E7B2B75145 /* octopus-mobile_iOS */,
+				717D02F6EC6A938031C6F483 /* Sources */,
+				5637E0AC5A4AA07CC7D39D09 /* src */,
+				CD1E1DB457C4B570CD3A55E7 /* Frameworks */,
+				953749C9B92D517B8ED683DD /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		3AEA79B18F59F9E7B2B75145 /* octopus-mobile_iOS */ = {
+			isa = PBXGroup;
+			children = (
+				72338C7C6CD900756C9ADB83 /* Info.plist */,
+				C3284EF1077230D6243A2DB3 /* octopus-mobile_iOS.entitlements */,
+			);
+			path = "octopus-mobile_iOS";
+			sourceTree = "<group>";
+		};
+		5637E0AC5A4AA07CC7D39D09 /* src */ = {
+			isa = PBXGroup;
+			children = (
+				ECC97B37D9684FFB11858A88 /* app.rs */,
+				988EDCF880B7F79EF38FBE43 /* client_menu.rs */,
+				87F55BC6F390D7469B624789 /* device.rs */,
+				68F17BA708884E71BD57830B /* lib.rs */,
+				0706F3A27F120BDB2A6AED81 /* webview.rs */,
+			);
+			name = src;
+			path = ../../src;
+			sourceTree = "<group>";
+		};
+		717D02F6EC6A938031C6F483 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				28FCDDE340628ABAA32D4929 /* octopus-mobile */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		74BDB9AE55EF13834F5C2FCE /* Externals */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Externals;
+			sourceTree = "<group>";
+		};
+		953749C9B92D517B8ED683DD /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				54CF2A9B1EE31B172582C848 /* octopus-mobile_iOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		9BE5278CD133C3B0DDF895AE /* bindings */ = {
+			isa = PBXGroup;
+			children = (
+				701D653990EAB0A1E0775B03 /* bindings.h */,
+			);
+			path = bindings;
+			sourceTree = "<group>";
+		};
+		CD1E1DB457C4B570CD3A55E7 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				BE3023EC58773F01DCC5F88C /* CoreGraphics.framework */,
+				B6DB9E1B7C5B5D2F6ACF1C9E /* libapp.a */,
+				C08EDD6C4F8B99F55DA32DFB /* Metal.framework */,
+				39E4D24F872C39B48A10463F /* MetalKit.framework */,
+				687843A87287B80BF41375D3 /* QuartzCore.framework */,
+				4197E8E21374FB8BEE906F65 /* Security.framework */,
+				E96F734DD88B314FE19134E1 /* SystemConfiguration.framework */,
+				CC144E555861A408526E818E /* UIKit.framework */,
+				DBCCCF1D6E4B625D2560630F /* WebKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		"TEMP_841735C6-E2E2-4C7A-B594-6EA3E89BAC54" /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = arm64;
+			sourceTree = "<group>";
+		};
+		"TEMP_B8A3EFC1-5A96-49C4-8FA4-C925C26FC07F" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		3AE72831765C8C185A61A469 /* octopus-mobile_iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F9A5AE7720D9249509E86172 /* Build configuration list for PBXNativeTarget "octopus-mobile_iOS" */;
+			buildPhases = (
+				4B906D3E5024B0ABD32371FB /* Build Rust Code */,
+				48E292D3A20EA1BBADDB654C /* Sources */,
+				129EEA6CFF93A769A806F79B /* Resources */,
+				462437D6CD80D878606104F0 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "octopus-mobile_iOS";
+			packageProductDependencies = (
+			);
+			productName = "octopus-mobile_iOS";
+			productReference = 54CF2A9B1EE31B172582C848 /* octopus-mobile_iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		5B90900509AD03B592BCC064 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = 35593F4A430E13E91EE5CFAC /* Build configuration list for PBXProject "octopus-mobile" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 39EEE9BB1B1B60A8DA7B39B5;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 953749C9B92D517B8ED683DD /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				3AE72831765C8C185A61A469 /* octopus-mobile_iOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		129EEA6CFF93A769A806F79B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				68C733D91058E80F1A3CBCF2 /* Assets.xcassets in Resources */,
+				EB7A881AE05081B7184289DA /* LaunchScreen.storyboard in Resources */,
+				95ECAF724F28F5759EE43ED7 /* assets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		4B906D3E5024B0ABD32371FB /* Build Rust Code */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust Code";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a",
+				"$(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "cargo tauri ios xcode-script -v --platform \"${PLATFORM_DISPLAY_NAME:?}\" --sdk-root \"${SDKROOT:?}\" --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration \"${CONFIGURATION:?}\" ${FORCE_COLOR} ${ARCHS:?}\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		48E292D3A20EA1BBADDB654C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9771B6CE3FD5B86E5F590EE5 /* main.mm in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		1383E335013CD6746FD89C82 /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "octopus-mobile_iOS/octopus-mobile_iOS.entitlements";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = "octopus-mobile_iOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.zabealbe.octopus;
+				PRODUCT_NAME = "octopus";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
+			};
+			name = debug;
+		};
+		C2E77D236D589232EC3A1262 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "octopus-mobile_iOS/octopus-mobile_iOS.entitlements";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = "octopus-mobile_iOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.zabealbe.octopus;
+				PRODUCT_NAME = "octopus";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
+			};
+			name = release;
+		};
+		C379862C8A8B306FA7635A31 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.5;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = release;
+		};
+		F787531E2D97F30E984884D6 /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.5;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		35593F4A430E13E91EE5CFAC /* Build configuration list for PBXProject "octopus-mobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F787531E2D97F30E984884D6 /* debug */,
+				C379862C8A8B306FA7635A31 /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+		F9A5AE7720D9249509E86172 /* Build configuration list for PBXNativeTarget "octopus-mobile_iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1383E335013CD6746FD89C82 /* debug */,
+				C2E77D236D589232EC3A1262 /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 5B90900509AD03B592BCC064 /* Project object */;
+}

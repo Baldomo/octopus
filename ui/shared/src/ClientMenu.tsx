@@ -6,12 +6,23 @@ import { ServerMenu } from "./SidebarControls";
 import { VERSION } from "./generated";
 import { me, report, servers, setAppearance, showClientMenu, ui, zoom } from "./state";
 
-const APPEARANCES: [Appearance, string][] = [
+export const APPEARANCES: [Appearance, string][] = [
   ["system", "System"],
   ["light", "Light"],
   ["dark", "Dark"],
 ];
 const COPIED_MS = 1800;
+
+/** "About octopus" copies "octopus <version>" and reads "copied" for a moment after. */
+export function aboutCopy() {
+  const [copied, setCopied] = createSignal(false);
+  const copy = () =>
+    navigator.clipboard.writeText(`octopus ${VERSION}`).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), COPIED_MS);
+    }, report);
+  return { copied, copy };
+}
 
 function ServerRow(props: { server: ServerView; open: () => void }) {
   return (
@@ -27,12 +38,7 @@ function ServerRow(props: { server: ServerView; open: () => void }) {
 export function ClientMenu(props: { floats: (element: HTMLElement) => void; shown: boolean }) {
   let element!: HTMLDivElement;
   const [server, setServer] = createSignal<string | null>(null);
-  const [copied, setCopied] = createSignal(false);
-  const about = () =>
-    navigator.clipboard.writeText(`octopus ${VERSION}`).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), COPIED_MS);
-    }, report);
+  const { copied, copy: about } = aboutCopy();
   onMount(() => {
     closePopover();
     dismissible(element, () => showClientMenu(false));

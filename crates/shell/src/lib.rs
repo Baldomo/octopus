@@ -3,7 +3,7 @@
 pub mod client_menu;
 mod commands;
 pub mod hub;
-mod microphone;
+pub mod microphone;
 pub mod task_lists;
 mod task_view;
 mod terminal;
@@ -14,8 +14,10 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
 
 use octopus_client::Identity;
-use octopus_client::servers::Servers;
+use octopus_client::servers::{Config, Servers};
 use serde::Serialize;
+
+use crate::microphone::AskAccess;
 use tauri::plugin::TauriPlugin;
 use tauri::{AppHandle, Emitter, Manager, Runtime, Wry};
 
@@ -79,18 +81,30 @@ pub fn commands<R: Runtime>() -> tauri::plugin::Builder<R> {
     ])
 }
 
-/// Manages the `Arc<Hub>` and `Arc<UiStore>` the app's own setup reads, connecting to this client's servers.
-pub fn plugin(launch_problem: Option<String>) -> anyhow::Result<TauriPlugin<Wry>> {
+/// The core's commands and the terminals they attach, timing launch from the call.
+pub fn plugin() -> TauriPlugin<Wry> {
     let launched = Instant::now();
-    let servers = Servers::load()?.servers;
-    let me = Identity::load()?;
-    Ok(commands()
+    commands()
         .setup(move |app, _| {
             app.manage(Launched(launched));
             app.manage(Terminals::default());
-            app.manage(UiStore::load(app.clone(), launch_problem));
-            app.manage(Hub::start(app.clone(), me, servers));
             Ok(())
         })
-        .build())
+        .build()
+}
+
+/// What a client app loads before its window opens, so a launch that cannot load them fails with no window.
+pub struct Client {
+    pub config: Config,
+    pub me: Identity,
+    pub servers: Servers,
+    /// Asks the OS for the microphone on the first capture that needs it.
+    pub microphone_access: AskAccess,
+}
+
+/// Manages the `Arc<Hub>` and `Arc<UiStore>` the commands act on, connecting as `me` to its servers.
+pub fn start(app: &AppHandle, client: Client, launch_problem: Option<String>) {
+    let Client { config, me, servers, microphone_access } = client;
+    app.manage(UiStore::load(app.clone(), config.clone(), launch_problem));
+    app.manage(Hub::start(app.clone(), config, me, servers.servers, microphone_access));
 }

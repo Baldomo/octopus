@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::{Context, anyhow};
 use clap::{ArgAction, Subcommand};
 use octopus_client::Identity;
-use octopus_client::servers::{self, Address, Server as KnownServer, Servers};
+use octopus_client::servers::{self, Address, Config, Server as KnownServer, Servers};
 use octopus_proto::local::Listener;
 use octopus_proto::ops::{TaskGet, TermTakeLock};
 use octopus_proto::pairing::Invite;
@@ -101,18 +101,20 @@ impl ServerVerb {
                 octopus_server::run_terminal_host(&address).await.with_context(|| format!("host {}", address.display()))
             }
             Self::Add { name, socket } => {
-                print(&Servers::remember(KnownServer { name, address: Address::Local { socket } })?)
+                print(&Servers::remember(&Config::user()?, KnownServer { name, address: Address::Local { socket } })?)
             }
             Self::Rename { server, name } => {
-                let mut servers = Servers::load()?;
+                let config = Config::user()?;
+                let mut servers = Servers::load(&config)?;
                 servers.rename(&server, &name)?;
-                servers.save()?;
+                servers.save(&config)?;
                 print(&servers)
             }
             Self::Forget { server } => {
-                let mut servers = Servers::load()?;
+                let config = Config::user()?;
+                let mut servers = Servers::load(&config)?;
                 servers.forget(&server)?;
-                servers.save()?;
+                servers.save(&config)?;
                 print(&servers)
             }
         }
@@ -198,8 +200,9 @@ pub enum PairingVerb {
 impl PairingVerb {
     pub async fn run(self) -> anyhow::Result<()> {
         let Self::Accept { invite } = self;
-        let server = servers::pair(&invite, &Identity::load()?).await?;
-        Servers::remember(server.clone())?;
+        let config = Config::user()?;
+        let server = servers::pair(&invite, &Identity::load(&config)?).await?;
+        Servers::remember(&config, server.clone())?;
         print(&server)
     }
 }

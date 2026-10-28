@@ -218,4 +218,4 @@ export const NEW_BROWSER_PANEL = "new" as const;
 
 export const VERSION = "0.0.0" as const;
 
-export const EVENTS = {"filesChanged":"files_changed","model":"model","servers":"servers","ui":"ui","windowShown":"window-shown"} as const;
+export const EVENTS = {"filesChanged":"files_changed","microphoneDenied":"microphone_denied","model":"model","servers":"servers","ui":"ui","windowShown":"window-shown"} as const;

@@ -80,9 +80,23 @@ const DEVICE_KEY_FILE: &str = "device.key";
 const PAIRING_REPLY_BYTES: u64 = 4096;
 const PAIRING_PATIENCE: Duration = Duration::from_secs(10);
 
-/// Where this client keeps `file` among its config.
-pub fn config(file: &str) -> anyhow::Result<PathBuf> {
-    Ok(dirs::config_dir().ok_or_else(|| anyhow!("no config directory on this platform"))?.join("octopus").join(file))
+/// The directory this client keeps its files in.
+#[derive(Debug, Clone)]
+pub struct Config(PathBuf);
+
+impl Config {
+    /// This OS user's octopus config directory, which every desktop client and the CLI share.
+    pub fn user() -> anyhow::Result<Self> {
+        Ok(Self(dirs::config_dir().ok_or_else(|| anyhow!("no config directory on this platform"))?.join("octopus")))
+    }
+
+    pub fn at(dir: PathBuf) -> Self {
+        Self(dir)
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
 }
 
 pub fn create_parent(path: &std::path::Path) -> anyhow::Result<()> {
@@ -125,8 +139,8 @@ pub(crate) fn migrate_quic_entries(listed: &mut serde_json::Value) -> anyhow::Re
 }
 
 impl Servers {
-    pub fn load() -> anyhow::Result<Self> {
-        let path = config(SERVERS_FILE)?;
+    pub fn load(config: &Config) -> anyhow::Result<Self> {
+        let path = config.file(SERVERS_FILE);
         match std::fs::read_to_string(&path) {
             Ok(text) => {
                 let mut listed: serde_json::Value =
@@ -141,7 +155,7 @@ impl Servers {
                     .try_for_each(Server::validate)
                     .with_context(|| format!("check {}", path.display()))?;
                 if migrated {
-                    servers.save()?;
+                    servers.save(config)?;
                 }
                 Ok(servers)
             }
@@ -150,16 +164,16 @@ impl Servers {
         }
     }
 
-    pub fn save(&self) -> anyhow::Result<()> {
-        let path = config(SERVERS_FILE)?;
+    pub fn save(&self, config: &Config) -> anyhow::Result<()> {
+        let path = config.file(SERVERS_FILE);
         create_parent(&path)?;
         std::fs::write(&path, serde_json::to_string_pretty(self)?).with_context(|| format!("write {}", path.display()))
     }
 
     /// Points the listed remote server `name` at the direct `addresses` it reported, saving the list when they
     /// changed, so a server whose network moved stays reachable with no relay.
-    pub fn refresh(name: &str, addresses: &[SocketAddr]) -> anyhow::Result<()> {
-        let mut servers = Self::load()?;
+    pub fn refresh(config: &Config, name: &str, addresses: &[SocketAddr]) -> anyhow::Result<()> {
+        let mut servers = Self::load(config)?;
         let Some(Address::Remote { addresses: listed, .. }) =
             servers.servers.iter_mut().find(|server| server.name == name).map(|server| &mut server.address)
         else {
@@ -169,7 +183,7 @@ impl Servers {
             return Ok(());
         }
         *listed = addresses.to_vec();
-        servers.save()
+        servers.save(config)
     }
 
     /// Replaces a listed server only at the same place, as re-pairing does to pin a new key; a name listed for
@@ -187,10 +201,10 @@ impl Servers {
     }
 
     /// Lists `server` in the saved list.
-    pub fn remember(server: Server) -> anyhow::Result<Self> {
-        let mut servers = Self::load()?;
+    pub fn remember(config: &Config, server: Server) -> anyhow::Result<Self> {
+        let mut servers = Self::load(config)?;
         servers.add(server)?;
-        servers.save()?;
+        servers.save(config)?;
         Ok(servers)
     }
 
@@ -222,8 +236,8 @@ impl Servers {
 
 impl Identity {
     /// This machine's name, and the device key made on the first load and kept beside the server list.
-    pub fn load() -> anyhow::Result<Self> {
-        let path = config(DEVICE_KEY_FILE)?;
+    pub fn load(config: &Config) -> anyhow::Result<Self> {
+        let path = config.file(DEVICE_KEY_FILE);
         let key = match std::fs::read(&path) {
             Ok(pkcs8) => DeviceKey::from_pkcs8(&pkcs8).map_err(|error| anyhow!("{}: {error}", path.display()))?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -261,7 +275,7 @@ async fn exchange(invite: &Invite, me: &Identity) -> anyhow::Result<Server> {
     let Invite { code, server, relay, addresses } = invite;
     let connection = me.dialer().await?.connect(&me.key, *server, relay, addresses).await?;
     let client = me.key.public();
-    let op = PairingPair { client: me.name.clone(), proof: code.prove(Side::Client, server, &client) };
+    let op = PairingPair { client: me.name(), proof: code.prove(Side::Client, server, &client) };
     let request = Request { id: 1, op: PairingPair::NAME.to_string(), args: serde_json::to_value(op)? };
     let (mut send, receive) = connection.open_bi().await.context("open the pairing stream")?;
     send.write_all(line(&request).as_bytes()).await.context("send the pairing request")?;

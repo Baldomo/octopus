@@ -1,0 +1,6 @@
+{
+  "identifier": "ui",
+  "description": "The phone's webview listens to the app's events and runs the client app's core.",
+  "webviews": ["main"],
+  "permissions": ["core:event:default", "octopus:default"]
+}

@@ -1,5 +1,7 @@
 /target
 /crates/desktop/gen
+/crates/mobile/gen/schemas
 /crates/shell/permissions
 /ui/**/node_modules
 /ui/desktop/dist
+/ui/mobile/dist

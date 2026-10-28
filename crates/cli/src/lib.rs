@@ -7,7 +7,7 @@ pub mod skill;
 use std::process::ExitCode;
 
 use anyhow::{Context, anyhow};
-use octopus_client::servers::Servers;
+use octopus_client::servers::{Config, Servers};
 use octopus_client::{CallError, Connection, Identity};
 use octopus_proto::{Error, Op};
 use serde::Serialize;
@@ -16,9 +16,10 @@ use serde::Serialize;
 const USAGE: u8 = 2;
 
 async fn connect(server: &str) -> anyhow::Result<Connection> {
-    let servers = Servers::load()?;
-    let connection = Connection::connect(&servers.get(server)?.address, &Identity::load()?).await?;
-    Servers::refresh(server, connection.server_addresses())?;
+    let config = Config::user()?;
+    let servers = Servers::load(&config)?;
+    let connection = Connection::connect(&servers.get(server)?.address, &Identity::load(&config)?).await?;
+    Servers::refresh(&config, server, connection.server_addresses())?;
     Ok(connection)
 }
 

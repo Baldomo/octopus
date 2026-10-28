@@ -5,6 +5,7 @@ import { backend, events } from "@octopus/shared/backend.ts";
 import { loadFonts } from "@octopus/shared/fonts.ts";
 import { applyBoot, applyModel, applyUi, report, setServers } from "@octopus/shared/state.ts";
 import { applyFilesChanged } from "@octopus/shared/taskFiles.ts";
+import { setWindowShown } from "@octopus/shared/terminalSession.ts";
 import { bindKeys } from "./keys";
 import { layer } from "./layer";
 import { Docked, Floating } from "./layers";
@@ -18,6 +19,7 @@ async function start() {
     events.servers(setServers),
     events.ui(applyUi),
     events.filesChanged(applyFilesChanged),
+    events.windowShown(setWindowShown),
   ]);
   applyBoot(await backend.boot());
   render(() => (layer === "float" ? <Floating /> : <Docked />), document.body);

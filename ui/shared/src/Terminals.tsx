@@ -1,43 +1,11 @@
-import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
-import { type ITheme, Terminal } from "@xterm/xterm";
-import "@xterm/xterm/css/xterm.css";
-import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
-import { backend, Channel, events } from "./backend";
+import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
+import { backend } from "./backend";
 import { AGENT_PANEL, type Panel, type PtyId, type TaskRef, type TaskView } from "./generated";
 import { Glyph } from "./Glyph";
 import { keepInView } from "./keepInView";
 import { commands, hint, mac } from "./commands";
-import { act, me, model, report, serverLabel, serverView, ui } from "./state";
-import { colors, px, type Scheme, scheme, token } from "./tokens";
-
-const themes: Partial<Record<Scheme, ITheme>> = {};
-function terminalTheme(current: Scheme): ITheme {
-  const color = colors(current);
-  return (themes[current] ??= {
-    background: color("--term"),
-    foreground: color("--term-text"),
-    cursor: color("--text"),
-    selectionBackground: color("--line2"),
-    overviewRulerBorder: "#00000000",
-    black: color("--ansi-black"),
-    red: color("--err"),
-    green: color("--working"),
-    yellow: color("--needs"),
-    blue: color("--info"),
-    magenta: color("--violet"),
-    cyan: color("--info"),
-    white: color("--dim"),
-    brightBlack: color("--faint"),
-    brightRed: color("--err"),
-    brightGreen: color("--working"),
-    brightYellow: color("--needs"),
-    brightBlue: color("--info"),
-    brightMagenta: color("--violet"),
-    brightCyan: color("--info"),
-    brightWhite: color("--text"),
-  });
-}
+import { act, model, serverLabel, ui } from "./state";
+import { terminalSession, windowShown } from "./terminalSession";
 
 /** Shift+Enter sends ESC CR, which agents read as a newline; on macOS ⌥←/⌥→ move by word as in Terminal.app. */
 const CHORD_INPUT: Record<string, string> = {
@@ -51,85 +19,11 @@ const chord = (event: KeyboardEvent) =>
     .filter(Boolean)
     .join("+");
 
-const SCROLLBACK_LINES = 10_000;
-/** A minimized or hidden window shows no terminal; one behind other windows still does. */
-const [windowShown, setWindowShown] = createSignal(true);
-events.windowShown(setWindowShown).catch(report);
-/** A dropped stream retries after this, by which time a server that went away reads as unreachable. */
-const REATTACH_MS = 500;
-
-/**
- * A terminal keeps its screen while its task stays mounted, and holds a data stream only while on screen and its
- * window shows it and its server is reachable; the server reads that stream as this client showing the terminal.
- * A shown terminal with a free lock is claimed at the pane's size. The holder fits the PTY to its pane; every other
- * client draws it at the holder's size, cropped and scrollable.
- */
+/** The holder fits the PTY to its pane; every other client draws it at the holder's size, cropped and scrollable. */
 function Term(props: { at: TaskRef; panel: Panel; visible: boolean }) {
   let host!: HTMLDivElement;
-  const mine = () => props.panel.lock_holder === me();
-  const writable = () => props.panel.running && mine();
-  const xterm = new Terminal({
-    fontFamily: token("--mono-terminal"),
-    fontSize: px("--fs-mono"),
-    cursorBlink: true,
-    scrollback: SCROLLBACK_LINES,
-    overviewRuler: { width: px("--scrollbar-w") },
-  });
-  const fit = new FitAddon();
-  xterm.loadAddon(fit);
-  let attachment: number | null = null;
-  /** Whether the server has this client's stream open, so a claim always reaches it showing the terminal. */
-  const [attached, setAttached] = createSignal(false);
-  let generation = 0;
-  /** Counts streams that ended under a running PTY, each of which calls for a fresh attachment. */
-  const [drops, setDrops] = createSignal(0);
-
-  /** The server sends the scrollback first, so the screen resets on the first chunk; an empty chunk ends the stream. */
-  const attach = async () => {
-    const current = ++generation;
-    const output = new Channel<ArrayBuffer>();
-    let replaying = true;
-    let ended = false;
-    output.onmessage = (bytes) => {
-      if (current !== generation) return;
-      if (bytes.byteLength === 0) {
-        ended = true;
-        attachment = null;
-        setAttached(false);
-        if (props.panel.running) setTimeout(() => setDrops((count) => count + 1), REATTACH_MS);
-        return;
-      }
-      if (replaying) {
-        xterm.reset();
-        replaying = false;
-      }
-      xterm.write(new Uint8Array(bytes));
-    };
-    const opened = await backend.termAttach(props.at, props.panel.id, output);
-    if (current === generation && !ended) {
-      attachment = opened;
-      setAttached(true);
-    } else if (current !== generation) act(backend.termDetach(opened));
-  };
-  const detach = () => {
-    generation++;
-    if (attachment !== null) act(backend.termDetach(attachment));
-    attachment = null;
-    setAttached(false);
-  };
-  /** A drag of the window resizes once per frame, since every resize the server takes is published. */
-  let resizing = 0;
-  const resize = () => {
-    cancelAnimationFrame(resizing);
-    resizing = requestAnimationFrame(() => {
-      if (mine()) act(backend.termResize(props.at, props.panel.id, xterm.cols, xterm.rows));
-    });
-  };
-  const take = () => {
-    const size = fit.proposeDimensions();
-    if (size) act(backend.termTakeLock(props.at, props.panel.id, size.cols, size.rows));
-    else report("the terminal's pane has no size to take the terminal at yet");
-  };
+  const session = terminalSession({ at: props.at, panel: () => props.panel, shown: () => props.visible });
+  const { xterm, mine } = session;
 
   xterm.attachCustomKeyEventHandler((event) => {
     const input = CHORD_INPUT[chord(event)];
@@ -140,67 +34,24 @@ function Term(props: { at: TaskRef; panel: Panel; visible: boolean }) {
     }
     return false;
   });
-  xterm.onData((keys) => {
-    if (attachment !== null) act(backend.termInput(attachment, keys));
-  });
-  xterm.onResize(() => {
-    if (mine()) resize();
-  });
+  xterm.onData(session.input);
 
   onMount(() => {
-    xterm.open(host);
-    try {
-      const webgl = new WebglAddon();
-      webgl.onContextLoss(() => webgl.dispose());
-      xterm.loadAddon(webgl);
-    } catch (error) {
-      report(`WebGL is unavailable, so terminals draw through the DOM: ${error}`);
-    }
+    session.open(host);
     const observer = new ResizeObserver(() => {
-      if (props.visible && mine()) fit.fit();
+      if (session.shown() && mine()) session.fit();
     });
     observer.observe(host);
     onCleanup(() => observer.disconnect());
   });
-  const streaming = createMemo(() => props.visible && windowShown() && serverView(props.at.server)?.reachable === true);
   createEffect(
-    on([streaming, drops], ([stream]) => {
-      if (!stream) return;
-      xterm.focus();
-      attach().catch(report);
-      onCleanup(detach);
-    }),
+    on(
+      () => session.shown() && windowShown(),
+      (shown) => shown && xterm.focus(),
+    ),
   );
   createEffect(() => {
-    xterm.options.disableStdin = !writable();
-  });
-  createEffect(() => {
-    xterm.options.theme = terminalTheme(scheme());
-  });
-  createEffect(
-    on([attached, () => props.panel.lock_holder === null && props.panel.running], ([showing, free]) => {
-      if (!showing || !free) return;
-      const size = fit.proposeDimensions();
-      if (size) act(backend.termClaim(props.at, props.panel.id, size.cols, size.rows));
-      else report("the terminal's pane has no size to claim the terminal at yet");
-    }),
-  );
-  createEffect(
-    on([mine, () => props.visible], ([holding, visible]) => {
-      if (!visible || !holding) return;
-      fit.fit();
-      resize();
-    }),
-  );
-  createEffect(
-    on([mine, () => props.visible, () => props.panel.cols, () => props.panel.rows], ([holding, visible]) => {
-      if (visible && !holding) xterm.resize(props.panel.cols, props.panel.rows);
-    }),
-  );
-  onCleanup(() => {
-    cancelAnimationFrame(resizing);
-    detach();
-    xterm.dispose();
+    xterm.options.disableStdin = !(props.panel.running && mine());
   });
 
   return (
@@ -216,7 +67,7 @@ function Term(props: { at: TaskRef; panel: Panel; visible: boolean }) {
               : `read-only · held by ${props.panel.lock_holder}`}
           </span>
           <span class="spacer" />
-          <button class="btn live" onClick={take}>
+          <button class="btn live" onClick={session.take}>
             Take over
           </button>
         </div>
@@ -225,7 +76,7 @@ function Term(props: { at: TaskRef; panel: Panel; visible: boolean }) {
   );
 }
 
-function Missing(props: { open: TaskView }) {
+export function Missing(props: { open: TaskView }) {
   const install = () => {
     const agent = props.open.task.agent;
     return agent.kind === "harness_not_installed" ? agent.install : null;

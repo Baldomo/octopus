@@ -4,10 +4,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use octopus_client::cache::{Cache, PushEffect};
-use octopus_client::servers::{Address, Server, Servers};
+use octopus_client::servers::{self, Address, Config, Server, Servers};
 use octopus_client::{CallError, Connection, Identity};
 use octopus_proto::device::PublicKey;
 use octopus_proto::ops::{SessionSync, WorkspaceRename, WorkspaceSetColor};
+use octopus_proto::pairing::Invite;
 use octopus_proto::types::{Color, WorkspaceId};
 use octopus_proto::{Event, Op, Push};
 use serde::Serialize;
@@ -16,7 +17,7 @@ use tokio::sync::Notify;
 use tokio::sync::broadcast::error::RecvError;
 use ts_rs::TS;
 
-use crate::microphone::{Listener, Microphone};
+use crate::microphone::{AskAccess, Capture, Listener, MICROPHONE_DENIED_EVENT, Microphone};
 use crate::task_lists::{Lists, TaskRef, lists};
 use crate::task_view::{TaskView, task_views};
 use crate::{emit, lock, saturate};
@@ -98,13 +99,14 @@ fn now() -> i64 {
 
 pub struct Hub {
     pub me: Identity,
+    config: Config,
     app: AppHandle,
     state: Mutex<State>,
     versions: AtomicU64,
     model_changed: Notify,
     servers_changed: Notify,
     files_changed: Notify,
-    microphone: Microphone,
+    microphone: Arc<Microphone>,
 }
 
 impl Hub {
@@ -120,16 +122,25 @@ impl Hub {
         }
     }
 
-    pub fn start(app: AppHandle, me: Identity, servers: Vec<Server>) -> Arc<Self> {
+    pub fn start(
+        app: AppHandle,
+        config: Config,
+        me: Identity,
+        servers: Vec<Server>,
+        microphone_access: AskAccess,
+    ) -> Arc<Self> {
+        let denied = app.clone();
+        let denied_changed = Box::new(move |is: bool| emit(&denied, MICROPHONE_DENIED_EVENT, is));
         let hub = Arc::new(Self {
             me,
+            config,
+            microphone: Microphone::new(microphone_access, Box::new(Capture::microphone), denied_changed),
             app,
             state: Mutex::default(),
             versions: AtomicU64::new(0),
             model_changed: Notify::new(),
             servers_changed: Notify::new(),
             files_changed: Notify::new(),
-            microphone: Microphone::default(),
         });
         tauri::async_runtime::spawn(Arc::clone(&hub).emit_models());
         tauri::async_runtime::spawn(Arc::clone(&hub).emit_servers());
@@ -170,7 +181,7 @@ impl Hub {
     /// Runs one connection until it ends, keeping the server's cache current, and resolves to why it closed.
     async fn session(&self, server: &Server) -> anyhow::Result<String> {
         let connection = Arc::new(Connection::connect(&server.address, &self.me).await?);
-        if let Err(error) = Servers::refresh(&server.name, connection.server_addresses()) {
+        if let Err(error) = Servers::refresh(&self.config, &server.name, connection.server_addresses()) {
             eprintln!("octopus app: keep the addresses {} reported: {error:#}", server.name);
         }
         let mut pushes = connection.pushes();
@@ -229,27 +240,29 @@ impl Hub {
         self.servers_changed.notify_one();
     }
 
-    /// Re-pairing a listed server, to pin a new key, is the CLI's `pairing accept`; this window keeps the pins it
-    /// started with.
-    pub fn refuse_listed(&self, key: &PublicKey) -> anyhow::Result<()> {
+    /// The name this client lists the server pinned to `key` under, if it lists one.
+    pub fn listed_as(&self, key: &PublicKey) -> Option<String> {
         let state = lock(&self.state);
-        let listed = state
+        state
             .links
             .iter()
-            .find(|(_, link)| matches!(&link.address, Address::Remote { key: listed, .. } if listed == key));
-        match listed {
-            Some((name, _)) => {
-                anyhow::bail!("{key} is listed as {name}; re-pair it with `octopus pairing accept`")
-            }
-            None => Ok(()),
-        }
+            .find(|(_, link)| matches!(&link.address, Address::Remote { key: listed, .. } if listed == key))
+            .map(|(name, _)| name.clone())
     }
 
-    pub fn add(self: &Arc<Self>, server: Server) -> anyhow::Result<()> {
+    /// Pairs with the server `invite` names, lists it, and resolves to its name.
+    pub async fn pair(self: &Arc<Self>, invite: &Invite) -> anyhow::Result<String> {
+        let server = servers::pair(invite, &self.me).await?;
+        let name = server.name.clone();
+        self.add(server)?;
+        Ok(name)
+    }
+
+    fn add(self: &Arc<Self>, server: Server) -> anyhow::Result<()> {
         if lock(&self.state).links.contains_key(&server.name) {
             anyhow::bail!("a server named {} is already in the list", server.name);
         }
-        Servers::remember(server.clone())?;
+        Servers::remember(&self.config, server.clone())?;
         self.supervise(server);
         Ok(())
     }
@@ -259,18 +272,18 @@ impl Hub {
         if lock(&self.state).links.contains_key(to) {
             anyhow::bail!("a server named {to} is already in the list");
         }
-        let mut servers = Servers::load()?;
+        let mut servers = Servers::load(&self.config)?;
         let renamed = servers.rename(from, to)?;
-        servers.save()?;
+        servers.save(&self.config)?;
         self.unsupervise(from);
         self.supervise(renamed);
         Ok(())
     }
 
     pub fn forget_server(&self, server: &str) -> anyhow::Result<()> {
-        let mut servers = Servers::load()?;
+        let mut servers = Servers::load(&self.config)?;
         servers.forget(server)?;
-        servers.save()?;
+        servers.save(&self.config)?;
         self.unsupervise(server);
         Ok(())
     }
@@ -387,6 +400,7 @@ impl Hub {
     /// The listening terminals whose lock this client holds, on servers it reaches.
     fn listeners(&self) -> BTreeMap<Listener, Arc<Connection>> {
         let state = lock(&self.state);
+        let me = self.me.name();
         let mut listeners = BTreeMap::new();
         for (server, cache) in &state.caches {
             let Some(Link { connection: Some(connection), .. }) = state.links.get(server) else { continue };
@@ -394,7 +408,7 @@ impl Hub {
                 .tasks
                 .values()
                 .flat_map(|task| &task.panels)
-                .filter(|panel| panel.listening && panel.lock_holder.as_deref() == Some(self.me.name.as_str()));
+                .filter(|panel| panel.listening && panel.lock_holder.as_deref() == Some(me.as_str()));
             for panel in held {
                 listeners.insert((server.clone(), panel.id.clone()), Arc::clone(connection));
             }
