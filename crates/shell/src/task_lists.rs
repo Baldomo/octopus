@@ -242,7 +242,6 @@ pub(crate) mod tests {
             session: None,
             directory: "/repo".into(),
             branch: None,
-            focused_at: None,
             ended_at: None,
             archived_at: None,
             rev: 1,

@@ -2,6 +2,7 @@ import { createSignal, For, Show } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import { LIVE_STATES, TASK_STATES } from "@octopus/shared/generated.ts";
 import { act, model, report, serverLabel } from "@octopus/shared/state.ts";
+import { feel } from "./feel";
 import { Icon } from "./Icon";
 import { back, go } from "./nav";
 import { Chev, Gap, Mi, Para, Sep, Why } from "./parts";
@@ -54,7 +55,10 @@ export function TaskMenu(props: { taskKey: string; open: boolean }) {
                       </span>
                     </Show>
                   }
-                  tap={() => act(backend.taskMove(view().at, state))}
+                  tap={() => {
+                    if (view().task.state !== state) feel("select");
+                    act(backend.taskMove(view().at, state));
+                  }}
                 >
                   {state}
                 </Mi>
@@ -68,7 +72,7 @@ export function TaskMenu(props: { taskKey: string; open: boolean }) {
               slot={<Icon name="archive" />}
               off={view().live}
               end={<Show when={view().live}>{<Why>end it first</Why>}</Show>}
-              tap={() => act(backend.taskArchive(view().at))}
+              tap={() => backend.taskArchive(view().at).then(() => feel("success"), report)}
             >
               Archive
             </Mi>
@@ -96,7 +100,15 @@ export function Reopen(props: { taskKey: string }) {
             <Gap n={2} />
             <For each={LIVE_STATES}>
               {(state) => (
-                <Mi slot={<Icon name="reload" />} tap={() => backend.taskMove(view().at, state).then(back, report)}>
+                <Mi
+                  slot={<Icon name="reload" />}
+                  tap={() =>
+                    backend.taskMove(view().at, state).then(() => {
+                      feel("success");
+                      back();
+                    }, report)
+                  }
+                >
                   {state}
                 </Mi>
               )}

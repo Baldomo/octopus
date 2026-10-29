@@ -4,8 +4,8 @@ import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
-  /** The system back gesture and button step the page's history, which holds one entry per screen and sheet. */
-  override val handleBackNavigation: Boolean = true
+  /** `DevicePlugin` hands the system back to the page while it has a screen or sheet to pop. */
+  override val handleBackNavigation: Boolean = false
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()

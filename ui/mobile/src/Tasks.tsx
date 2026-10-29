@@ -1,19 +1,32 @@
 import { For, Show } from "solid-js";
 import type { Column, Row, Section } from "@octopus/shared/generated.ts";
-import { isOpen, model, servers, toggleCollapsed, ui } from "@octopus/shared/state.ts";
+import { isOpen, model, report, servers, toggleCollapsed, ui } from "@octopus/shared/state.ts";
+import { backend } from "@octopus/shared/backend.ts";
 import { dropHint } from "@octopus/shared/drop.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { Icon } from "./Icon";
-import { dropTarget, isLifted, lift, liftsIn } from "./lift";
+import { animateList } from "./flip";
+import { dropTarget, isAway, isLanding, isLifted, lift, liftsIn } from "./lift";
 import { go, openSheet, openTask } from "./nav";
 import { Circle, Glyph, Id, ServerDot, Slot } from "./parts";
 import { pressed } from "./press";
+import { pullToRefresh } from "./pull";
+
+const ITEMS = ".sech, .gl, .row, .empty, .addws";
+
+export const refreshServers = () => backend.serversRefresh().catch(report);
 
 function TaskRow(props: { row: Row; section: string; group: Column }) {
   return (
     <div
       class="row"
-      classList={{ open: isOpen(props.row.key), lifting: isLifted(props.row.key) }}
+      data-key={props.row.key}
+      classList={{
+        open: isOpen(props.row.key),
+        lifting: isLifted(props.row.key),
+        away: isAway(props.row.key),
+        landing: isLanding(props.row.key),
+      }}
       style={{ "--d": props.row.depth }}
       {...pressed(
         () => openTask(props.row.key, props.row.at),
@@ -36,9 +49,18 @@ function TaskRow(props: { row: Row; section: string; group: Column }) {
 function Group(props: { section: string; group: Column }) {
   const target = dropTarget(props.section, props.group.state);
   return (
-    <div class="grp" classList={{ over: target.over() }} {...target.attributes}>
-      <div class="gl">{props.group.state}</div>
-      <For each={props.group.rows} fallback={<div class="empty">{dropHint(props.group.state)}</div>}>
+    <div class="grp" classList={{ over: target.over() }} data-state={props.group.state} {...target.attributes}>
+      <div class="gl" data-key={`${props.section}/${props.group.state}`}>
+        {props.group.state}
+      </div>
+      <For
+        each={props.group.rows}
+        fallback={
+          <div class="empty" data-key={`${props.section}/${props.group.state}/empty`}>
+            {dropHint(props.group.state)}
+          </div>
+        }
+      >
         {(row) => <TaskRow row={row} section={props.section} group={props.group} />}
       </For>
     </div>
@@ -57,6 +79,7 @@ function SectionRows(props: { section: Section }) {
     >
       <div
         class="sech"
+        data-key={`section/${props.section.name}`}
         {...pressed(
           () => {},
           () => openSheet({ is: "section", name: props.section.name }),
@@ -98,7 +121,9 @@ function SectionRows(props: { section: Section }) {
       <Show when={!closed()}>
         <For each={groups()}>{(group) => <Group section={props.section.name} group={group} />}</For>
         <Show when={empty()}>
-          <div class="empty">no live tasks</div>
+          <div class="empty" data-key={`${props.section.name}/none`}>
+            no live tasks
+          </div>
         </Show>
       </Show>
     </div>
@@ -132,7 +157,13 @@ export function Tasks() {
           )}
         </For>
       </div>
-      <div class="list">
+      <div
+        class="list"
+        ref={(list) => {
+          animateList(ITEMS)(list);
+          pullToRefresh(refreshServers)(list);
+        }}
+      >
         <For each={model.lists.sections}>{(section) => <SectionRows section={section} />}</For>
         <div class="addws" role="button" onClick={() => openSheet({ is: "addws" })}>
           <Slot>

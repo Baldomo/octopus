@@ -64,6 +64,25 @@ body {
   background: var(--bg);
 }
 
+/* a screen sliding over another casts a shadow on it */
+.app.over {
+  box-shadow: 0 0 32px rgb(0 0 0 / 0.16);
+}
+
+.app:not(.shown) {
+  display: none;
+}
+
+/* the shade over a screen another one slides over */
+.app > .shade {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 9;
+}
+
 .content {
   left: calc(var(--safe-left) / var(--zoom, 1));
   right: calc(var(--safe-right) / var(--zoom, 1));
@@ -124,6 +143,7 @@ body {
   right: 0;
   bottom: 0;
   max-height: calc(var(--vh) - var(--top) - var(--g2));
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-bottom: var(--bot);
@@ -131,15 +151,25 @@ body {
   border-radius: var(--r3) var(--r3) 0 0;
   display: flex;
   flex-direction: column;
-  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.sheet.pulled {
-  transition: none;
+.layer.leaving {
+  pointer-events: none;
 }
 
-.sheet > * {
+.sheet > *,
+.page-gone > * {
   flex: none;
+}
+
+/* the page a sheet showed before the one it shows in its place, on its way out */
+.page-gone {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
 }
 
 .sheet.full {
@@ -336,6 +366,7 @@ body {
   min-height: 0;
   height: auto;
   display: flex;
+  touch-action: none;
 }
 
 /* the terminal draws at the device's pixels and takes the zoom through its font size */
@@ -372,11 +403,11 @@ body {
   width: 3px;
 }
 
-/* the keyboard's text field, out of sight */
+/* the keyboard's text field, out of sight at the pane's top, which the keyboard never covers, so the page never scrolls to reveal it */
 .sink {
   position: absolute;
   left: 0;
-  bottom: 0;
+  top: 0;
   width: 1px;
   height: 1px;
   opacity: 0;
@@ -413,11 +444,33 @@ body {
   max-width: 55%;
 }
 
-.content > .cards {
+.content > .cards,
+.column > .cards {
   flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
   padding-bottom: var(--g5);
+}
+
+/* a board's columns stand side by side, one in view, and a sideways drag is the board's own */
+.content > .columns {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: pan-y;
+}
+
+.columns > .track {
+  display: flex;
+  height: 100%;
+}
+
+.track > .column {
+  flex: 0 0 100%;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
 }
 
 .tabs.scroll {
@@ -601,12 +654,20 @@ body {
 }
 
 /*
- * A lifted task: its row or card stays dim in place while its ghost follows the finger, its content on the row's
- * rails over the open row's tint shape (8 before its glyph slot to 8 past the right rail) on the screen's surface,
- * raised by a shadow. The group it can drop on fills behind its rows, and a state tab rings.
+ * A lifted task: its ghost stands in for its row or card, its content on the row's rails over the open row's tint
+ * shape (8 before its glyph slot to 8 past the right rail) on the screen's surface, and rises from it by a scale and
+ * a shadow. Its rows give up their place while it heads to another state, whose group fills behind its rows, and a
+ * state tab rings.
  */
-.lifting {
-  opacity: 0.35;
+.lifting,
+.landing {
+  visibility: hidden;
+}
+
+.away {
+  height: 0;
+  padding-block: 0;
+  overflow: hidden;
 }
 
 .ghost {
@@ -616,6 +677,18 @@ body {
   z-index: 5;
   isolation: isolate;
   pointer-events: none;
+  transition:
+    scale var(--snappy-ms) var(--snappy),
+    opacity 150ms;
+}
+
+.ghost.up {
+  scale: 1.03;
+}
+
+.ghost.aiming {
+  scale: 0.9;
+  opacity: 0.5;
 }
 
 .ghost::before {
@@ -624,8 +697,13 @@ body {
   inset: 0 calc(var(--rail) - var(--g2)) 0 calc(var(--rail) + var(--step) * var(--d, 0) - var(--g2));
   border-radius: var(--r2);
   background: var(--surface);
-  box-shadow: 0 8px 24px light-dark(rgba(24, 25, 29, 0.16), rgba(0, 0, 0, 0.5));
+  box-shadow: 0 0 0 light-dark(rgba(24, 25, 29, 0), rgba(0, 0, 0, 0));
   z-index: -1;
+  transition: box-shadow var(--snappy-ms) var(--snappy);
+}
+
+.ghost.up::before {
+  box-shadow: 0 8px 24px light-dark(rgba(24, 25, 29, 0.16), rgba(0, 0, 0, 0.5));
 }
 
 .row.ghost::before {
@@ -652,4 +730,197 @@ body {
 
 .tab.over {
   box-shadow: inset 0 0 0 1.5px var(--text);
+}
+
+/*
+ * Motion: what DESIGN-MOBILE.html's motion rule draws between states. Pressing shows at once and fades out on
+ * release; selections slide; a status settles into its new look; reduced motion keeps only the spinners turning.
+ */
+@keyframes spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
+@keyframes breathe {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.spin {
+  animation: spin 900ms linear infinite;
+}
+
+:is(button, [role="button"]) {
+  transition:
+    opacity 240ms ease-out,
+    scale 240ms var(--snappy);
+}
+
+.circle {
+  transition-property: opacity, scale, background-color;
+}
+
+:is(button, [role="button"])[data-pressed] {
+  opacity: 0.5;
+  transition: none;
+}
+
+:is(.circle, .btn, .primary, .secondary, .key, .chip, .tab, .seg span, .stepper span, .matrix i, .cmd)[data-pressed] {
+  opacity: 1;
+  scale: 0.95;
+}
+
+.key[data-pressed] {
+  background: var(--line);
+}
+
+.circle[data-pressed],
+.capsule .circle.on[data-pressed] {
+  background: var(--line2);
+}
+
+.mi,
+.tree {
+  transition: background-color 240ms ease-out;
+}
+
+:is(.mi, .tree)[data-pressed] {
+  opacity: 1;
+  background: var(--fill);
+  transition: none;
+}
+
+/* a row's and a card's press fills the open row's tint shape */
+:where(.row, .card) {
+  position: relative;
+  isolation: isolate;
+}
+
+.row::after,
+.card::after {
+  content: "";
+  position: absolute;
+  inset: 0 calc(var(--rail) - var(--g2)) 0 calc(var(--rail) + var(--step) - var(--g2));
+  border-radius: var(--r2);
+  background: var(--fill);
+  opacity: 0;
+  z-index: -1;
+  transition: opacity 240ms ease-out;
+}
+
+.card::after {
+  left: calc(var(--rail) + var(--step) * var(--d, 0) - var(--g2));
+}
+
+:is(.row, .card)[data-pressed]::after {
+  opacity: 1;
+  transition: none;
+}
+
+/* one thumb under a segmented control's or a tab bar's choice, sliding to the next */
+.thumbed {
+  position: relative;
+  isolation: isolate;
+}
+
+.thumb-on {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: var(--pill);
+  background: var(--fill);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.thumb-on.placed {
+  transition:
+    translate var(--snappy-ms) var(--snappy),
+    width var(--snappy-ms) var(--snappy),
+    height var(--snappy-ms) var(--snappy),
+    opacity 150ms;
+}
+
+.seg > .thumb-on {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--fill);
+}
+
+.thumbed > .on,
+.seg.thumbed > span.on {
+  background: none;
+  box-shadow: none;
+}
+
+/* lists animate their items over their own box; a removed item fades where it was */
+.flips {
+  position: relative;
+}
+
+.flip-ghost {
+  position: absolute !important;
+  margin: 0 !important;
+  pointer-events: none;
+}
+
+/* a list at its top gives way to the pull rather than rubber-banding */
+.pull-top {
+  overscroll-behavior-y: none;
+}
+
+.pull {
+  position: absolute;
+  left: calc(50% - 10px);
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--faint);
+  border-right-color: transparent;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.pull.on {
+  animation: spin 700ms linear infinite;
+}
+
+.foot {
+  position: relative;
+}
+
+.car {
+  transition: transform var(--snappy-ms) var(--snappy);
+}
+
+.dot,
+.chip,
+.matrix i,
+.key {
+  transition:
+    background-color 240ms,
+    box-shadow 240ms,
+    color 240ms,
+    scale 240ms var(--snappy);
+}
+
+.dot.srv.re {
+  animation: breathe 1.2s ease-in-out infinite;
+}
+
+.term {
+  transition: opacity 300ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0s !important;
+  }
+
+  .dot.srv.re {
+    animation: none;
+  }
 }

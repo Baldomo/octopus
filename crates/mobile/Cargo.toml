@@ -24,7 +24,6 @@ tokio = { version = "1.54.1", features = ["sync"] }
 [target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
 tauri-plugin-barcode-scanner = "2.5.3"
 tauri-plugin-clipboard-manager = "2.5.0"
-tauri-plugin-haptics = "2.4.2"
 
 [target.'cfg(target_os = "ios")'.dependencies]
 # Exact, and so for the whole workspace, which resolves one libc: from 0.2.190 libc declares the route and `in6_ifreq`
@@ -36,14 +35,31 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
   "block2",
   "UIApplication",
   "UIDevice",
+  "UIFeedbackGenerator",
+  "UIGeometry",
+  "UIImpactFeedbackGenerator",
   "UIInterface",
+  "UINotificationFeedbackGenerator",
   "UIResponder",
+  "UIScreen",
   "UIScrollView",
+  "UISelectionFeedbackGenerator",
   "UIView",
   "UIWindow",
+  "objc2-core-foundation",
 ] }
 block2 = "0.6.2"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDictionary", "NSString", "NSURL"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "block2",
+  "NSDictionary",
+  "NSNotification",
+  "NSOperation",
+  "NSString",
+  "NSURL",
+  "NSValue",
+] }
 objc2-avf-audio = { version = "0.3.2", default-features = false, features = [
   "std",
   "block2",

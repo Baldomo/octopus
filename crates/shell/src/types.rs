@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::json;
 use ts_rs::Config;
 
-use crate::client_menu::{Appearance, Zoom, ZoomStep};
+use crate::client_menu::{Appearance, ZOOMS, Zoom, ZoomStep};
 use crate::commands::{Boot, NewTask, ShownOffer};
 use crate::hub::{FILES_CHANGED_EVENT, FilesChanged, MODEL_EVENT, Model, SERVERS_EVENT, ServerView};
 use crate::microphone::MICROPHONE_DENIED_EVENT;
@@ -89,6 +89,7 @@ pub fn render() -> String {
         constant("CHECKOUTS", &Checkout::ALL),
         constant("HUES", &Hue::ALL),
         constant("TONES", &Tone::ALL),
+        constant("ZOOMS", &ZOOMS),
         constant("AGENT_PANEL", &AGENT_PANEL),
         constant("NEW_BROWSER_PANEL", &NEW_BROWSER_PANEL),
         constant("VERSION", &env!("CARGO_PKG_VERSION")),

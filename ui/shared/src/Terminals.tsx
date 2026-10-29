@@ -20,7 +20,7 @@ const chord = (event: KeyboardEvent) =>
     .join("+");
 
 /** The holder fits the PTY to its pane; every other client draws it at the holder's size, cropped and scrollable. */
-function Term(props: { at: TaskRef; panel: Panel; visible: boolean }) {
+function Term(props: { at: TaskRef; panel: Panel; visible: boolean; resumable: boolean }) {
   let host!: HTMLDivElement;
   const session = terminalSession({ at: props.at, panel: () => props.panel, shown: () => props.visible });
   const { xterm, mine } = session;
@@ -69,6 +69,15 @@ function Term(props: { at: TaskRef; panel: Panel; visible: boolean }) {
           <span class="spacer" />
           <button class="btn live" onClick={session.take}>
             Take over
+          </button>
+        </div>
+      </Show>
+      <Show when={props.resumable}>
+        <div class="readonly">
+          <span>The agent has ended</span>
+          <span class="spacer" />
+          <button class="btn live" onClick={() => act(backend.taskFocus(props.at))}>
+            Resume
           </button>
         </div>
       </Show>
@@ -182,7 +191,14 @@ function Stack(props: { key: string }) {
             <For each={panels().map((panel) => panel.id)}>
               {(id) => (
                 <Show when={panels().find((panel) => panel.id === id)}>
-                  {(panel) => <Term at={open().at} panel={panel()} visible={shown() && selected()?.id === id} />}
+                  {(panel) => (
+                    <Term
+                      at={open().at}
+                      panel={panel()}
+                      visible={shown() && selected()?.id === id}
+                      resumable={open().live && panel().name === AGENT_PANEL && !panel().running}
+                    />
+                  )}
                 </Show>
               )}
             </For>

@@ -36,6 +36,8 @@ export const backend = {
   serverOffer: (server: string) => invoke<ShownOffer>(octopus("server_offer"), { server }),
   serverClients: (server: string) => invoke<PairedClient[]>(octopus("server_clients"), { server }),
   serverRevoke: (server: string, client: string) => invoke<void>(octopus("server_revoke"), { server, client }),
+  /** Resyncs every connected server, rejecting with each one's problem. */
+  serversRefresh: () => invoke<void>(octopus("servers_refresh")),
   /** Renames the server in this client's list only. */
   serverRename: (server: string, name: string) => invoke<void>(octopus("server_rename"), { server, name }),
   /** Forgets the server in this client's list only. */

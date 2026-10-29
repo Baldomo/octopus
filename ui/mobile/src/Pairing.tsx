@@ -4,6 +4,7 @@ import { createEffect, createResource, createSignal, on, onCleanup, Show } from 
 import { backend } from "@octopus/shared/backend.ts";
 import { me, report, setMe } from "@octopus/shared/state.ts";
 import { shortKey } from "./format";
+import { feel } from "./feel";
 import { Icon } from "./Icon";
 import { back, go, home, openSheet, screen } from "./nav";
 import { Bar, Circle, Field, Flab, Gap, Id, Mi, Note, Para, Primary, Secondary } from "./parts";
@@ -142,9 +143,13 @@ export function PairSheet(props: { invite: string }) {
         recheckNamed();
         const kept = name().trim();
         if (kept !== "" && kept !== paired) await backend.serverRename(paired, kept).catch(report);
+        feel("success");
         home();
       })
-      .catch((error) => setProblem(String(error)))
+      .catch((error) => {
+        feel("error");
+        setProblem(String(error));
+      })
       .finally(() => setPairing(false));
   };
   return (

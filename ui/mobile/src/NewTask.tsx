@@ -3,6 +3,7 @@ import { backend } from "@octopus/shared/backend.ts";
 import { CHECKOUTS, TASK_STATES, type Checkout, type TaskState, type WorkspaceRef } from "@octopus/shared/generated.ts";
 import { model, openView, report, serverLabel, serverView } from "@octopus/shared/state.ts";
 import { keepInView } from "@octopus/shared/keepInView.ts";
+import { feel } from "./feel";
 import { Icon } from "./Icon";
 import { openTask, showInSheet } from "./nav";
 import { Field, Flab, Gap, Para, Secondary, sectionColor, Seg } from "./parts";
@@ -55,7 +56,10 @@ export function NewTask(props: { section: string | null }) {
         harness: harness().trim(),
         session: session().trim() === "" ? null : session().trim(),
       })
-      .then((key) => openTask(key, { server: target.server, task: key.slice(key.lastIndexOf("/") + 1) }), report)
+      .then((key) => {
+        feel("success");
+        openTask(key, { server: target.server, task: key.slice(key.lastIndexOf("/") + 1) });
+      }, report)
       .finally(() => setCreating(false));
   };
   const parentTitle = () => parents().find((view) => view.task.id === parent())?.task.title ?? "none";
@@ -69,7 +73,7 @@ export function NewTask(props: { section: string | null }) {
             No server lists a workspace yet. Add one with <b>+ workspace</b> at the end of Tasks.
           </Para>
           <Gap n={3} />
-          <Secondary tap={() => showInSheet({ is: "addws" })}>Add a workspace</Secondary>
+          <Secondary tap={() => showInSheet({ is: "addws" }, "deeper")}>Add a workspace</Secondary>
           <Gap n={2} />
         </Sheet>
       }
@@ -94,7 +98,10 @@ export function NewTask(props: { section: string | null }) {
                 class="chip"
                 role="button"
                 classList={{ on: workspaceKey(option) === workspace(), off: !serverView(option.server)?.reachable }}
-                onClick={() => setWorkspace(workspaceKey(option))}
+                onClick={() => {
+                  if (workspaceKey(option) !== workspace()) feel("select");
+                  setWorkspace(workspaceKey(option));
+                }}
               >
                 <i class="dot srv" style={{ background: sectionColor(option.name) }} />
                 {option.name} · {serverLabel(option.server)}

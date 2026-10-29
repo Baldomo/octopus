@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { cancel, Format, scan } from "@tauri-apps/plugin-barcode-scanner";
+import type { Feel } from "./feel";
 
 const INVITE = "octopus://";
 
@@ -18,6 +19,10 @@ export const phone = {
   browse: (server: string, url: string) => invoke<Page>("phone_browse", { server, url }),
   /** Lets go of the shown page's tunnel. */
   unbrowse: () => invoke<void>("phone_unbrowse"),
+  /** Whether the system back pops the page's top screen or sheet, which Android then hands to the page. */
+  backPops: (pops: boolean) => invoke<void>("phone_back_pops", { pops }),
+  /** Plays a haptic as the OS's own. */
+  feel: (feel: Feel) => invoke<void>("phone_feel", { feel }),
   /** Opens this app's page of the OS's settings, where a denied microphone is granted. */
   settings: () => invoke<void>("phone_settings"),
 };

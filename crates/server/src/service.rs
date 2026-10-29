@@ -22,10 +22,11 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
 
-use crate::pty::{Attachment, INITIAL_SIZE, Pty};
-use crate::{lock, report};
+use crate::pty::{Activity, Attachment, INITIAL_SIZE, Pty};
+use crate::{lock, now, report};
 
-/// Bumped whenever a request or reply changes shape; a server refuses a host that speaks another.
+/// Bumped whenever an existing request or reply changes shape; a server refuses a host that speaks another. A host
+/// older than a request added since refuses that request.
 const PROTOCOL: u32 = 1;
 const HOST_START: Duration = Duration::from_secs(5);
 const HOST_START_POLL: Duration = Duration::from_millis(5);
@@ -50,6 +51,7 @@ enum HostRequest {
     Terminate { id: PtyId },
     Forget { id: PtyId },
     WaitExit { id: PtyId },
+    Activity { id: PtyId },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -168,6 +170,11 @@ async fn answer<R: AsyncRead + Unpin>(
                 _ = read.read(&mut probe) => {}
             }
             Ok((Value::Null, Then::Close))
+        }
+        HostRequest::Activity { id } => {
+            let pty = find(terminals, &id)?;
+            let activity = tokio::task::spawn_blocking(move || pty.activity()).await.map_err(Error::internal)??;
+            Ok((serde_json::to_value(activity).map_err(Error::internal)?, Then::Close))
         }
     }
 }
@@ -326,7 +333,8 @@ pub struct Terminal {
 
 /// The lock holder and the size it set change together, so every client sees a size its holder chose. `viewers`
 /// counts each client's open data streams of the terminal, and `shows` how many it ever opened, so a grace that
-/// started before a client showed the terminal again frees nothing.
+/// started before a client showed the terminal again frees nothing. `unshown_at` is when the last viewer left, or
+/// when the server took the terminal.
 #[derive(Clone)]
 pub struct Screen {
     pub holder: Option<String>,
@@ -334,12 +342,20 @@ pub struct Screen {
     pub rows: u16,
     viewers: HashMap<String, usize>,
     shows: HashMap<String, u64>,
+    unshown_at: i64,
 }
 
 impl Terminal {
     pub fn new(id: PtyId, host: Arc<HostClient>, running: bool) -> Self {
         let (cols, rows) = INITIAL_SIZE;
-        let screen = Mutex::new(Screen { holder: None, cols, rows, viewers: HashMap::new(), shows: HashMap::new() });
+        let screen = Mutex::new(Screen {
+            holder: None,
+            cols,
+            rows,
+            viewers: HashMap::new(),
+            shows: HashMap::new(),
+            unshown_at: now(),
+        });
         Self { id, host, running: AtomicBool::new(running), screen, input: Mutex::new(None) }
     }
 
@@ -403,6 +419,15 @@ impl Terminal {
                 screen.viewers.remove(client);
             }
         }
+        if screen.viewers.is_empty() {
+            screen.unshown_at = now();
+        }
+    }
+
+    /// Since when no client shows the terminal, or `None` while one does.
+    pub fn unshown_since(&self) -> Option<i64> {
+        let screen = lock(&self.screen);
+        screen.viewers.is_empty().then_some(screen.unshown_at)
     }
 
     pub fn holds(&self, client: &str) -> bool {
@@ -488,6 +513,10 @@ impl Terminal {
     pub fn reset_size(&self) -> Result<(), Error> {
         let (cols, rows) = INITIAL_SIZE;
         self.host.call(&HostRequest::Resize { id: self.id.clone(), cols, rows })
+    }
+
+    pub fn activity(&self) -> Result<Activity, Error> {
+        self.host.call(&HostRequest::Activity { id: self.id.clone() })
     }
 
     pub fn terminate(&self) -> Result<(), Error> {

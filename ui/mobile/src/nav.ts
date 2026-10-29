@@ -1,7 +1,8 @@
-import { createSignal } from "solid-js";
+import { createEffect, createRoot, createSignal } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import type { TaskRef } from "@octopus/shared/generated.ts";
-import { act, openTask as markOpened } from "@octopus/shared/state.ts";
+import { act, openTask as markOpened, report } from "@octopus/shared/state.ts";
+import { phone } from "./phone";
 
 /** A full screen the stack pushes; Tasks is its root. */
 export type Screen =
@@ -25,7 +26,11 @@ export type Sheet =
   | { is: "addws" }
   | { is: "newtask"; section: string | null };
 
-type Entry = { screen: Screen } | { sheet: Sheet };
+/** Where a page shown in a sheet in place of another goes: a level deeper, back up one, or nowhere, as its same page. */
+export type Toward = "deeper" | "back" | "here";
+
+type SheetEntry = { sheet: Sheet; toward: Toward };
+type Entry = { screen: Screen } | SheetEntry;
 
 /**
  * The screens and sheets shown, root first. Each entry past the root has its own history entry, so the OS's back
@@ -35,26 +40,25 @@ const [entries, setEntries] = createSignal<Entry[]>([{ screen: { at: "tasks" } }
 
 export const screens = () => entries().flatMap((entry) => ("screen" in entry ? [entry.screen] : []));
 export const screen = () => screens().at(-1)!;
-export const sheet = () => {
+export const sheetEntry = (): SheetEntry | null => {
   const top = entries().at(-1)!;
-  return "sheet" in top ? top.sheet : null;
+  return "sheet" in top ? top : null;
 };
+export const sheet = () => sheetEntry()?.sheet ?? null;
 
 const push = (entry: Entry) => {
   history.pushState(entries().length, "");
   setEntries((shown) => [...shown, entry]);
 };
 
-/**
- * Each history entry holds the index of its top entry, so a jump back any number of entries lands on its own. A step
- * forward, which iOS's edge swipe offers, finds no entry left to show and steps back again.
- */
+/** Each history entry holds the index of its top entry, so a jump back any number of entries lands on its own. */
 addEventListener("popstate", (event) => {
   const index = (event.state as number | null) ?? 0;
-  const top = entries().length - 1;
-  if (index > top) return history.go(top - index);
   setEntries((shown) => shown.slice(0, index + 1));
 });
+
+/** The OS's back pops the top entry while there is one past the root, and leaves the app from the root. */
+createRoot(() => createEffect(() => phone.backPops(entries().length > 1).catch(report)));
 
 export const back = () => history.back();
 
@@ -65,12 +69,13 @@ export function go(screen: Screen) {
 }
 
 export function openSheet(sheet: Sheet) {
-  if ("sheet" in entries().at(-1)!) return showInSheet(sheet);
-  push({ sheet });
+  if ("sheet" in entries().at(-1)!) return showInSheet(sheet, "deeper");
+  push({ sheet, toward: "here" });
 }
 
 /** Shows another page in the sheet that is up, without a history entry of its own. */
-export const showInSheet = (sheet: Sheet) => setEntries((shown) => [...shown.slice(0, -1), { sheet }]);
+export const showInSheet = (sheet: Sheet, toward: Toward) =>
+  setEntries((shown) => [...shown.slice(0, -1), { sheet, toward }]);
 
 /** Pops every screen and sheet back to Tasks. */
 export function home() {

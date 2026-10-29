@@ -1,10 +1,11 @@
 import { createResource, createSignal, For, Match, Show, Switch } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import { aboutCopy, APPEARANCES } from "@octopus/shared/ClientMenu.tsx";
-import { VERSION, type ShownOffer } from "@octopus/shared/generated.ts";
+import { VERSION, ZOOMS, type ShownOffer } from "@octopus/shared/generated.ts";
 import { clientStatus, clock, expiry, grouped, inviteCode, ticking } from "@octopus/shared/SidebarControls.tsx";
 import { me, report, serverView, servers, setAppearance, ui, zoom } from "@octopus/shared/state.ts";
 import { host, shortKey } from "./format";
+import { feel } from "./feel";
 import { Icon } from "./Icon";
 import { go, showInSheet } from "./nav";
 import { Chev, Gap, Gl, Id, Mi, Seg, Sep, ServerDot, Why } from "./parts";
@@ -12,12 +13,19 @@ import { Rename } from "./Rename";
 import { Sheet, SheetHead } from "./Sheet";
 import { notify } from "./Toast";
 
-const toMenu = () => showInSheet({ is: "client" });
+const toMenu = () => showInSheet({ is: "client" }, "back");
 
 /** A private IPv4 address, the one a server's header names as its LAN. */
 const LAN = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
 
 const rtt = (ms: number | null) => `${ms ?? "–"} ms`;
+
+/** Each zoom step ticks, and a step past the end gives the OS's warning instead. */
+const step = (to: "in" | "out") => {
+  const at = (ZOOMS as readonly number[]).indexOf(ui.prefs.zoom);
+  feel((to === "in" ? at === ZOOMS.length - 1 : at === 0) ? "warning" : "select");
+  zoom(to);
+};
 
 /** The client menu: this phone's servers, then its appearance, zoom and version. */
 export function ClientMenu() {
@@ -37,7 +45,7 @@ export function ClientMenu() {
                 <Chev />
               </>
             }
-            tap={() => showInSheet({ is: "server", name: server.name })}
+            tap={() => showInSheet({ is: "server", name: server.name }, "deeper")}
           >
             {server.label}
           </Mi>
@@ -57,11 +65,11 @@ export function ClientMenu() {
         slot={<Icon name="zoom" />}
         end={
           <div class="stepper">
-            <span role="button" aria-label="Zoom out" onClick={() => zoom("out")}>
+            <span role="button" aria-label="Zoom out" onClick={() => step("out")}>
               <Icon name="minus" />
             </span>
             <output>{ui.prefs.zoom}%</output>
-            <span role="button" aria-label="Zoom in" onClick={() => zoom("in")}>
+            <span role="button" aria-label="Zoom in" onClick={() => step("in")}>
               <Icon name="plus" />
             </span>
           </div>
@@ -112,10 +120,18 @@ export function ServerMenu(props: { name: string }) {
           if (error.name !== "AbortError") report(error);
         })
       : copyInvite(invite);
-  const revoke = (client: string) => backend.serverRevoke(props.name, client).then(refetch, report);
+  const revoke = (client: string) =>
+    backend.serverRevoke(props.name, client).then(() => {
+      feel("success");
+      refetch();
+    }, report);
   const rename = (name: string) =>
-    backend.serverRename(props.name, name).then(() => showInSheet({ is: "server", name }));
-  const forget = () => backend.serverForget(props.name).then(toMenu, report);
+    backend.serverRename(props.name, name).then(() => showInSheet({ is: "server", name }, "here"));
+  const forget = () =>
+    backend.serverForget(props.name).then(() => {
+      feel("success");
+      toMenu();
+    }, report);
   const head = (lines: string[], up: () => void) => <SheetHead title={props.name} facts={lines} back={up} />;
   return (
     <Sheet>
@@ -205,7 +221,14 @@ export function ServerMenu(props: { name: string }) {
           <Show
             when={mode() === "forget"}
             fallback={
-              <Mi slot={<Icon name="x" />} danger tap={() => setMode("forget")}>
+              <Mi
+                slot={<Icon name="x" />}
+                danger
+                tap={() => {
+                  feel("warning");
+                  setMode("forget");
+                }}
+              >
                 Forget server
               </Mi>
             }

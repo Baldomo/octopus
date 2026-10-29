@@ -17,9 +17,6 @@ pub fn apply_move(task: &mut TaskRow, to: TaskState, now: i64) -> MoveEffect {
     task.state = to;
     task.ended_at = ended_at(to, now);
     task.archived_at = None;
-    if !from.is_live() && to.is_live() {
-        task.focused_at = None;
-    }
     if from.is_live() && !to.is_live() { MoveEffect::StopProcesses } else { MoveEffect::Nothing }
 }
 
@@ -40,7 +37,6 @@ mod tests {
             session: None,
             directory: "/w".into(),
             branch: None,
-            focused_at: Some(1),
             ended_at: ended_at(state, 1),
             archived_at: None,
             rev: 0,
@@ -52,15 +48,15 @@ mod tests {
         let stop = MoveEffect::StopProcesses;
         let none = MoveEffect::Nothing;
         let table = [
-            ("live -> live", TaskState::Pinned, TaskState::Temporary, Some(1), None, none),
-            ("live -> ended", TaskState::Pinned, TaskState::Completed, Some(1), Some(9), stop),
-            ("ended -> ended", TaskState::Completed, TaskState::Cancelled, Some(1), Some(9), none),
-            ("ended -> live", TaskState::Cancelled, TaskState::Pinned, None, None, none),
+            ("live -> live", TaskState::Pinned, TaskState::Temporary, None, none),
+            ("live -> ended", TaskState::Pinned, TaskState::Completed, Some(9), stop),
+            ("ended -> ended", TaskState::Completed, TaskState::Cancelled, Some(9), none),
+            ("ended -> live", TaskState::Cancelled, TaskState::Pinned, None, none),
         ];
-        for (name, from, to, focused_at, ended_at, effect) in table {
+        for (name, from, to, ended_at, effect) in table {
             let mut row = task(from);
             assert_eq!(apply_move(&mut row, to, 9), effect, "{name}");
-            assert_eq!((row.state, row.focused_at, row.ended_at), (to, focused_at, ended_at), "{name}");
+            assert_eq!((row.state, row.ended_at), (to, ended_at), "{name}");
         }
     }
 }

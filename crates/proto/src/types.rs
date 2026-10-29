@@ -332,7 +332,6 @@ impl Arg for AgentStatus {
 pub enum Agent {
     NotStarted,
     Running { status: AgentStatus },
-    Exited,
     HarnessNotInstalled { install: String },
     HarnessUnknown,
 }
@@ -350,7 +349,6 @@ pub struct Task {
     pub session: Option<SessionId>,
     pub directory: String,
     pub branch: Option<String>,
-    pub focused_at: Option<i64>,
     pub ended_at: Option<i64>,
     pub archived_at: Option<i64>,
     pub rev: u64,

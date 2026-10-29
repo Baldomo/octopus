@@ -3,6 +3,7 @@ import { backend } from "@octopus/shared/backend.ts";
 import { HUES, TONES, type Section, type Swatch } from "@octopus/shared/generated.ts";
 import { act, model, report, serverLabel, serverView, servers } from "@octopus/shared/state.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
+import { feel } from "./feel";
 import { Icon } from "./Icon";
 import { back, go, screen, showInSheet } from "./nav";
 import { Chev, Field, Flab, Gap, Mi, Note, Path, Sep, ServerDot, Why } from "./parts";
@@ -26,7 +27,10 @@ function Matrix(props: { on: Swatch | null; auto: Swatch | undefined; pick: (swa
                   aria-label={`${hue} ${tone}`}
                   classList={{ on: same(props.on, swatch), auto: same(props.auto, swatch) }}
                   style={{ "--c": swatchColor(swatch) }}
-                  onClick={() => props.pick(same(props.auto, swatch) ? null : swatch)}
+                  onClick={() => {
+                    feel("select");
+                    props.pick(same(props.auto, swatch) ? null : swatch);
+                  }}
                 />
               );
             }}
@@ -61,7 +65,7 @@ export function SectionMenu(props: { name: string }) {
                 </span>
               ))}
             />
-            <Mi slot={<Icon name="plus" />} tap={() => showInSheet({ is: "newtask", section: shown().name })}>
+            <Mi slot={<Icon name="plus" />} tap={() => showInSheet({ is: "newtask", section: shown().name }, "deeper")}>
               New task here
             </Mi>
             <Mi
@@ -108,7 +112,12 @@ export function SectionMenu(props: { name: string }) {
                     off={why() !== null}
                     danger={why() === null}
                     end={<Show when={why()}>{(shownWhy) => <Why>{shownWhy()}</Why>}</Show>}
-                    tap={() => backend.workspaceRemove(workspace.server, workspace.workspace).then(back, report)}
+                    tap={() =>
+                      backend.workspaceRemove(workspace.server, workspace.workspace).then(() => {
+                        feel("success");
+                        back();
+                      }, report)
+                    }
                   >
                     Remove from {serverLabel(workspace.server)}
                   </Mi>
@@ -144,10 +153,18 @@ export function AddWorkspace() {
       !ABSOLUTE.test(root().trim()) && "an absolute root",
       serverView(server())?.reachable !== true && "a reachable server",
     ].filter(Boolean);
-    if (missing.length > 0) return setProblem(`Needs ${missing.join(" and ")}.`);
-    backend
-      .workspaceAdd(server(), name().trim(), root().trim(), picked())
-      .then(back, (error) => setProblem(String(error)));
+    const refuse = (problem: string) => {
+      feel("error");
+      setProblem(problem);
+    };
+    if (missing.length > 0) return refuse(`Needs ${missing.join(" and ")}.`);
+    backend.workspaceAdd(server(), name().trim(), root().trim(), picked()).then(
+      () => {
+        feel("success");
+        back();
+      },
+      (error) => refuse(String(error)),
+    );
   };
   return (
     <Sheet style={{ "--ws": color(), "--focus": "var(--ws)" }}>
@@ -168,7 +185,11 @@ export function AddWorkspace() {
               class="chip"
               role="button"
               classList={{ on: shown.name === server(), off: !shown.reachable }}
-              onClick={() => shown.reachable && setServer(shown.name)}
+              onClick={() => {
+                if (!shown.reachable || shown.name === server()) return;
+                feel("select");
+                setServer(shown.name);
+              }}
             >
               <ServerDot server={shown} />
               {shown.label}

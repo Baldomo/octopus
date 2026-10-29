@@ -1,15 +1,17 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nix::unistd::Pid;
 use octopus_proto::Error;
 use portable_pty::{CommandBuilder, MasterPty, PtyPair, PtySize, native_pty_system};
+use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, watch};
 
-use crate::{lock, report};
+use crate::{lock, now, report};
 
 const SCROLLBACK_BYTES: usize = 1 << 20;
 const LIVE_CHUNKS: usize = 1024;
@@ -39,7 +41,19 @@ pub struct Pty {
     /// the reap, narrowing the window for a signal to reach a process that reuses the id.
     process: Mutex<Option<Pid>>,
     output: Mutex<Output>,
+    /// When the terminal last wrote output, or started.
+    output_at: AtomicI64,
     exited: watch::Sender<bool>,
+}
+
+/// What tells whether a terminal's program is still at work.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Activity {
+    pub output_at: i64,
+    /// Whether a process descending from the program runs outside the program's process group, as a shell an agent
+    /// starts for a command does; the processes of the agent itself, such as its MCP servers, stay in its group.
+    pub detached_descendant: bool,
 }
 
 fn size(cols: u16, rows: u16) -> PtySize {
@@ -64,6 +78,7 @@ impl Pty {
             master: Mutex::new(Some(pair.master)),
             process: Mutex::new(Some(child)),
             output: Mutex::new(Output { scrollback: VecDeque::new(), live: Some(live) }),
+            output_at: AtomicI64::new(now()),
             exited: watch::Sender::new(false),
         });
         let (pump, reaper) = (Arc::clone(&pty), Arc::clone(&pty));
@@ -79,6 +94,7 @@ impl Pty {
                 break;
             }
             let chunk = &buffer[..read];
+            self.output_at.store(now(), Ordering::Relaxed);
             let mut output = lock(&self.output);
             output.scrollback.extend(chunk.iter());
             let excess = output.scrollback.len().saturating_sub(SCROLLBACK_BYTES);
@@ -109,6 +125,37 @@ impl Pty {
 
     pub fn running(&self) -> bool {
         !*self.exited.borrow()
+    }
+
+    /// Reads the process table, so it blocks.
+    pub fn activity(&self) -> Result<Activity, Error> {
+        let program = (*lock(&self.process)).ok_or_else(|| Error::conflict("the terminal has exited"))?;
+        let table = std::process::Command::new("ps")
+            .args(["-A", "-o", "pid=,ppid=,pgid="])
+            .output()
+            .map_err(|error| Error::internal(format!("ps: {error}")))?;
+        if !table.status.success() {
+            return Err(Error::internal(format!("ps: {}", table.status)));
+        }
+        let mut children: HashMap<i32, Vec<(i32, i32)>> = HashMap::new();
+        for line in String::from_utf8_lossy(&table.stdout).lines() {
+            if let [Ok(pid), Ok(parent), Ok(group)] =
+                line.split_whitespace().map(str::parse::<i32>).collect::<Vec<_>>()[..]
+            {
+                children.entry(parent).or_default().push((pid, group));
+            }
+        }
+        let mut pending = vec![program.as_raw()];
+        let mut detached_descendant = false;
+        while let Some(parent) = pending.pop()
+            && !detached_descendant
+        {
+            for &(pid, group) in children.get(&parent).into_iter().flatten() {
+                detached_descendant |= group != program.as_raw();
+                pending.push(pid);
+            }
+        }
+        Ok(Activity { output_at: self.output_at.load(Ordering::Relaxed), detached_descendant })
     }
 
     pub async fn exit(&self) {

@@ -84,6 +84,11 @@ pub async fn server_revoke(hub: Hubbed<'_>, server: String, client: String) -> R
 }
 
 #[tauri::command]
+pub async fn servers_refresh(hub: Hubbed<'_>) -> Result<(), String> {
+    hub.refresh().await
+}
+
+#[tauri::command]
 pub fn server_rename(hub: Hubbed, server: String, name: String) -> Result<(), String> {
     hub.rename_server(&server, &name).map_err(|error| format!("{error:#}"))
 }

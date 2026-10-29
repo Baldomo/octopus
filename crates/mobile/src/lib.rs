@@ -5,6 +5,7 @@ mod app;
 mod browser;
 mod client_menu;
 mod device;
+mod feel;
 #[cfg(target_os = "ios")]
 mod webview;
 

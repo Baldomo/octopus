@@ -1,10 +1,13 @@
-import { createEffect, createMemo, For, on, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, For, on, onCleanup, Show } from "solid-js";
 import { keepInView } from "@octopus/shared/keepInView.ts";
 import { Rendered } from "@octopus/shared/Rendered.tsx";
 import { act, scale, model, ui } from "@octopus/shared/state.ts";
 import { filesOf, join, loadMonaco, nameOf, renderable, tabHints, type TaskFiles } from "@octopus/shared/taskFiles.ts";
 import { colors, scheme, token } from "@octopus/shared/tokens.ts";
+import { animateList } from "./flip";
+import { slidingThumb } from "./thumb";
 import { Icon } from "./Icon";
+import { onPainted } from "./motion";
 import { back, go } from "./nav";
 import { Circle, Id, sectionColor, Slot } from "./parts";
 
@@ -25,6 +28,7 @@ function Tree(props: { files: TaskFiles; taskKey: string; dir: string; depth: nu
             <>
               <div
                 class="tree dir"
+                data-key={path}
                 classList={{ closed: !expanded() }}
                 style={{ "--d": props.depth }}
                 role="button"
@@ -45,6 +49,7 @@ function Tree(props: { files: TaskFiles; taskKey: string; dir: string; depth: nu
         return (
           <div
             class="tree file"
+            data-key={path}
             classList={{ unsaved: dirty() }}
             style={{ "--d": props.depth }}
             role="button"
@@ -88,7 +93,7 @@ export function Files(props: { taskKey: string }) {
               </div>
               <Circle icon="search" label="Search" tap={() => go({ at: "search" })} />
             </div>
-            <div class="cards">
+            <div class="cards" ref={animateList(".tree")}>
               <Tree files={files} taskKey={props.taskKey} dir="." depth={0} />
             </div>
           </>
@@ -144,7 +149,7 @@ function Code(props: { files: TaskFiles; path: string }) {
   let host!: HTMLDivElement;
   let editor: Editor | undefined;
   let gone = false;
-  onMount(() =>
+  onPainted(() =>
     phoneThemes().then((monaco) => {
       if (gone) return;
       editor = monaco.editor.create(host, {
@@ -244,7 +249,7 @@ export function EditorScreen(props: { taskKey: string }) {
                     </button>
                   </Show>
                 </div>
-                <div class="tabs scroll">
+                <div class="tabs scroll" ref={slidingThumb}>
                   <For each={files.state.tabs}>
                     {(tab) => (
                       <span

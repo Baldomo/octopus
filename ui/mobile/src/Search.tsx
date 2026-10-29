@@ -4,6 +4,7 @@ import type { Appearance } from "@octopus/shared/generated.ts";
 import { act, model, setAppearance, ui } from "@octopus/shared/state.ts";
 import { filesOf, nameOf } from "@octopus/shared/taskFiles.ts";
 import { Icon } from "./Icon";
+import { onPainted } from "./motion";
 import { back, go, openSheet, openTask } from "./nav";
 import { Gap, Gl, Glyph, Id, Mi, Para } from "./parts";
 
@@ -26,6 +27,8 @@ export function Search() {
   const opened = () => (ui.prefs.open === null ? undefined : model.tasks[ui.prefs.open]);
   const matches = fileMatches(() => opened()?.at, query, MATCHED_LINES);
   const paths = () => [...new Set(matches().map((match) => match.path))].slice(0, PER_GROUP);
+  let field!: HTMLInputElement;
+  onPainted(() => field.focus({ preventScroll: true }));
 
   const tasks = (): Result[] =>
     needle() === ""
@@ -87,7 +90,7 @@ export function Search() {
             autocapitalize="off"
             autocorrect="off"
             enterkeyhint="search"
-            ref={(input) => requestAnimationFrame(() => input.focus())}
+            ref={field}
             onInput={(event) => setQuery(event.currentTarget.value)}
           />
         </label>

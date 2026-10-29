@@ -1,13 +1,19 @@
-import { impactFeedback } from "@tauri-apps/plugin-haptics";
+import { feel } from "./feel";
+import { COMMIT_PX, keepTouch } from "./touch";
 
 const LONG_PRESS_MS = 450;
-/** A finger that moves further than this is scrolling, not pressing; after a lift, it is dragging. */
-const PRESS_SLOP_PX = 10;
 
 export type Point = { x: number; y: number };
 
 /** An element lifted under a held finger: moving the finger drags it, and lifting the finger drops it. */
 export type Lift = { move: (to: Point) => void; drop: () => void; cancel: () => void };
+
+/** Every press under a finger, which a gesture that takes the finger over ends. */
+const presses = new Set<() => void>();
+export const cancelPresses = () => {
+  for (const cancel of presses) cancel();
+  presses.clear();
+};
 
 /**
  * A tap runs `tap`, and holding a finger still ticks and runs `hold`. Where `lift` lifts the held element, the hold
@@ -22,14 +28,18 @@ export function pressed(tap: () => void, hold: () => void, lift?: (element: HTML
       let timer: ReturnType<typeof setTimeout> | undefined;
       /** The finger pressing and where it touched down; any other finger leaves the press to it. */
       let finger: { id: number; from: Point } | null = null;
-      let held = false;
       let lifted: Lift | null = null;
       let dragging = false;
       const reset = () => {
+        presses.delete(cancel);
         clearTimeout(timer);
         finger = null;
         lifted = null;
         dragging = false;
+      };
+      const cancel = () => {
+        lifted?.cancel();
+        reset();
       };
       const ours = (touches: TouchList) => [...touches].find((touch) => touch.identifier === finger?.id);
       element.addEventListener(
@@ -38,12 +48,12 @@ export function pressed(tap: () => void, hold: () => void, lift?: (element: HTML
           const touch = event.changedTouches[0];
           if (event.touches.length > 1 || touch === undefined) return;
           reset();
-          held = false;
           const from = { x: touch.clientX, y: touch.clientY };
           finger = { id: touch.identifier, from };
+          presses.add(cancel);
           timer = setTimeout(() => {
-            held = true;
-            void impactFeedback("medium");
+            keepTouch();
+            feel("lift");
             lifted = lift?.(element, from) ?? null;
             if (lifted === null) hold();
           }, LONG_PRESS_MS);
@@ -56,21 +66,19 @@ export function pressed(tap: () => void, hold: () => void, lift?: (element: HTML
           const touch = ours(event.touches);
           if (finger === null || touch === undefined) return;
           const to = { x: touch.clientX, y: touch.clientY };
-          const far = Math.hypot(to.x - finger.from.x, to.y - finger.from.y) > PRESS_SLOP_PX;
+          const far = Math.hypot(to.x - finger.from.x, to.y - finger.from.y) >= COMMIT_PX;
           if (lifted === null) {
             if (far) reset();
             return;
           }
           event.preventDefault();
           dragging ||= far;
-          if (dragging) lifted.move(to);
+          lifted.move(to);
         },
         { passive: lift === undefined },
       );
       element.addEventListener("touchend", (event) => {
         if (ours(event.changedTouches) === undefined) return;
-        // The click a hold's lift synthesizes would land on whatever the hold opened under the finger.
-        if (held) event.preventDefault();
         if (lifted !== null && dragging) lifted.drop();
         else if (lifted !== null) {
           lifted.cancel();
@@ -80,10 +88,9 @@ export function pressed(tap: () => void, hold: () => void, lift?: (element: HTML
       });
       element.addEventListener("touchcancel", (event) => {
         if (ours(event.changedTouches) === undefined) return;
-        lifted?.cancel();
-        reset();
+        cancel();
       });
-      element.addEventListener("click", () => held || tap());
+      element.addEventListener("click", tap);
       element.addEventListener("contextmenu", (event) => event.preventDefault());
     },
   };

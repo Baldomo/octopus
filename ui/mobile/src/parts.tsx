@@ -2,7 +2,10 @@ import { For, Show, type JSX } from "solid-js";
 import type { Glyph as Status, ServerView } from "@octopus/shared/generated.ts";
 import { model } from "@octopus/shared/state.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
+import { feel } from "./feel";
 import { Icon, type IconName } from "./Icon";
+import { onPainted } from "./motion";
+import { slidingThumb } from "./thumb";
 
 /** The color of the section named `name`, faint while the model lists none by that name. */
 export const sectionColor = (name: string | undefined) => {
@@ -115,7 +118,7 @@ export const Note = (props: { children: JSX.Element; err?: boolean }) => (
 );
 export const Gap = (props: { n: 1 | 2 | 3 | 4 | 5 }) => <div class={`sp${props.n}`} />;
 
-/** A segmented control, the current segment on the surface. */
+/** A segmented control, the current segment on the surface under a thumb that slides to each choice. */
 export function Seg<T extends string>(props: {
   options: readonly (readonly [T, string])[];
   value: T;
@@ -123,10 +126,17 @@ export function Seg<T extends string>(props: {
   wide?: boolean;
 }) {
   return (
-    <div class="seg" classList={{ wide: props.wide }}>
+    <div class="seg" classList={{ wide: props.wide }} ref={slidingThumb}>
       <For each={props.options}>
         {([value, label]) => (
-          <span role="button" classList={{ on: props.value === value }} onClick={() => props.choose(value)}>
+          <span
+            role="button"
+            classList={{ on: props.value === value }}
+            onClick={() => {
+              if (props.value !== value) feel("select");
+              props.choose(value);
+            }}
+          >
             {label}
           </span>
         )}
@@ -144,6 +154,8 @@ export function Field(props: {
   focus?: boolean;
   enter?: () => void;
 }) {
+  let input!: HTMLInputElement;
+  onPainted(() => props.focus && input.focus({ preventScroll: true }));
   return (
     <label class="field" classList={{ mono: props.mono }}>
       <input
@@ -155,7 +167,7 @@ export function Field(props: {
         autocorrect="off"
         autocomplete="off"
         enterkeyhint="done"
-        ref={(input) => props.focus && requestAnimationFrame(() => input.focus())}
+        ref={input}
         onInput={(event) => props.input(event.currentTarget.value)}
         onKeyDown={(event) => {
           if (event.key !== "Enter") return;

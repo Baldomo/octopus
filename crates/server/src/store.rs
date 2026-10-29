@@ -28,7 +28,6 @@ CREATE TABLE IF NOT EXISTS tasks (
     harness TEXT NOT NULL,
     directory TEXT NOT NULL,
     branch TEXT,
-    focused_at INTEGER,
     ended_at INTEGER,
     rev INTEGER NOT NULL
 );
@@ -58,6 +57,9 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("workspaces", "color", "TEXT NOT NULL DEFAULT 'auto'"),
 ];
 
+/// Columns a store from an earlier build holds and this build drops on its first open.
+const DROPPED_COLUMNS: &[(&str, &str)] = &[("tasks", "focused_at")];
+
 /// A task's terminal panel: its agent's, named `agent`, or a shell's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PanelRow {
@@ -78,7 +80,6 @@ pub struct TaskRow {
     pub session: Option<SessionId>,
     pub directory: String,
     pub branch: Option<String>,
-    pub focused_at: Option<i64>,
     pub ended_at: Option<i64>,
     pub archived_at: Option<i64>,
     pub rev: u64,
@@ -128,22 +129,27 @@ fn task_row(row: &Row) -> rusqlite::Result<TaskRow> {
         session: row.get::<_, Option<String>>("session")?.map(SessionId),
         directory: row.get("directory")?,
         branch: row.get("branch")?,
-        focused_at: row.get("focused_at")?,
         ended_at: row.get("ended_at")?,
         archived_at: row.get("archived_at")?,
         rev: row.get::<_, i64>("rev")?.cast_unsigned(),
     })
 }
 
-fn add_missing_columns(db: &Connection) -> rusqlite::Result<()> {
+fn has_column(db: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)", [table, column], |row| {
+        row.get(0)
+    })
+}
+
+fn migrate_columns(db: &Connection) -> rusqlite::Result<()> {
     for (table, column, kind) in ADDED_COLUMNS {
-        let present: bool = db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
-            [table, column],
-            |row| row.get(0),
-        )?;
-        if !present {
+        if !has_column(db, table, column)? {
             db.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"), [])?;
+        }
+    }
+    for (table, column) in DROPPED_COLUMNS {
+        if has_column(db, table, column)? {
+            db.execute(&format!("ALTER TABLE {table} DROP COLUMN {column}"), [])?;
         }
     }
     Ok(())
@@ -180,7 +186,7 @@ impl Store {
         owner_only(path).map_err(|error| Error::internal(format!("{}: {error}", path.display())))?;
         let db = Connection::open(path).map_err(Error::internal)?;
         db.execute_batch(SCHEMA).map_err(Error::internal)?;
-        add_missing_columns(&db).map_err(Error::internal)?;
+        migrate_columns(&db).map_err(Error::internal)?;
         adopt_agent_terminals(&db).map_err(Error::internal)?;
         Ok(Self { db })
     }
@@ -414,8 +420,8 @@ impl Store {
         let tx = self.db.transaction().map_err(Error::internal)?;
         row.rev = bump_rev(&tx)?;
         tx.execute(
-            "INSERT INTO tasks (id, workspace, parent, title, state, checkout, harness, session, directory, branch, focused_at, ended_at, archived_at, rev)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT INTO tasks (id, workspace, parent, title, state, checkout, harness, session, directory, branch, ended_at, archived_at, rev)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 row.id.0,
                 row.workspace.0,
@@ -427,7 +433,6 @@ impl Store {
                 row.session.as_ref().map(|session| &session.0),
                 row.directory,
                 row.branch,
-                row.focused_at,
                 row.ended_at,
                 row.archived_at,
                 row.rev.cast_signed()
@@ -465,14 +470,13 @@ impl Store {
         let tx = self.db.transaction().map_err(Error::internal)?;
         row.rev = bump_rev(&tx)?;
         tx.execute(
-            "UPDATE tasks SET title = ?2, state = ?3, session = ?4, focused_at = ?5, ended_at = ?6, archived_at = ?7,
-             rev = ?8 WHERE id = ?1",
+            "UPDATE tasks SET title = ?2, state = ?3, session = ?4, ended_at = ?5, archived_at = ?6, rev = ?7
+             WHERE id = ?1",
             params![
                 row.id.0,
                 row.title,
                 to_wire(&row.state),
                 row.session.as_ref().map(|session| &session.0),
-                row.focused_at,
                 row.ended_at,
                 row.archived_at,
                 row.rev.cast_signed()
@@ -557,8 +561,7 @@ impl Store {
         self.db.execute("DELETE FROM panels WHERE id = ?1", [&id.0]).map(drop).map_err(Error::internal)
     }
 
-    /// Deletes the panel rows the host lost and returns the rest, each task's in list order; a focused live task
-    /// left without an agent panel forgets its focus, so its next focus starts its agent again.
+    /// Deletes the panel rows the host lost and returns the rest, each task's in list order.
     pub fn reattach(&mut self, hosted: &HashSet<PtyId>) -> Result<Vec<PanelRow>, Error> {
         let tx = self.db.transaction().map_err(Error::internal)?;
         let rows: Vec<PanelRow> = tx
@@ -575,26 +578,6 @@ impl Store {
         for row in &gone {
             tx.execute("DELETE FROM panels WHERE id = ?1", [&row.id.0]).map_err(Error::internal)?;
         }
-        let live: Vec<String> = TaskState::ALL
-            .into_iter()
-            .filter(|state| state.is_live())
-            .map(|state| format!("'{}'", to_wire(&state)))
-            .collect();
-        let focused_live = format!(
-            "focused_at IS NOT NULL AND state IN ({}) AND id NOT IN (SELECT task FROM panels WHERE name = '{AGENT_PANEL}')",
-            live.join(", ")
-        );
-        let any: bool = tx
-            .query_row(&format!("SELECT EXISTS(SELECT 1 FROM tasks WHERE {focused_live})"), [], |row| row.get(0))
-            .map_err(Error::internal)?;
-        if any {
-            let rev = bump_rev(&tx)?;
-            tx.execute(
-                &format!("UPDATE tasks SET focused_at = NULL, rev = ?1 WHERE {focused_live}"),
-                [rev.cast_signed()],
-            )
-            .map_err(Error::internal)?;
-        }
         tx.commit().map_err(Error::internal)?;
         Ok(kept)
     }
@@ -605,7 +588,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_store_from_an_earlier_build_gains_the_columns_added_since() {
+    fn a_store_from_an_earlier_build_gains_and_drops_the_columns_changed_since() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("store.db");
         let earlier = Connection::open(&path).expect("open");
@@ -624,6 +607,7 @@ mod tests {
         let mut store = Store::open(&path).expect("open the earlier store");
         let task = store.task(&TaskId("tsk_1".into())).expect("its task");
         assert_eq!((task.archived_at, task.session), (None, None));
+        assert!(!has_column(&store.db, "tasks", "focused_at").expect("table info"), "the dropped column goes");
         assert_eq!(store.clients().expect("clients"), []);
         let agent = PanelRow { id: PtyId("pty_1".into()), task: TaskId("tsk_1".into()), name: AGENT_PANEL.into() };
         assert_eq!(store.reattach(&HashSet::from([agent.id.clone()])).expect("reattach"), [agent]);

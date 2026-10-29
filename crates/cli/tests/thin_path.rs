@@ -8,6 +8,7 @@ use octopus_proto::ops::{
 };
 use octopus_proto::types::{Agent, AgentStatus, Checkout, ENV_SERVER, ENV_TASK, SessionId, Stream, TaskId, TaskState};
 use octopus_proto::{Error, Op, Outcome};
+use octopus_server::{AGENT_RECLAIM_MS, now};
 use serde_json::json;
 
 async fn set_harness(connection: &Connection, id: &str, argv: Vec<String>, hooks: bool) {
@@ -75,8 +76,9 @@ async fn a_focused_task_runs_its_agent_terminal_end_to_end() {
     assert_eq!(partial, Outcome::Err(Error::MissingField { fields: missing }));
 
     laptop.call(&TaskMove { task: id.clone(), state: TaskState::Completed }).await.expect("task.move");
-    eventually("the agent exiting after its task completed", async || task(&laptop, &id).await.agent == Agent::Exited)
+    eventually("the agent exiting after its task completed", async || !task(&laptop, &id).await.panels[0].running)
         .await;
+    assert_eq!(task(&laptop, &id).await.agent, Agent::NotStarted);
     read_until(&mut desk.open_data_stream(&agent).await.expect("attach exited"), "ping").await;
 }
 
@@ -147,7 +149,7 @@ async fn a_missing_harness_runs_nothing_and_reports_its_install_command() {
     let missing = create(&laptop, &workspace, Checkout::Root, "claude-code").await;
     laptop.call(&TaskFocus { task: missing.clone() }).await.expect("focus");
     let view = task(&laptop, &missing).await;
-    assert_eq!((view.agent, view.focused_at), (Agent::HarnessNotInstalled { install }, None));
+    assert_eq!(view.agent, Agent::HarnessNotInstalled { install });
     assert!(view.panels.is_empty());
 
     let unknown = create(&laptop, &workspace, Checkout::Root, "aider").await;
@@ -203,7 +205,7 @@ async fn an_agent_outlives_a_restart_of_its_server_process() {
     let laptop = after.connect("laptop").await;
     let reattached = task(&laptop, &id).await;
     let ids = |panels: &[octopus_proto::types::Panel]| panels.iter().map(|panel| panel.id.clone()).collect::<Vec<_>>();
-    assert_eq!((reattached.focused_at, ids(&reattached.panels)), (view.focused_at, ids(&view.panels)));
+    assert_eq!(ids(&reattached.panels), ids(&view.panels));
     assert_eq!(reattached.agent, Agent::Running { status: AgentStatus::Idle });
     let mut replay = laptop.open_data_stream(&agent).await.expect("reattach");
     read_until(&mut replay, "before-restart").await;
@@ -220,12 +222,11 @@ async fn after_a_machine_restart_the_next_focus_starts_the_agent_again() {
     set_harness(&laptop, "echo", echo_agent("agent:up"), false).await;
     let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
     laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
-    assert!(task(&laptop, &id).await.focused_at.is_some());
 
     let after = start(dir.path(), "after.sock", "rebooted-host.sock").await;
     let laptop = connect(&after, "laptop").await;
     let forgotten = task(&laptop, &id).await;
-    assert_eq!((forgotten.focused_at, forgotten.agent, forgotten.panels), (None, Agent::NotStarted, vec![]));
+    assert_eq!((forgotten.agent, forgotten.panels), (Agent::NotStarted, vec![]));
     laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus after restart");
     assert_eq!(task(&laptop, &id).await.agent, Agent::Running { status: AgentStatus::Idle });
 }
@@ -304,7 +305,7 @@ async fn an_agent_that_ignores_sigterm_and_sighup_is_killed_after_the_grace() {
     laptop.call(&TaskMove { task: id.clone(), state: TaskState::Completed }).await.expect("complete");
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     assert_eq!(task(&laptop, &id).await.agent, Agent::Running { status: AgentStatus::Idle }, "SIGTERM is ignored");
-    eventually("the agent killed after the grace", async || task(&laptop, &id).await.agent == Agent::Exited).await;
+    eventually("the agent killed after the grace", async || task(&laptop, &id).await.agent == Agent::NotStarted).await;
 }
 
 /// Prints the agent's arguments after `args:`, then stays open.
@@ -335,6 +336,14 @@ async fn every_start_after_a_session_s_first_resumes_it() {
     let session = task(&laptop, &id).await.session.expect("the first start names a session");
     focus_prints(&laptop, &id, &format!("args: --session-id {}", session.0)).await;
 
+    let ctrl_c =
+        TermSend { task: id.clone(), panel: "agent".into(), text: "\u{3}".into(), enter: false, take_lock: true };
+    laptop.call(&ctrl_c).await.expect("ctrl-c");
+    eventually("the interrupted agent ending", async || task(&laptop, &id).await.agent == Agent::NotStarted).await;
+    let ended = task(&laptop, &id).await;
+    assert!(!ended.panels[0].running, "the ended agent's panel stays, showing its scrollback");
+    focus_prints(&laptop, &id, &format!("args: --resume {}", session.0)).await;
+
     laptop.call(&TaskMove { task: id.clone(), state: TaskState::Completed }).await.expect("complete");
     laptop.call(&TaskMove { task: id.clone(), state: TaskState::Pinned }).await.expect("reopen");
     assert_eq!(task(&laptop, &id).await.panels, vec![], "a reopened task's exited agent goes");
@@ -345,7 +354,7 @@ async fn every_start_after_a_session_s_first_resumes_it() {
     let set = TaskSetSession { task: id.clone(), session: SessionId("elsewhere".into()) };
     laptop.call(&set).await.expect("task.set_session");
     let pointed = task(&laptop, &id).await;
-    assert_eq!((pointed.focused_at, pointed.panels), (None, vec![]));
+    assert_eq!(pointed.panels, vec![]);
     focus_prints(&laptop, &id, "args: --resume elsewhere").await;
 
     let imported = TaskCreate {
@@ -386,4 +395,38 @@ async fn a_launched_server_finds_and_runs_agents_in_the_login_environment() {
         std::fs::write(home.join(file), &profile).expect("profile");
     }
     focus_prints(&laptop, &id, "login:profile").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_server_stops_an_agent_idle_silent_and_unshown_for_the_reclaim_time() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
+    let laptop = connect(&running, "laptop").await;
+    let workspace = workspace(&laptop, dir.path()).await;
+    let sh = |script: &str| ["sh", "-c", script].map(String::from).to_vec();
+    set_harness(&laptop, "agent", sh("sleep 600 & wait"), true).await;
+    set_harness(&laptop, "detaching", sh("set -m; sleep 60 & wait"), false).await;
+    let before = now();
+    let mut tasks = Vec::new();
+    for harness in ["agent", "agent", "agent", "detaching"] {
+        let id = create(&laptop, &workspace, Checkout::Root, harness).await;
+        laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+        tasks.push(id);
+    }
+    let [idle, waiting, shown, detached] = <[TaskId; 4]>::try_from(tasks).expect("four tasks");
+    laptop.call(&AgentReport { task: waiting.clone(), status: AgentStatus::Waiting }).await.expect("agent.report");
+    let agent = Stream::Pty(task(&laptop, &shown).await.panels[0].id.clone());
+    let _showing = laptop.open_data_stream(&agent).await.expect("show");
+    let after = now();
+
+    assert_eq!(running.server.reclaim_agents(before + AGENT_RECLAIM_MS - 1), vec![]);
+    let due = running.server.reclaim_agents(after + AGENT_RECLAIM_MS);
+    assert_eq!(due, vec![idle.clone()], "a waiting, a shown and a detaching agent keep running");
+    eventually("the reclaimed agent ending", async || task(&laptop, &idle).await.agent == Agent::NotStarted).await;
+    assert!(!task(&laptop, &idle).await.panels[0].running, "a reclaimed agent ends like any other");
+    for kept in [&waiting, &shown, &detached] {
+        assert!(matches!(task(&laptop, kept).await.agent, Agent::Running { .. }));
+    }
+    laptop.call(&TaskFocus { task: idle.clone() }).await.expect("focus");
+    assert_eq!(task(&laptop, &idle).await.agent, Agent::Running { status: AgentStatus::Idle });
 }

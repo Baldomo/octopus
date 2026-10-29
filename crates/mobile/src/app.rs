@@ -11,6 +11,7 @@ use tauri::{Manager, WebviewWindowBuilder};
 use crate::browser::{self, Shown};
 use crate::client_menu::{self, Phone};
 use crate::device;
+use crate::feel::{self, Feel};
 
 /// Under the OS's config directory, which on Android is the app's whole data directory, sealed key included.
 const CONFIG_DIR: &str = "octopus";
@@ -20,8 +21,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(octopus_shell::plugin())
         .plugin(tauri_plugin_barcode_scanner::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_haptics::init());
+        .plugin(tauri_plugin_clipboard_manager::init());
     #[cfg(target_os = "android")]
     let builder = builder.plugin(device::plugin());
     builder
@@ -32,7 +32,9 @@ pub fn run() {
             client_menu::phone_invite_key,
             client_menu::phone_pair,
             phone_insets,
-            phone_settings
+            phone_settings,
+            phone_feel,
+            phone_back_pops
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -73,6 +75,17 @@ async fn phone_insets(app: tauri::AppHandle) -> Result<Option<device::Insets>, S
 #[tauri::command]
 fn phone_settings(app: tauri::AppHandle) -> Result<(), String> {
     device::settings(&app).map_err(|error| format!("{error:#}"))
+}
+
+/// Async, so a feel never waits on the thread that draws the page.
+#[tauri::command]
+async fn phone_feel(app: tauri::AppHandle, feel: Feel) -> Result<(), String> {
+    feel::play(&app, feel).map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn phone_back_pops(app: tauri::AppHandle, pops: bool) -> Result<(), String> {
+    device::back_pops(&app, pops).map_err(|error| format!("{error:#}"))
 }
 
 /// Every server pinned the old key, so a phone with a new one starts as one that never paired.

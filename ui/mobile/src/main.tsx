@@ -1,5 +1,5 @@
 import inter from "@fontsource-variable/inter/files/inter-latin-opsz-normal.woff2?url";
-import { createEffect, For, Match, on, Switch } from "solid-js";
+import { createEffect, createSignal, For, Match, on, Switch } from "solid-js";
 import { render } from "solid-js/web";
 import "virtual:design.css";
 import "./app.css";
@@ -15,15 +15,19 @@ import { ClientMenu, ServerMenu } from "./ClientMenu";
 import { EditorScreen, Files } from "./Files";
 import { Sprite } from "./Icon";
 import { loadSymbols } from "./symbols";
-import { screen, screens, setMicDenied, sheet, type Screen } from "./nav";
+import { setMicDenied, sheetEntry, type Screen, type Sheet, type Toward } from "./nav";
 import { NewTask } from "./NewTask";
 import { PairSheet, Scan, scanning, Welcome } from "./Pairing";
 import { Search } from "./Search";
+import { SheetPresence } from "./Sheet";
+import { Stack } from "./stack";
 import { Task } from "./Task";
 import { Reopen, TaskMenu } from "./TaskMenu";
 import { Tasks } from "./Tasks";
 import { Toast } from "./Toast";
 import { followViewport } from "./viewport";
+import { followTouches } from "./touch";
+import { followMotion } from "./motion";
 import { AddWorkspace, SectionMenu } from "./Workspaces";
 
 const SCHEMES: Record<Appearance, string> = { system: "light dark", light: "light", dark: "dark" };
@@ -63,40 +67,54 @@ function Shown(props: { screen: Screen }) {
   );
 }
 
-function SheetShown() {
+function SheetPage(props: { sheet: Sheet }) {
+  const shown = props.sheet;
   return (
     <Switch>
-      <Match when={sheet()?.is === "client"}>
+      <Match when={shown.is === "client"}>
         <ClientMenu />
       </Match>
-      <Match when={sheet()} keyed>
-        {(shown) => (
-          <Switch>
-            <Match when={shown.is === "server" && shown.name} keyed>
-              {(name) => <ServerMenu name={name} />}
-            </Match>
-            <Match when={shown.is === "pair" && shown.invite} keyed>
-              {(invite) => <PairSheet invite={invite} />}
-            </Match>
-            <Match when={shown.is === "task" && shown} keyed>
-              {(menu) => <TaskMenu taskKey={menu.key} open={menu.open} />}
-            </Match>
-            <Match when={shown.is === "reopen" && shown.key} keyed>
-              {(key) => <Reopen taskKey={key} />}
-            </Match>
-            <Match when={shown.is === "section" && shown.name} keyed>
-              {(name) => <SectionMenu name={name} />}
-            </Match>
-            <Match when={shown.is === "addws"}>
-              <AddWorkspace />
-            </Match>
-            <Match when={shown.is === "newtask" && shown} keyed>
-              {(form) => <NewTask section={form.section} />}
-            </Match>
-          </Switch>
-        )}
+      <Match when={shown.is === "server" && shown.name}>{(name) => <ServerMenu name={name()} />}</Match>
+      <Match when={shown.is === "pair" && shown.invite}>{(invite) => <PairSheet invite={invite()} />}</Match>
+      <Match when={shown.is === "task" && shown}>
+        {(menu) => <TaskMenu taskKey={menu().key} open={menu().open} />}
       </Match>
+      <Match when={shown.is === "reopen" && shown.key}>{(key) => <Reopen taskKey={key()} />}</Match>
+      <Match when={shown.is === "section" && shown.name}>{(name) => <SectionMenu name={name()} />}</Match>
+      <Match when={shown.is === "addws"}>
+        <AddWorkspace />
+      </Match>
+      <Match when={shown.is === "newtask" && shown}>{(form) => <NewTask section={form().section} />}</Match>
     </Switch>
+  );
+}
+
+type ShownSheet = { sheet: Sheet; inPlace: Toward | null; leaving: () => boolean; leave: () => void };
+
+/** The sheet up, and each one still on its way down; one shown in place of another replaces it at once. */
+function Sheets() {
+  const [shown, setShown] = createSignal<ShownSheet[]>([]);
+  const entry = (sheet: Sheet, inPlace: Toward | null): ShownSheet => {
+    const [leaving, setLeaving] = createSignal(false);
+    return { sheet, inPlace, leaving, leave: () => setLeaving(true) };
+  };
+  createEffect(
+    on(sheetEntry, (now, before) => {
+      const up = shown().find((each) => each.sheet === before?.sheet && !each.leaving());
+      if (now === null) return up?.leave();
+      const inPlace = up === undefined ? null : now.toward;
+      setShown((all) => [...all.filter((each) => each !== up || up.leaving()), entry(now.sheet, inPlace)]);
+    }),
+  );
+  const gone = (left: ShownSheet) => setShown((all) => all.filter((each) => each !== left));
+  return (
+    <For each={shown()}>
+      {(each) => (
+        <SheetPresence.Provider value={{ inPlace: each.inPlace, leaving: each.leaving, gone: () => gone(each) }}>
+          <SheetPage sheet={each.sheet} />
+        </SheetPresence.Provider>
+      )}
+    </For>
   );
 }
 
@@ -108,20 +126,8 @@ function App() {
   return (
     <>
       <Sprite />
-      <For each={screens()}>
-        {(shown) => (
-          <div
-            class="app"
-            classList={{ cam: shown.at === "scan" }}
-            style={{ display: shown === screen() ? "" : "none" }}
-          >
-            <div class="content">
-              <Shown screen={shown} />
-            </div>
-          </div>
-        )}
-      </For>
-      <SheetShown />
+      <Stack>{(shown) => <Shown screen={shown} />}</Stack>
+      <Sheets />
       <Toast />
     </>
   );
@@ -144,6 +150,8 @@ const followFront = () => {
 async function start() {
   followViewport();
   followFront();
+  followTouches();
+  followMotion();
   await Promise.all([loadFonts(inter), loadSymbols()]);
   await Promise.all([
     events.model(applyModel),

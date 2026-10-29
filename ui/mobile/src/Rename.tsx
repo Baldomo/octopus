@@ -1,4 +1,5 @@
 import { createSignal, Show } from "solid-js";
+import { feel } from "./feel";
 import { Note } from "./parts";
 
 /**
@@ -30,10 +31,17 @@ export function Rename(props: { value: string; apply: (name: string) => Promise<
             const name = event.currentTarget.value.trim();
             if (name === "" || name === props.value) return props.done();
             applying = true;
-            props.apply(name).then(props.done, (error) => {
-              applying = false;
-              setProblem(String(error));
-            });
+            props.apply(name).then(
+              () => {
+                feel("success");
+                props.done();
+              },
+              (error) => {
+                feel("error");
+                applying = false;
+                setProblem(String(error));
+              },
+            );
           }}
           onBlur={() => !applying && problem() === null && props.done()}
         />

@@ -22,7 +22,7 @@ export type Tone = "mist" | "soft" | "vivid" | "deep";
 
 export type Swatch = { hue: Hue, tone: Tone, };
 
-export type Agent = { "kind": "not_started" } | { "kind": "running", status: AgentStatus, } | { "kind": "exited" } | { "kind": "harness_not_installed", install: string, } | { "kind": "harness_unknown" };
+export type Agent = { "kind": "not_started" } | { "kind": "running", status: AgentStatus, } | { "kind": "harness_not_installed", install: string, } | { "kind": "harness_unknown" };
 
 export type Panel = { id: PtyId, name: string, running: boolean, lock_holder: string | null, cols: number, rows: number, 
 /**
@@ -32,7 +32,7 @@ listening: boolean, };
 
 export type BrowserPanel = { panel: BrowserId, url: string, };
 
-export type Task = { id: TaskId, workspace: WorkspaceId, parent: TaskId | null, title: string, state: TaskState, checkout: Checkout, harness: string, session: SessionId | null, directory: string, branch: string | null, focused_at: number | null, ended_at: number | null, archived_at: number | null, rev: number, agent: Agent, panels: Array<Panel>, browsers: Array<BrowserPanel>, };
+export type Task = { id: TaskId, workspace: WorkspaceId, parent: TaskId | null, title: string, state: TaskState, checkout: Checkout, harness: string, session: SessionId | null, directory: string, branch: string | null, ended_at: number | null, archived_at: number | null, rev: number, agent: Agent, panels: Array<Panel>, browsers: Array<BrowserPanel>, };
 
 export type EntryKind = "file" | "directory";
 
@@ -223,6 +223,8 @@ export const CHECKOUTS = ["root","worktree"] as const;
 export const HUES = ["red","orange","amber","lime","green","mint","teal","sky","blue","indigo","violet","pink"] as const;
 
 export const TONES = ["mist","soft","vivid","deep"] as const;
+
+export const ZOOMS = [80,90,100,110,125,150] as const;
 
 export const AGENT_PANEL = "agent" as const;
 

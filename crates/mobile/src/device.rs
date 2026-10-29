@@ -212,6 +212,20 @@ mod os {
         &app.state::<Keeper>().inner().0
     }
 
+    pub fn run<T: serde::de::DeserializeOwned>(app: &AppHandle, command: &str, args: impl Serialize) -> anyhow::Result<T> {
+        Ok(keeper(app).run_mobile_plugin(command, args)?)
+    }
+
+    #[derive(Serialize)]
+    struct Pops {
+        pops: bool,
+    }
+
+    pub fn back_pops(app: &AppHandle, pops: bool) -> anyhow::Result<()> {
+        run::<IgnoredAny>(app, "backPops", Pops { pops }).context("hand the system back to the page")?;
+        Ok(())
+    }
+
     pub fn kept(app: &AppHandle) -> anyhow::Result<Option<Vec<u8>>> {
         let kept: Kept = keeper(app).run_mobile_plugin("kept", ()).context("open the sealed device key")?;
         kept.pkcs8
@@ -264,4 +278,16 @@ mod os {
 }
 
 #[cfg(target_os = "android")]
-pub use os::{follow_appearance, plugin};
+pub use os::{follow_appearance, plugin, run};
+
+/// Whether the system back gesture and button pop the page's top screen or sheet, which on Android hands their
+/// progress to the page; on iOS the page follows its own edge swipe.
+pub fn back_pops(app: &AppHandle, pops: bool) -> anyhow::Result<()> {
+    #[cfg(target_os = "android")]
+    return os::back_pops(app, pops);
+    #[cfg(target_os = "ios")]
+    {
+        let _ = (app, pops);
+        Ok(())
+    }
+}

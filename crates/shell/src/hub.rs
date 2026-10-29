@@ -13,7 +13,7 @@ use octopus_proto::types::{Color, WorkspaceId};
 use octopus_proto::{Event, Op, Push};
 use serde::Serialize;
 use tauri::AppHandle;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::sync::broadcast::error::RecvError;
 use ts_rs::TS;
 
@@ -70,6 +70,7 @@ struct Link {
     connection: Option<Arc<Connection>>,
     problem: Option<String>,
     since: i64,
+    resyncs: mpsc::UnboundedSender<oneshot::Sender<Result<(), String>>>,
     supervisor: tauri::async_runtime::JoinHandle<()>,
 }
 
@@ -159,17 +160,21 @@ impl Hub {
     fn supervise(self: &Arc<Self>, server: Server) {
         let mut state = lock(&self.state);
         let (hub, name, address) = (Arc::clone(self), server.name.clone(), server.address.clone());
+        let (resyncs, mut asked) = mpsc::unbounded_channel();
         let supervisor = tauri::async_runtime::spawn(async move {
             loop {
-                let problem = match hub.session(&server).await {
+                let problem = match hub.session(&server, &mut asked).await {
                     Ok(closed) => closed,
                     Err(error) => format!("{error:#}"),
                 };
+                while let Ok(answer) = asked.try_recv() {
+                    let _asker_gone = answer.send(Err(format!("{}: {problem}", hub.label(&server.name))));
+                }
                 hub.lost(&server.name, problem);
                 tokio::time::sleep(RECONNECT).await;
             }
         });
-        state.links.insert(name, Link { address, connection: None, problem: None, since: now(), supervisor });
+        state.links.insert(name, Link { address, connection: None, problem: None, since: now(), resyncs, supervisor });
         self.servers_changed.notify_one();
     }
 
@@ -183,7 +188,11 @@ impl Hub {
     }
 
     /// Runs one connection until it ends, keeping the server's cache current, and resolves to why it closed.
-    async fn session(&self, server: &Server) -> anyhow::Result<String> {
+    async fn session(
+        &self,
+        server: &Server,
+        asked: &mut mpsc::UnboundedReceiver<oneshot::Sender<Result<(), String>>>,
+    ) -> anyhow::Result<String> {
         let connection = Arc::new(Connection::connect(&server.address, &self.me).await?);
         if let Err(error) = Servers::refresh(&self.config, &server.name, connection.server_addresses()) {
             eprintln!("octopus app: keep the addresses {} reported: {error:#}", server.name);
@@ -200,6 +209,12 @@ impl Hub {
                     Err(RecvError::Closed) => unreachable!("the connection owns its push sender"),
                 },
                 _ = refresh.tick() => self.servers_changed.notify_one(),
+                Some(answer) = asked.recv() => {
+                    let resynced = self.resync(&server.name, &connection).await;
+                    let problem = resynced.as_ref().map_err(|error| format!("{}: {error:#}", self.label(&server.name)));
+                    let _asker_gone = answer.send(problem.map(drop));
+                    resynced?;
+                }
             }
         }
     }
@@ -218,6 +233,27 @@ impl Hub {
         self.model_changed.notify_one();
         self.servers_changed.notify_one();
         Ok(())
+    }
+
+    /// Resyncs every connected server at once, each in its own session so no push lands between its snapshot and
+    /// the cache, failing with each server's problem; an unconnected one is already redialled every second.
+    pub async fn refresh(&self) -> Result<(), String> {
+        let answers: Vec<_> = lock(&self.state)
+            .links
+            .values()
+            .filter(|link| link.connection.is_some())
+            .filter_map(|link| {
+                let (answer, answered) = oneshot::channel();
+                link.resyncs.send(answer).ok().map(|()| answered)
+            })
+            .collect();
+        let mut problems = Vec::new();
+        for answered in answers {
+            if let Ok(Err(problem)) = answered.await {
+                problems.push(problem);
+            }
+        }
+        if problems.is_empty() { Ok(()) } else { Err(problems.join("; ")) }
     }
 
     fn apply(&self, server: &str, push: Push) {

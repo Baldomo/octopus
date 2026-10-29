@@ -8,6 +8,7 @@ const COMMANDS: &[&str] = &[
     "server_offer",
     "server_clients",
     "server_revoke",
+    "servers_refresh",
     "server_rename",
     "server_forget",
     "workspace_add",

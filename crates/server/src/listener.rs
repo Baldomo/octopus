@@ -16,7 +16,8 @@ use tokio::sync::{Semaphore, broadcast, mpsc};
 use crate::service::Terminal;
 use crate::{Server, report};
 
-const SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const WORKTREE_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const RECLAIM_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 const INPUT_BYTES: usize = 4096;
 /// How long each step of pairing may take: the request arriving, and the reply being acknowledged.
 const PAIRING_PATIENCE: Duration = Duration::from_secs(10);
@@ -62,6 +63,7 @@ impl Peer {
 /// Serves the local socket and iroh at once, with one protocol on both.
 pub async fn serve(server: Arc<Server>, local: Listener, remote: Endpoint) {
     tokio::spawn(remove_expired_worktrees(Arc::clone(&server)));
+    tokio::spawn(reclaim_agents(Arc::clone(&server)));
     server.reach_at(remote.clone());
     tokio::spawn(serve_remote(Arc::clone(&server), remote));
     local::accept_forever(local, |stream| drop(tokio::spawn(serve_stream(Arc::clone(&server), stream, Peer::Local))))
@@ -155,7 +157,7 @@ async fn claim(server: &Arc<Server>, key: PublicKey, request: &Request) -> Resul
 }
 
 async fn remove_expired_worktrees(server: Arc<Server>) {
-    let mut interval = tokio::time::interval(SWEEP_INTERVAL);
+    let mut interval = tokio::time::interval(WORKTREE_SWEEP_INTERVAL);
     loop {
         interval.tick().await;
         let server = Arc::clone(&server);
@@ -167,6 +169,22 @@ async fn remove_expired_worktrees(server: Arc<Server>) {
             }
             Ok(Err(error)) => report!("worktree sweep: {error}"),
             Err(error) => report!("worktree sweep panicked: {error}"),
+        }
+    }
+}
+
+async fn reclaim_agents(server: Arc<Server>) {
+    let mut interval = tokio::time::interval(RECLAIM_SWEEP_INTERVAL);
+    loop {
+        interval.tick().await;
+        let server = Arc::clone(&server);
+        match tokio::task::spawn_blocking(move || server.reclaim_agents(crate::now())).await {
+            Ok(reclaimed) => {
+                for task in reclaimed {
+                    report!("stopped the idle agent of {task} to reclaim its memory");
+                }
+            }
+            Err(error) => report!("agent reclaim panicked: {error}"),
         }
     }
 }

@@ -46,5 +46,7 @@
 	<string>Let the programs in a terminal you hold hear your microphone.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Reach your servers directly on this network.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

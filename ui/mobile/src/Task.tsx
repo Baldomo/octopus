@@ -1,25 +1,32 @@
-import { createEffect, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createEffect, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import { AGENT_PANEL, type Panel, type PtyId, type TaskRef, type TaskView } from "@octopus/shared/generated.ts";
 import { ago, clock, ticking } from "@octopus/shared/SidebarControls.tsx";
 import { act, me, model, report, scale, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
 import { terminalSession } from "@octopus/shared/terminalSession.ts";
 import { colors, scheme } from "@octopus/shared/tokens.ts";
+import { feel } from "./feel";
+import { animateList } from "./flip";
 import { Icon } from "./Icon";
+import { onPainted } from "./motion";
 import { back, micDenied, openSheet } from "./nav";
 import { Circle, Gap, Glyph, Id, Para, sectionColor, ServerDot, Slot } from "./parts";
 import { phone } from "./phone";
+import type { Point } from "./press";
+import { scroller } from "./scroll";
 import { TERMINAL_FONT } from "./symbols";
+import { slidingThumb } from "./thumb";
 import { notify } from "./Toast";
+import { COMMIT_PX, owns, type Gesture } from "./touch";
 
-/** A finger that moves further than this is dragging, not tapping. */
-const TAP_SLOP_PX = 8;
 /** The keyboard's text field always holds this, so its delete has something to delete even when the line is empty. */
 const SENTINEL = " ";
 const ESC = "\x1b";
 /** The terminal sets 13pt Meslo on 20pt rows. */
 const FONT_PX = 13;
 const ROW_PX = 20;
+/** How near a line boundary, in lines, the terminal counts as on it, so float error never rests it a line off. */
+const ON_LINE = 1e-6;
 /** How long the server keeps a dropped holder's lock, which the phone counts down while it reconnects. */
 const LOCK_KEPT_MS = 10_000;
 
@@ -57,11 +64,20 @@ function reachOf(at: TaskRef, panel: Panel | undefined, now: number): Reach {
  * One terminal panel. The holder types into it through the keyboard and the key bar and sizes it to the pane; everyone
  * else sees it at the holder's size, cropped to the pane at its last line, panned by dragging.
  */
-function PhoneTerm(props: { at: TaskRef; panel: Panel; visible: boolean; reach: Reach; ended: boolean }) {
+function PhoneTerm(props: {
+  at: TaskRef;
+  panel: Panel;
+  visible: boolean;
+  reach: Reach;
+  ended: boolean;
+  resumable: boolean;
+}) {
   let host!: HTMLDivElement;
   let pane!: HTMLDivElement;
   let sink!: HTMLTextAreaElement;
-  const session = terminalSession({ at: props.at, panel: () => props.panel, shown: () => props.visible });
+  /** The terminal opens once the screen is on its way in, and shows from then on. */
+  const [opened, setOpened] = createSignal(false);
+  const session = terminalSession({ at: props.at, panel: () => props.panel, shown: () => props.visible && opened() });
   const { xterm, mine } = session;
   xterm.options.disableStdin = true;
   xterm.options.fontFamily = TERMINAL_FONT;
@@ -87,10 +103,31 @@ function PhoneTerm(props: { at: TaskRef; panel: Panel; visible: boolean; reach: 
   };
   const arrow = (code: string) => `${ESC}${xterm.modes.applicationCursorKeysMode ? "O" : "["}${code}`;
   const latch = () => {
+    feel("select");
     setCtrl(!ctrl());
     if (ctrl()) sink.focus();
   };
-  const toggleKeyboard = () => (document.activeElement === sink ? sink.blur() : sink.focus());
+  const toggleKeyboard = () => {
+    feel("tap");
+    if (document.activeElement === sink) sink.blur();
+    else sink.focus();
+  };
+  const send = (keys: string) => {
+    feel("tap");
+    session.input(keys);
+  };
+  /** Losing the lock to another client while showing it is worth a warning; taking it over, a success. */
+  createEffect(
+    on(
+      () => props.visible && props.panel.running && props.panel.lock_holder,
+      (holder, was) => {
+        if (!holder || !was || holder === was) return;
+        if (holder === me()) feel("success");
+        else if (was === me()) feel("warning");
+      },
+      { defer: true },
+    ),
+  );
 
   let sent = SENTINEL;
   let composing = false;
@@ -109,32 +146,52 @@ function PhoneTerm(props: { at: TaskRef; panel: Panel; visible: boolean; reach: 
     if (!composing) resetSink();
   };
 
-  /** Dragging pans a cropped terminal and scrolls the scrollback past its edge; a held terminal's drag scrolls. */
-  let last: { x: number; y: number } | null = null;
-  let travelled = 0;
-  let unscrolled = 0;
-  const scrollBy = (pixels: number) => {
-    const cell = screen().height / xterm.rows;
-    if (!(cell > 0)) return;
-    unscrolled += pixels;
-    const lines = Math.trunc(unscrolled / cell);
-    if (lines !== 0) {
-      xterm.scrollLines(lines);
-      unscrolled -= lines * cell;
-    }
+  /**
+   * The terminal scrolls as one surface from its first scrollback line down to the bottom of a cropped screen: the
+   * scrollback by whole lines, with the part of a line between them and the crop as the pan. It comes to rest on a line.
+   */
+  const cell = () => screen().height / xterm.rows;
+  const scrolledLines = () => xterm.buffer.active.baseY;
+  const down = scroller({
+    at: () => xterm.buffer.active.viewportY * cell() + pan().y,
+    end: () => scrolledLines() * cell() + most().y,
+    rest: (at) => (at < scrolledLines() * cell() ? Math.round(at / cell()) * cell() : at),
+    apply: (at) => {
+      const line = Math.min(Math.max(Math.floor(at / cell() + ON_LINE), 0), scrolledLines());
+      xterm.scrollToLine(line);
+      setPan({ x: pan().x, y: at - line * cell() });
+    },
+  });
+  const across = scroller({
+    at: () => pan().x,
+    end: () => most().x,
+    rest: (at) => at,
+    apply: (x) => setPan({ x, y: pan().y }),
+  });
+  /** Dragging scrolls the terminal, and pans a cropped one across too. */
+  const drag: Gesture = ({ axis, at }) => {
+    if (!(cell() > 0) || (axis === "x" && !cropped())) return null;
+    const x = cropped() ? across.grab() : null;
+    const y = down.grab();
+    scrolling = true;
+    return {
+      move: (to) => {
+        x?.drag(at.x - to.x);
+        y.drag(at.y - to.y);
+      },
+      end: (velocity) => {
+        x?.release(-(velocity?.x ?? 0));
+        y.release(-(velocity?.y ?? 0));
+      },
+    };
   };
-  const drag = (event: TouchEvent) => {
-    const touch = event.touches[0];
-    if (last === null || touch === undefined) return;
-    event.preventDefault();
-    const [dx, dy] = [touch.clientX - last.x, touch.clientY - last.y];
-    last = { x: touch.clientX, y: touch.clientY };
-    travelled += Math.hypot(dx, dy);
-    if (!cropped()) return scrollBy(-dy);
-    const wanted = { x: pan().x - dx, y: pan().y - dy };
-    const y = Math.min(Math.max(wanted.y, 0), most().y);
-    setPan({ x: Math.min(Math.max(wanted.x, 0), most().x), y });
-    scrollBy(wanted.y - y);
+  let from: Point | null = null;
+  let scrolling = false;
+  /** A touch the terminal's drag didn't scroll stopped any coast where it stood, so lifting it settles on a line. */
+  const settle = () => {
+    if (scrolling) return;
+    down.settle();
+    across.settle();
   };
 
   /** Rows of 20pt at 13pt: the line height that turns the font's own cell into a 20pt one, measured once drawn. */
@@ -154,18 +211,21 @@ function PhoneTerm(props: { at: TaskRef; panel: Panel; visible: boolean; reach: 
   };
 
   onMount(() => {
+    owns(pane, drag);
+    resetSink();
+  });
+  onPainted(() => {
     session.open(host);
     observeSize(host, (size) => {
       setView(size);
       if (session.shown() && mine()) session.fit();
     });
     observeSize(xterm.element!.querySelector<HTMLElement>(".xterm-screen")!, setScreen);
-    pane.addEventListener("touchmove", drag, { passive: false });
-    resetSink();
+    setOpened(true);
   });
   /** A terminal mounted hidden measures no cell, so its rows fit again each time it shows. */
   createEffect(() => {
-    session.shown();
+    if (!session.shown()) return;
     xterm.options.fontSize = FONT_PX * scale(ui.prefs);
     xterm.options.lineHeight = 1;
     requestAnimationFrame(() => {
@@ -215,12 +275,18 @@ function PhoneTerm(props: { at: TaskRef; panel: Panel; visible: boolean; reach: 
         classList={{ held: !mine(), stale: !live() }}
         onTouchStart={(event) => {
           const touch = event.touches[0];
-          last = touch === undefined ? null : { x: touch.clientX, y: touch.clientY };
-          travelled = 0;
+          from = touch === undefined ? null : { x: touch.clientX, y: touch.clientY };
+          scrolling = false;
+          down.stop();
+          across.stop();
         }}
+        onTouchCancel={settle}
         onTouchEnd={(event) => {
-          last = null;
-          if (travelled >= TAP_SLOP_PX || !mine() || !live()) return;
+          settle();
+          if (event.defaultPrevented) return;
+          const touch = event.changedTouches[0];
+          const travelled = from && touch ? Math.hypot(touch.clientX - from.x, touch.clientY - from.y) : Infinity;
+          if (travelled >= COMMIT_PX || !mine() || !live()) return;
           // The click a tap synthesizes would land on the pane and take the focus back from the keyboard.
           event.preventDefault();
           sink.focus();
@@ -254,65 +320,75 @@ function PhoneTerm(props: { at: TaskRef; panel: Panel; visible: boolean; reach: 
           session.input("\r");
         }}
       />
-      <Show when={!props.ended}>
-        <Switch>
-          <Match when={props.reach.is === "unreachable" && props.reach}>
-            {(gone) => (
+      <div class="foot" ref={animateList(":scope > *")}>
+        <Show when={!props.ended}>
+          <Switch>
+            <Match when={props.reach.is === "unreachable" && props.reach}>
+              {(gone) => (
+                <div class="lockbar">
+                  <Slot>
+                    <Icon name="warn" />
+                  </Slot>
+                  <span class="name">
+                    {serverLabel(props.at.server)} unreachable since {clock(gone().since, "h23")}
+                  </span>
+                  <Id>retrying</Id>
+                </div>
+              )}
+            </Match>
+            <Match when={props.reach.is === "reconnecting" && props.reach}>
+              {(kept) => (
+                <div class="lockbar">
+                  <Slot>
+                    <ServerDot server={undefined} reconnecting />
+                  </Slot>
+                  <span class="name">reconnecting</span>
+                  <Id>lock kept {Math.ceil(kept().left / 1000)} s</Id>
+                </div>
+              )}
+            </Match>
+            <Match when={props.resumable}>
               <div class="lockbar">
-                <Slot>
-                  <Icon name="warn" />
-                </Slot>
-                <span class="name">
-                  {serverLabel(props.at.server)} unreachable since {clock(gone().since, "h23")}
-                </span>
-                <Id>retrying</Id>
+                <span class="name">The agent has ended</span>
+                <button class="btn" onClick={() => act(backend.taskFocus(props.at))}>
+                  Resume
+                </button>
               </div>
-            )}
-          </Match>
-          <Match when={props.reach.is === "reconnecting" && props.reach}>
-            {(kept) => (
+            </Match>
+            <Match when={mine()}>
+              <div class="keys" onPointerDown={(event) => event.preventDefault()}>
+                <button class="key" onClick={() => send(ESC)}>
+                  esc
+                </button>
+                <button class="key" onClick={() => send("\t")}>
+                  tab
+                </button>
+                <button class="key" classList={{ on: ctrl() }} onClick={latch}>
+                  ctrl
+                </button>
+                <For each={ARROWS}>
+                  {([label, code]) => (
+                    <button class="key" onClick={() => send(arrow(code))}>
+                      {label}
+                    </button>
+                  )}
+                </For>
+                <button class="key" aria-label="Keyboard" onClick={toggleKeyboard}>
+                  <Icon name="kbd" />
+                </button>
+              </div>
+            </Match>
+            <Match when={props.panel.running && props.panel.lock_holder !== null}>
               <div class="lockbar">
-                <Slot>
-                  <ServerDot server={undefined} reconnecting />
-                </Slot>
-                <span class="name">reconnecting</span>
-                <Id>lock kept {Math.ceil(kept().left / 1000)} s</Id>
+                <span class="name">read-only · held by {props.panel.lock_holder}</span>
+                <button class="btn" onClick={session.take}>
+                  Take over
+                </button>
               </div>
-            )}
-          </Match>
-          <Match when={mine()}>
-            <div class="keys" onPointerDown={(event) => event.preventDefault()}>
-              <button class="key" onClick={() => session.input(ESC)}>
-                esc
-              </button>
-              <button class="key" onClick={() => session.input("\t")}>
-                tab
-              </button>
-              <button class="key" classList={{ on: ctrl() }} onClick={latch}>
-                ctrl
-              </button>
-              <For each={ARROWS}>
-                {([label, code]) => (
-                  <button class="key" onClick={() => session.input(arrow(code))}>
-                    {label}
-                  </button>
-                )}
-              </For>
-              <button class="key" aria-label="Keyboard" onClick={toggleKeyboard}>
-                <Icon name="kbd" />
-              </button>
-            </div>
-          </Match>
-          <Match when={props.panel.running && props.panel.lock_holder !== null}>
-            <div class="lockbar">
-              <span class="name">read-only · held by {props.panel.lock_holder}</span>
-              <button class="btn" onClick={session.take}>
-                Take over
-              </button>
-            </div>
-          </Match>
-        </Switch>
-      </Show>
+            </Match>
+          </Switch>
+        </Show>
+      </div>
     </div>
   );
 }
@@ -323,7 +399,7 @@ function LockLabel(props: { panel: Panel }) {
   const hearing = () => mine() && props.panel.listening;
   return (
     <span class="lock">
-      <Show when={props.panel.running} fallback="exited">
+      <Show when={props.panel.running}>
         <Show when={hearing() && micDenied()}>
           <span class="id denied" role="button" onClick={() => phone.settings().catch(notify)}>
             <Icon name="micoff" />
@@ -396,6 +472,11 @@ function TaskScreen(props: { open: TaskView }) {
   const agent = () => panels().find((panel) => panel.name === AGENT_PANEL);
   const shells = () => panels().filter((panel) => panel.name !== AGENT_PANEL);
   const selected = () => shells().find((panel) => panel.id === chosen()) ?? agent();
+  const choose = (panel: PtyId | null) => {
+    if (panel !== chosen()) feel("select");
+    setChosen(panel);
+  };
+
   const agentOn = () => selected() === agent();
   const missing = () => ["harness_unknown", "harness_not_installed"].includes(props.open.task.agent.kind);
   const reach = () => reachOf(props.open.at, selected(), now());
@@ -429,11 +510,11 @@ function TaskScreen(props: { open: TaskView }) {
           class="chip"
           classList={{ state: props.open.live }}
           role="button"
-          onClick={() =>
-            props.open.live
-              ? act(backend.taskMove(props.open.at, props.open.next))
-              : openSheet({ is: "reopen", key: props.open.key })
-          }
+          onClick={() => {
+            if (!props.open.live) return openSheet({ is: "reopen", key: props.open.key });
+            feel("select");
+            act(backend.taskMove(props.open.at, props.open.next));
+          }}
         >
           {props.open.task.state}
         </span>
@@ -459,8 +540,14 @@ function TaskScreen(props: { open: TaskView }) {
         <span class="chip">{props.open.task.harness}</span>
       </div>
       <div class="tabs">
-        <div class="tabrow">
-          <span class="tab" classList={{ on: agentOn() }} role="button" onClick={() => setChosen(null)}>
+        <div
+          class="tabrow"
+          ref={(row) => {
+            slidingThumb(row);
+            animateList(".tab")(row);
+          }}
+        >
+          <span class="tab" data-key="agent" classList={{ on: agentOn() }} role="button" onClick={() => choose(null)}>
             <Glyph status={props.open.glyph} />
             {props.open.task.harness}
           </span>
@@ -468,9 +555,10 @@ function TaskScreen(props: { open: TaskView }) {
             {(panel) => (
               <span
                 class="tab"
+                data-key={panel.id}
                 classList={{ on: selected()?.id === panel.id }}
                 role="button"
-                onClick={() => setChosen(panel.id)}
+                onClick={() => choose(panel.id)}
               >
                 {panel.name}
                 <span
@@ -490,6 +578,7 @@ function TaskScreen(props: { open: TaskView }) {
           <Show when={!ended()}>
             <span
               class="tab plus"
+              data-key="plus"
               role="button"
               aria-label="New shell"
               onClick={() => live() && act(backend.termOpen(props.open.at).then(setChosen))}
@@ -515,6 +604,7 @@ function TaskScreen(props: { open: TaskView }) {
                 visible={selected()?.id === id}
                 reach={reach()}
                 ended={ended()}
+                resumable={!ended() && panel().name === AGENT_PANEL && !panel().running}
               />
             )}
           </Show>

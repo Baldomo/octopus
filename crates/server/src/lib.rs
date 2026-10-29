@@ -49,10 +49,19 @@ const PUSH_BACKLOG: usize = 4096;
 const HOLDER_GRACE: Duration = Duration::from_secs(10);
 /// Stands for the task's session id in a harness's start and resume args.
 const SESSION: &str = "{session}";
+/// How long an agent stays idle, silent and unshown before the server stops it to reclaim its memory.
+pub const AGENT_RECLAIM_MS: i64 = 30 * 60 * 1000;
 
 enum AgentSlot {
-    Running { terminal: Arc<Terminal>, status: AgentStatus },
-    HarnessNotInstalled { install: String },
+    /// The agent's terminal, running or ended, with the status the agent last reported and when it took it.
+    Spawned {
+        terminal: Arc<Terminal>,
+        status: AgentStatus,
+        since: i64,
+    },
+    HarnessNotInstalled {
+        install: String,
+    },
     HarnessUnknown,
 }
 
@@ -102,7 +111,7 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
-pub(crate) fn now() -> i64 {
+pub fn now() -> i64 {
     let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).expect("the clock reads after 1970");
     i64::try_from(elapsed.as_millis()).expect("milliseconds since 1970 fit in i64")
 }
@@ -140,7 +149,7 @@ fn directory(root: &str) -> Result<String, Error> {
 impl State {
     /// Ends the task's agent terminal and drops its scrollback.
     fn forget_agent(&mut self, task: &TaskId) {
-        if let Some(AgentSlot::Running { terminal, .. }) = self.agents.remove(task)
+        if let Some(AgentSlot::Spawned { terminal, .. }) = self.agents.remove(task)
             && let Err(error) = terminal.forget()
         {
             report!("forget the agent terminal of {task}: {error}");
@@ -157,9 +166,24 @@ impl State {
         }
     }
 
+    fn agent_running(&self, task: &TaskId) -> bool {
+        self.agent_terminal(task).is_some_and(|terminal| terminal.running())
+    }
+
+    /// The agent's terminal when the agent runs and has shown idle, with every terminal of its task unshown, for
+    /// `AGENT_RECLAIM_MS` at `now`.
+    fn idle_unshown_agent(&self, task: &TaskId, now: i64) -> Option<Arc<Terminal>> {
+        let Some(AgentSlot::Spawned { terminal, status: AgentStatus::Idle, since }) = self.agents.get(task) else {
+            return None;
+        };
+        let unshown = self.terminals(task).map(|(_, terminal)| terminal.unshown_since()).collect::<Option<Vec<_>>>()?;
+        let quiet_since = unshown.into_iter().fold(*since, i64::max);
+        (terminal.running() && now - quiet_since >= AGENT_RECLAIM_MS).then(|| Arc::clone(terminal))
+    }
+
     fn agent_terminal(&self, task: &TaskId) -> Option<&Arc<Terminal>> {
         match self.agents.get(task) {
-            Some(AgentSlot::Running { terminal, .. }) => Some(terminal),
+            Some(AgentSlot::Spawned { terminal, .. }) => Some(terminal),
             _ => None,
         }
     }
@@ -173,7 +197,7 @@ impl State {
 
     fn every_terminal(&self) -> impl Iterator<Item = (&TaskId, &Arc<Terminal>)> {
         let agents = self.agents.iter().filter_map(|(task, slot)| match slot {
-            AgentSlot::Running { terminal, .. } => Some((task, terminal)),
+            AgentSlot::Spawned { terminal, .. } => Some((task, terminal)),
             _ => None,
         });
         let shells =
@@ -220,8 +244,10 @@ impl State {
     fn view(&self, row: &TaskRow) -> Task {
         let agent = match self.agents.get(&row.id) {
             None => Agent::NotStarted,
-            Some(AgentSlot::Running { terminal, status }) if terminal.running() => Agent::Running { status: *status },
-            Some(AgentSlot::Running { .. }) => Agent::Exited,
+            Some(AgentSlot::Spawned { terminal, status, .. }) if terminal.running() => {
+                Agent::Running { status: *status }
+            }
+            Some(AgentSlot::Spawned { .. }) => Agent::NotStarted,
             Some(AgentSlot::HarnessNotInstalled { install }) => Agent::HarnessNotInstalled { install: install.clone() },
             Some(AgentSlot::HarnessUnknown) => Agent::HarnessUnknown,
         };
@@ -236,7 +262,6 @@ impl State {
             session: row.session.clone(),
             directory: row.directory.clone(),
             branch: row.branch.clone(),
-            focused_at: row.focused_at,
             ended_at: row.ended_at,
             archived_at: row.archived_at,
             rev: row.rev,
@@ -307,7 +332,7 @@ impl Server {
                 report!("reset the size of {}: {error}", terminal.id);
             }
             if row.name == AGENT_PANEL {
-                state.agents.insert(row.task, AgentSlot::Running { terminal, status: AgentStatus::Idle });
+                state.agents.insert(row.task, AgentSlot::Spawned { terminal, status: AgentStatus::Idle, since: now() });
             } else {
                 state.shells.entry(row.task).or_default().push(Shell { name: row.name, terminal });
             }
@@ -553,7 +578,11 @@ impl Server {
             return Err(Error::conflict(format!("harness {} declares no hooks", row.harness)));
         }
         match state.agents.get_mut(&row.id) {
-            Some(AgentSlot::Running { terminal, status }) if terminal.running() => *status = op.status,
+            Some(AgentSlot::Spawned { terminal, status, since }) if terminal.running() => {
+                if *status != op.status {
+                    (*status, *since) = (op.status, now());
+                }
+            }
             _ => return Err(Error::conflict(format!("the agent of {} is not running", row.id))),
         }
         Ok(Revised { rev: self.touch_task(&mut state, &row.id)? })
@@ -593,7 +622,6 @@ impl Server {
             session: op.session,
             directory: directory.to_string_lossy().to_string(),
             branch,
-            focused_at: None,
             ended_at: tasks::ended_at(op.state, now()),
             archived_at: None,
             rev: 0,
@@ -645,7 +673,6 @@ impl Server {
         let mut state = lock(&self.state);
         let mut row = state.store.task(&op.task)?;
         row.session = Some(op.session);
-        row.focused_at = None;
         let rev = state.store.save_task(&mut row)?;
         state.forget_agent(&row.id);
         self.publish_task(&state, &row);
@@ -664,8 +691,9 @@ impl Server {
         Ok(Revised { rev })
     }
 
-    /// The login shell runs outside the state lock, so a slow profile stalls no other op; the task is read again
-    /// after it, in case another focus or a move landed meanwhile.
+    /// Starts the agent of a live task whose agent is not running. The login shell runs outside the state lock, so a
+    /// slow profile stalls no other op; the task is read again after it, in case another focus or a move landed
+    /// meanwhile.
     fn task_focus(&self, op: TaskFocus) -> Result<Revised, Error> {
         let (directory, harness) = {
             let mut state = lock(&self.state);
@@ -674,7 +702,7 @@ impl Server {
                 return Ok(Revised { rev: row.rev });
             }
             self.watch_checkout(&mut state, &row)?;
-            if row.focused_at.is_some() {
+            if state.agent_running(&row.id) {
                 return Ok(Revised { rev: row.rev });
             }
             (PathBuf::from(&row.directory), state.store.harness(&row.harness)?)
@@ -685,16 +713,14 @@ impl Server {
         };
         let mut state = lock(&self.state);
         let mut row = state.store.task(&op.task)?;
-        if !row.state.is_live() || row.focused_at.is_some() {
+        if !row.state.is_live() || state.agent_running(&row.id) {
             return Ok(Revised { rev: row.rev });
         }
+        state.forget_agent(&row.id);
         let slot = match started {
             Some((harness, env)) => self.start_agent(&mut state, &mut row, harness, env)?,
             None => AgentSlot::HarnessUnknown,
         };
-        if matches!(slot, AgentSlot::Running { .. }) {
-            row.focused_at = Some(now());
-        }
         let rev = state.store.save_task(&mut row)?;
         state.agents.insert(row.id.clone(), slot);
         self.publish_task(&state, &row);
@@ -725,7 +751,7 @@ impl Server {
             .collect();
         let panel = PanelRow { id: PtyId::random(), task: row.id.clone(), name: AGENT_PANEL.to_string() };
         let terminal = self.spawn_panel(state, &panel, argv, &directory, env)?;
-        Ok(AgentSlot::Running { terminal, status: AgentStatus::Idle })
+        Ok(AgentSlot::Spawned { terminal, status: AgentStatus::Idle, since: now() })
     }
 
     /// Callers hold the state lock until the terminal joins it, so its exit never lands before it does.
@@ -801,7 +827,8 @@ impl Server {
         self.touch_task(state, task)
     }
 
-    /// An exited shell leaves its task's list; an exited agent stays, showing its scrollback.
+    /// An exited shell leaves its task's list; an exited agent stays, showing its scrollback, until a focus starts it
+    /// again.
     fn terminal_exited(&self, state: &mut State, task: &TaskId, id: &PtyId) -> Result<(), Error> {
         if state.agent_terminal(task).is_some_and(|current| &current.id == id) {
             return self.touch_task(state, task).map(drop);
@@ -929,6 +956,39 @@ impl Server {
             }
         }
         Ok(sweep)
+    }
+
+    /// Stops every agent that has been idle, silent and unshown for `AGENT_RECLAIM_MS` at `now` and runs no detached
+    /// descendant, returning their tasks. A stopped agent ends like any other, keeping its panel until the next focus
+    /// resumes its session. Activity is read outside the state lock, and the stop is sent under it after a re-check;
+    /// an agent whose activity the host cannot tell keeps running.
+    pub fn reclaim_agents(&self, now: i64) -> Vec<TaskId> {
+        let candidates: Vec<(TaskId, Arc<Terminal>)> = {
+            let state = lock(&self.state);
+            state.agents.keys().filter_map(|task| Some((task.clone(), state.idle_unshown_agent(task, now)?))).collect()
+        };
+        let mut reclaimed = Vec::new();
+        for (task, terminal) in candidates {
+            let activity = match terminal.activity() {
+                Ok(activity) => activity,
+                Err(error) if terminal.running() && !matches!(error, Error::InvalidArgs { .. }) => {
+                    report!("read the activity of the agent of {task}: {error}");
+                    continue;
+                }
+                Err(_) => continue,
+            };
+            if activity.detached_descendant || now - activity.output_at < AGENT_RECLAIM_MS {
+                continue;
+            }
+            let state = lock(&self.state);
+            if state.idle_unshown_agent(&task, now).is_some_and(|current| current.id == terminal.id) {
+                match terminal.terminate() {
+                    Ok(()) => reclaimed.push(task),
+                    Err(error) => report!("stop the idle agent of {task}: {error}"),
+                }
+            }
+        }
+        reclaimed
     }
 
     /// Writes happen after the state lock is released: a full pty buffer blocks them. A take keeps the size.

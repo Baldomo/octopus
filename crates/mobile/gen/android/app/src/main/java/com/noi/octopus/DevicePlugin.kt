@@ -10,8 +10,12 @@ import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.view.HapticFeedbackConstants
 import android.view.View
 import android.webkit.WebView
+import androidx.activity.BackEventCompat
+import androidx.activity.OnBackPressedCallback
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -41,6 +45,16 @@ class Keep {
 @InvokeArg
 class Bars {
     lateinit var appearance: String
+}
+
+@InvokeArg
+class Felt {
+    lateinit var feel: String
+}
+
+@InvokeArg
+class Pops {
+    var pops: Boolean = false
 }
 
 /**
@@ -97,6 +111,7 @@ class DevicePlugin(private val activity: Activity) : Plugin(activity) {
     override fun load(webView: WebView) {
         super.load(webView)
         page = webView
+        (activity as AppCompatActivity).onBackPressedDispatcher.addCallback(activity, back)
         val content = activity.findViewById<View>(android.R.id.content)
         ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
             val keyboard = insets.getInsets(WindowInsetsCompat.Type.ime())
@@ -125,6 +140,62 @@ class DevicePlugin(private val activity: Activity) : Plugin(activity) {
 
     private fun front(shown: Boolean) {
         page?.evaluateJavascript("dispatchEvent(new CustomEvent('octopus-front', { detail: $shown }))", null)
+    }
+
+    /**
+     * While the page has a screen or sheet to pop, the system back belongs to it: a predictive back gesture hands its
+     * progress to the page as `octopus-back`, which moves the top screen or sheet with it, and a back button commits at
+     * once. With nothing to pop, the system takes back as it would without the app.
+     */
+    private val back = object : OnBackPressedCallback(false) {
+        override fun handleOnBackStarted(backEvent: BackEventCompat) = tell("start", backEvent.progress)
+
+        override fun handleOnBackProgressed(backEvent: BackEventCompat) = tell("move", backEvent.progress)
+
+        override fun handleOnBackCancelled() = tell("cancel", 0f)
+
+        override fun handleOnBackPressed() = tell("commit", 1f)
+    }
+
+    private fun tell(phase: String, progress: Float) {
+        page?.evaluateJavascript(
+            "dispatchEvent(new CustomEvent('octopus-back', { detail: { phase: '$phase', progress: $progress } }))",
+            null,
+        )
+    }
+
+    @Command
+    fun backPops(invoke: Invoke) {
+        val pops = invoke.parseArgs(Pops::class.java).pops
+        activity.runOnUiThread {
+            back.isEnabled = pops
+            invoke.resolve()
+        }
+    }
+
+    /** Each feel as the system's own constant, which follows the user's touch feedback setting. */
+    @Command
+    fun feel(invoke: Invoke) {
+        val modern = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+        val feel = invoke.parseArgs(Felt::class.java).feel
+        val constant = when (feel) {
+            "select" -> if (modern) HapticFeedbackConstants.SEGMENT_TICK else HapticFeedbackConstants.CLOCK_TICK
+            "tap" -> HapticFeedbackConstants.KEYBOARD_TAP
+            "lift" -> HapticFeedbackConstants.LONG_PRESS
+            "drop" -> if (modern) HapticFeedbackConstants.GESTURE_END else HapticFeedbackConstants.VIRTUAL_KEY
+            "threshold" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                HapticFeedbackConstants.GESTURE_THRESHOLD_ACTIVATE
+            } else {
+                HapticFeedbackConstants.CLOCK_TICK
+            }
+            "success" -> if (modern) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.VIRTUAL_KEY
+            "warning", "error" -> if (modern) HapticFeedbackConstants.REJECT else HapticFeedbackConstants.LONG_PRESS
+            else -> return invoke.reject("no feel $feel")
+        }
+        activity.runOnUiThread {
+            page?.performHapticFeedback(constant)
+            invoke.resolve()
+        }
     }
 
     @Command

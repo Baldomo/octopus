@@ -54,6 +54,7 @@ pub fn commands<R: Runtime>() -> tauri::plugin::Builder<R> {
         commands::server_offer,
         commands::server_clients,
         commands::server_revoke,
+        commands::servers_refresh,
         commands::server_rename,
         commands::server_forget,
         commands::workspace_add,
