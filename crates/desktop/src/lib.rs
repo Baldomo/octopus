@@ -33,6 +33,7 @@ pub fn run(launch_problem: Option<String>) -> anyhow::Result<()> {
     };
     tauri::Builder::default()
         .plugin(octopus_shell::plugin())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             commands::title_bar_double_click,
             commands::browser_open,
@@ -61,6 +62,7 @@ mod tests {
     fn app() -> App<MockRuntime> {
         mock_builder()
             .plugin(octopus_shell::commands().build())
+            .plugin(tauri_plugin_opener::init())
             .build(super::context())
             .expect("the app builds on the mock runtime")
     }
@@ -91,5 +93,7 @@ mod tests {
         assert!(refused.is_err_and(|refusal| refusal.contains("not allowed")), "a browser page reaches no command");
         let closed = invoke(&base, "plugin:window|close", serde_json::json!({}));
         assert!(closed.is_err_and(|refusal| refusal.contains("not allowed")), "the window's own commands stay shut");
+        let file = invoke(&base, "plugin:opener|open_url", serde_json::json!({ "url": "file:///etc/hosts" }));
+        assert!(file.is_err_and(|refusal| refusal.contains("Not allowed")), "the system browser opens only web links");
     }
 }

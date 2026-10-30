@@ -17,7 +17,7 @@ A task manager for coding agents, written in Rust. It runs on macOS and Linux, w
 | typecheck the UI and check its formatting | `npm --prefix ui run typecheck && npm --prefix ui run format:check` |
 | regenerate the UI's types after changing a type it uses | `cargo run -p octopus-shell --example types && cargo run -p octopus-desktop --example types` |
 | regenerate the skill after changing an op or a command | `cargo run -p octopus-cli --example skill` |
-| regenerate the app icons after changing `logo/` (this strips the iOS icons' alpha channel, which App Store validation rejects) | `(cd crates/desktop && cargo tauri icon ../../logo/icon.json) && (cd crates/mobile && cargo tauri icon ../../logo/icon.json) && git clean -fdq crates/desktop/icons crates/mobile/icons && swift logo/flatten.swift crates/mobile/gen/apple/Assets.xcassets/AppIcon.appiconset/*.png` |
+| regenerate the app icons after changing `logo/` (this strips the iOS icons' alpha channel, which App Store validation rejects, and cuts the desktop icon to the macOS rounded square, since the Dock draws it unmasked) | `(cd crates/mobile && cargo tauri icon ../../logo/icon.json) && git clean -fdq crates/mobile/icons && swift logo/flatten.swift crates/mobile/gen/apple/Assets.xcassets/AppIcon.appiconset/*.png && swift logo/macos.swift logo/octopus.png crates/desktop/icons/icon.png` |
 | typecheck | `cargo check --workspace` |
 | check formatting | `cargo fmt --all --check` |
 | lint | `cargo clippy --workspace --all-targets -- -D warnings` |

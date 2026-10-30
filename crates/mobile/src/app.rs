@@ -21,7 +21,8 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(octopus_shell::plugin())
         .plugin(tauri_plugin_barcode_scanner::init())
-        .plugin(tauri_plugin_clipboard_manager::init());
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_opener::init());
     #[cfg(target_os = "android")]
     let builder = builder.plugin(device::plugin());
     builder

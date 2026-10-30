@@ -1,0 +1,11 @@
+{
+  "identifier": "links",
+  "description": "The base layer opens a terminal's web links in the system's browser.",
+  "webviews": ["main"],
+  "permissions": [
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "http://*" }, { "url": "https://*" }]
+    }
+  ]
+}

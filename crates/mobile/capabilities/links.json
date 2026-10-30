@@ -1,0 +1,12 @@
+{
+  "identifier": "links",
+  "description": "A tap on a URL in a terminal opens it in the OS's browser, for http and https alone.",
+  "webviews": ["main"],
+  "platforms": ["iOS", "android"],
+  "permissions": [
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "http://*" }, { "url": "https://*" }]
+    }
+  ]
+}

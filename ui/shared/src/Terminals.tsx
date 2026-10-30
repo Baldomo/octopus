@@ -5,6 +5,7 @@ import { Glyph } from "./Glyph";
 import { keepInView } from "./keepInView";
 import { commands, hint, mac } from "./commands";
 import { act, model, serverLabel, ui } from "./state";
+import { type LinkTarget, openLinks, type OpenUrl } from "./terminalLinks";
 import { terminalSession, windowShown } from "./terminalSession";
 
 /** Shift+Enter sends ESC CR, which agents read as a newline; on macOS ⌥←/⌥→ move by word as in Terminal.app. */
@@ -19,8 +20,11 @@ const chord = (event: KeyboardEvent) =>
     .filter(Boolean)
     .join("+");
 
+/** Opens a link one of the task's terminals shows. */
+export type OpenLink = (task: TaskView, url: string, target: LinkTarget) => void;
+
 /** The holder fits the PTY to its pane; every other client draws it at the holder's size, cropped and scrollable. */
-function Term(props: { at: TaskRef; panel: Panel; visible: boolean; resumable: boolean }) {
+function Term(props: { at: TaskRef; panel: Panel; visible: boolean; resumable: boolean; openLink: OpenUrl }) {
   let host!: HTMLDivElement;
   const session = terminalSession({ at: props.at, panel: () => props.panel, shown: () => props.visible });
   const { xterm, mine } = session;
@@ -35,6 +39,7 @@ function Term(props: { at: TaskRef; panel: Panel; visible: boolean; resumable: b
     return false;
   });
   xterm.onData(session.input);
+  openLinks(xterm, props.openLink);
 
   onMount(() => {
     session.open(host);
@@ -126,7 +131,7 @@ function AgentTab(props: { open: TaskView; on: boolean; shown: boolean; choose: 
 }
 
 /** The agent tab comes first and is selected unless a shell tab is chosen. */
-function Stack(props: { key: string }) {
+function Stack(props: { key: string; openLink: OpenLink }) {
   const task = () => model.tasks[props.key];
   const shown = () => ui.prefs.open === props.key && ui.prefs.view === "task";
   const [chosen, setChosen] = createSignal<PtyId | null>(null);
@@ -197,6 +202,7 @@ function Stack(props: { key: string }) {
                       panel={panel()}
                       visible={shown() && selected()?.id === id}
                       resumable={open().live && panel().name === AGENT_PANEL && !panel().running}
+                      openLink={(url, target) => props.openLink(open(), url, target)}
                     />
                   )}
                 </Show>
@@ -210,10 +216,10 @@ function Stack(props: { key: string }) {
 }
 
 /** The right half: one stack per recently opened task, the open one shown. */
-export function TerminalStacks() {
+export function TerminalStacks(props: { openLink: OpenLink }) {
   return (
     <>
-      <For each={ui.recent}>{(key) => <Stack key={key} />}</For>
+      <For each={ui.recent}>{(key) => <Stack key={key} openLink={props.openLink} />}</For>
       <Show when={ui.prefs.open === null}>
         <div class="pane stack">
           <div class="empty">Open a task from the sidebar ({hint(commands.sidebar)}).</div>

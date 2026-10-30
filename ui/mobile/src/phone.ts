@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { cancel, Format, scan } from "@tauri-apps/plugin-barcode-scanner";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Feel } from "./feel";
 
 const INVITE = "octopus://";
@@ -25,6 +26,8 @@ export const phone = {
   feel: (feel: Feel) => invoke<void>("phone_feel", { feel }),
   /** Opens this app's page of the OS's settings, where a denied microphone is granted. */
   settings: () => invoke<void>("phone_settings"),
+  /** Opens an http or https URL in the OS's browser. */
+  open: (url: string) => openUrl(url),
 };
 
 /** A page as the phone shows it, and whether it reaches the server's port through the tunnel. */

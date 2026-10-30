@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { BrowserId, TaskRef } from "@octopus/shared/generated.ts";
 import { NEW_BROWSER_PANEL } from "@octopus/shared/generated.ts";
 import { EVENTS, type Go, type Navigated, type OnScreen } from "./generated";
@@ -17,6 +18,8 @@ export const desktop = {
   browserGo: (at: TaskRef, panel: BrowserId, go: Go) => invoke<void>("browser_go", { at, panel, go }),
   /** Closes the panel's webview on this client; the panel stays on its server. */
   browserClose: (at: TaskRef, panel: BrowserId) => invoke<void>("browser_close", { at, panel }),
+  /** Opens an `http` or `https` URL in the system's browser. */
+  openOutside: openUrl,
 };
 
 export const desktopEvents = {

@@ -785,19 +785,14 @@ impl Server {
         terminal
     }
 
-    /// The login shell runs outside the state lock, as in `task_focus`; the task is read again after it.
     fn term_open(&self, op: TermOpen) -> Result<Opened, Error> {
-        let live_directory = |state: &State| -> Result<PathBuf, Error> {
-            let row = state.store.task(&op.task)?;
-            if !row.state.is_live() {
-                return Err(Error::conflict(format!("{} is ended; reopen it to open a shell", row.id)));
-            }
-            Ok(PathBuf::from(row.directory))
-        };
-        let directory = live_directory(&lock(&self.state))?;
-        let (shell, env) = (login::shell()?, login::resolve(&directory)?);
+        let shell = login::shell()?;
         let mut state = lock(&self.state);
-        let directory = live_directory(&state)?;
+        let row = state.store.task(&op.task)?;
+        if !row.state.is_live() {
+            return Err(Error::conflict(format!("{} is ended; reopen it to open a shell", row.id)));
+        }
+        let directory = PathBuf::from(row.directory);
         let stem = shell.file_stem().unwrap_or(shell.as_os_str()).to_string_lossy().into_owned();
         let taken: HashSet<&str> = state.terminals(&op.task).map(|(name, _)| name).chain([AGENT_PANEL]).collect();
         let name = std::iter::once(stem.clone())
@@ -805,8 +800,8 @@ impl Server {
             .find(|name| !taken.contains(name.as_str()))
             .expect("an unbounded run of names holds one the task's panels lack");
         let panel = PanelRow { id: PtyId::random(), task: op.task.clone(), name: name.clone() };
-        let argv = vec![shell.to_string_lossy().into_owned()];
-        let terminal = self.spawn_panel(&mut state, &panel, argv, &directory, env)?;
+        let argv = vec![shell.to_string_lossy().into_owned(), "-l".into()];
+        let terminal = self.spawn_panel(&mut state, &panel, argv, &directory, Vec::new())?;
         state.shells.entry(op.task.clone()).or_default().push(Shell { name, terminal });
         Ok(Opened { panel: panel.id, rev: self.touch_task(&mut state, &op.task)? })
     }

@@ -15,6 +15,7 @@ import { phone } from "./phone";
 import type { Point } from "./press";
 import { scroller } from "./scroll";
 import { TERMINAL_FONT } from "./symbols";
+import { termSelection } from "./termSelect";
 import { slidingThumb } from "./thumb";
 import { notify } from "./Toast";
 import { COMMIT_PX, owns, type Gesture } from "./touch";
@@ -210,8 +211,18 @@ function PhoneTerm(props: {
     if (natural > 0) xterm.options.lineHeight = (ROW_PX * scale(ui.prefs)) / natural;
   };
 
+  let drawn: HTMLElement | undefined;
+  const selection = termSelection({
+    xterm,
+    screen: () => drawn,
+    size: screen,
+    view,
+    pan,
+  });
+
   onMount(() => {
     owns(pane, drag);
+    selection.attach(pane);
     resetSink();
   });
   onPainted(() => {
@@ -220,7 +231,8 @@ function PhoneTerm(props: {
       setView(size);
       if (session.shown() && mine()) session.fit();
     });
-    observeSize(xterm.element!.querySelector<HTMLElement>(".xterm-screen")!, setScreen);
+    drawn = xterm.element!.querySelector<HTMLElement>(".xterm-screen")!;
+    observeSize(drawn, setScreen);
     setOpened(true);
   });
   /** A terminal mounted hidden measures no cell, so its rows fit again each time it shows. */
@@ -241,6 +253,7 @@ function PhoneTerm(props: {
       background: color("--bg"),
       foreground: color(mine() ? "--term-text" : "--dim"),
       cursor: color("--text"),
+      selectionBackground: color("--select"),
     };
   });
   createEffect(() => {
@@ -283,13 +296,14 @@ function PhoneTerm(props: {
         onTouchCancel={settle}
         onTouchEnd={(event) => {
           settle();
-          if (event.defaultPrevented) return;
+          if (event.defaultPrevented || selection.onControls(event)) return;
           const touch = event.changedTouches[0];
-          const travelled = from && touch ? Math.hypot(touch.clientX - from.x, touch.clientY - from.y) : Infinity;
-          if (travelled >= COMMIT_PX || !mine() || !live()) return;
+          if (!from || !touch || Math.hypot(touch.clientX - from.x, touch.clientY - from.y) >= COMMIT_PX) return;
+          const tapped = selection.tap({ x: touch.clientX, y: touch.clientY });
+          if (!tapped && (!mine() || !live())) return;
           // The click a tap synthesizes would land on the pane and take the focus back from the keyboard.
           event.preventDefault();
-          sink.focus();
+          if (!tapped) sink.focus();
         }}
       >
         <div class="zoom-reset">
@@ -299,6 +313,7 @@ function PhoneTerm(props: {
           <Show when={thumbs().x}>{(x) => <i class="thumb across" style={x()} />}</Show>
           <Show when={thumbs().y}>{(y) => <i class="thumb down" style={y()} />}</Show>
         </Show>
+        <selection.Handles />
       </div>
       <textarea
         ref={sink}

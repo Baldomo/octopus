@@ -24,6 +24,7 @@ tokio = { version = "1.54.1", features = ["sync"] }
 [target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
 tauri-plugin-barcode-scanner = "2.5.3"
 tauri-plugin-clipboard-manager = "2.5.0"
+tauri-plugin-opener = "2.7.2"
 
 [target.'cfg(target_os = "ios")'.dependencies]
 # Exact, and so for the whole workspace, which resolves one libc: from 0.2.190 libc declares the route and `in6_ifreq`

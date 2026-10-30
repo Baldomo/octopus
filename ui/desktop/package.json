@@ -8,6 +8,7 @@
   "dependencies": {
     "@octopus/shared": "*",
     "@tauri-apps/api": "2.12.4",
+    "@tauri-apps/plugin-opener": "2.7.2",
     "solid-js": "1.9.17"
   }
 }

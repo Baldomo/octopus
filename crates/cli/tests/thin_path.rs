@@ -1,6 +1,9 @@
 mod common;
 
-use common::{SERVER, ServerProcess, connect, create, echo_agent, eventually, read_until, start, task, workspace};
+use common::{
+    SERVER, ServerProcess, connect, create, echo_agent, eventually, read_until, start, task, workspace,
+    write_login_profile,
+};
 use octopus_client::{CallError, Connection};
 use octopus_proto::ops::{
     AgentReport, HarnessSet, TaskCreate, TaskFocus, TaskMove, TaskSetSession, TermClaim, TermClose, TermOpen,
@@ -126,6 +129,34 @@ async fn a_shell_panel_follows_the_agent_until_its_shell_exits_or_it_closes() {
 
     laptop.call(&TaskMove { task: id.clone(), state: TaskState::Completed }).await.expect("complete");
     conflict(laptop.call(&TermOpen { task: id }).await, "a shell in an ended task");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shell_panel_opens_before_its_login_profile_finishes_and_then_has_its_environment() {
+    const PROFILE_SECONDS: u64 = 2;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("home");
+    write_login_profile(&home, &format!("sleep {PROFILE_SECONDS}\nexport OCTOPUS_TEST_LOGIN=profile\n"));
+    let server = ServerProcess::launched(dir.path(), &home).await;
+    let laptop = server.connect("laptop").await;
+    let workspace = workspace(&laptop, dir.path()).await;
+    set_harness(&laptop, "echo", echo_agent("agent:up"), false).await;
+    let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
+
+    let opening = std::time::Instant::now();
+    let shell = laptop.call(&TermOpen { task: id.clone() }).await.expect("term.open").panel;
+    assert!(opening.elapsed().as_secs() < PROFILE_SECONDS, "term.open waited on the profile");
+    let mut live = laptop.open_data_stream(&Stream::Pty(shell.clone())).await.expect("attach the shell");
+    let echo = TermSend {
+        task: id,
+        panel: shell.0,
+        text: "echo login:$OCTOPUS_TEST_LOGIN".into(),
+        enter: true,
+        take_lock: true,
+    };
+    laptop.call(&echo).await.expect("type into the shell");
+    read_until(&mut live, "login:profile").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -390,10 +421,10 @@ async fn a_launched_server_finds_and_runs_agents_in_the_login_environment() {
     laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
     assert_eq!(task(&laptop, &id).await.agent, Agent::HarnessNotInstalled { install: "true".into() });
 
-    let profile = format!("export PATH=\"{}:$PATH\"\nexport OCTOPUS_TEST_LOGIN=profile\n", bin.display());
-    for file in [".profile", ".zprofile"] {
-        std::fs::write(home.join(file), &profile).expect("profile");
-    }
+    write_login_profile(
+        &home,
+        &format!("export PATH=\"{}:$PATH\"\nexport OCTOPUS_TEST_LOGIN=profile\n", bin.display()),
+    );
     focus_prints(&laptop, &id, "login:profile").await;
 }
 

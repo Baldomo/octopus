@@ -144,6 +144,13 @@ pub fn echo_agent(line: &str) -> Vec<String> {
     vec!["sh".into(), "-c".into(), format!("echo {line}; exec cat")]
 }
 
+/// Writes `script` as the login profile of both sh-family shells and zsh under `home`.
+pub fn write_login_profile(home: &Path, script: &str) {
+    for file in [".profile", ".zprofile"] {
+        std::fs::write(home.join(file), script).expect("profile");
+    }
+}
+
 pub async fn workspace(connection: &Connection, root: &Path) -> WorkspaceId {
     let add = WorkspaceAdd { name: "octopus".into(), root: root.to_string_lossy().to_string(), color: Color::Auto };
     connection.call(&add).await.expect("workspace.add").workspace

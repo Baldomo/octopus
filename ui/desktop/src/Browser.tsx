@@ -2,8 +2,9 @@ import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "s
 import { createStore, produce } from "solid-js/store";
 import { NEW_BROWSER_PANEL } from "@octopus/shared/generated.ts";
 import { keepInView } from "@octopus/shared/keepInView.ts";
-import type { BrowserId, BrowserPanel, TaskRef } from "@octopus/shared/generated.ts";
-import { act, openView, report, ui } from "@octopus/shared/state.ts";
+import type { BrowserId, BrowserPanel, TaskRef, TaskView } from "@octopus/shared/generated.ts";
+import { act, openView, report, showSurface, ui } from "@octopus/shared/state.ts";
+import type { OpenLink } from "@octopus/shared/Terminals.tsx";
 import { desktop, desktopEvents } from "./backend";
 import type { Go, OnScreen } from "./generated";
 
@@ -39,6 +40,28 @@ export function forgetBrowsersExcept(keep: string[]) {
   }
 }
 
+/** The task's chosen panel while it exists, else its newest one. */
+function targetOf(task: TaskView): Target {
+  const chosen = selected[task.key];
+  const panels = task.task.browsers;
+  if (chosen === NEW_BROWSER_PANEL || panels.some((panel) => panel.panel === chosen))
+    return chosen ?? NEW_BROWSER_PANEL;
+  return panels.at(-1)?.panel ?? NEW_BROWSER_PANEL;
+}
+
+/** Shows `url` in the task's target panel, which stays the target. */
+const openPage = (task: TaskView, url: string) =>
+  desktop.browserOpen(task.at, targetOf(task), url).then((panel) => setSelected(task.key, panel), report);
+
+/** A terminal's link opens in the task's browser panel, the left half switching to Browser, or in the system's browser. */
+export const openLink: OpenLink = (task, url, target) => {
+  if (target === "system") act(desktop.openOutside(url));
+  else {
+    showSurface("browser");
+    openPage(task, url);
+  }
+};
+
 const withScheme = (typed: string) => (/^[a-z][a-z0-9+.-]*:\/\//i.test(typed) ? typed : `http://${typed}`);
 
 const hostOf = (url: string) => {
@@ -70,13 +93,9 @@ export function Browser(props: { visible: boolean }) {
   let page!: HTMLDivElement;
   const [editing, setEditing] = createSignal(false);
   const panels = (): BrowserPanel[] => openView()?.task.browsers ?? [];
-  /** The task's chosen panel while it exists, else its newest one. */
   const target = (): Target => {
     const task = openView();
-    const chosen = task === undefined ? undefined : selected[task.key];
-    if (chosen === NEW_BROWSER_PANEL || panels().some((panel) => panel.panel === chosen))
-      return chosen ?? NEW_BROWSER_PANEL;
-    return panels().at(-1)?.panel ?? NEW_BROWSER_PANEL;
+    return task === undefined ? NEW_BROWSER_PANEL : targetOf(task);
   };
   const current = () => panels().find((panel) => panel.panel === target());
   const tunnelOf = (task: string, panel: BrowserId) => rendered[task]?.tunnels[panel];
@@ -137,10 +156,7 @@ export function Browser(props: { visible: boolean }) {
 
   const go = (typed: string) => {
     const task = openView();
-    if (task === undefined || typed.trim() === "") return;
-    desktop
-      .browserOpen(task.at, target(), withScheme(typed.trim()))
-      .then((panel) => setSelected(task.key, panel), report);
+    if (task !== undefined && typed.trim() !== "") openPage(task, withScheme(typed.trim()));
   };
 
   const navigate = (step: Go) => {

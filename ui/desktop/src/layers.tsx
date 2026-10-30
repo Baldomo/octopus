@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import { Board } from "./Board";
-import { Browser, forgetBrowsersExcept } from "./Browser";
+import { Browser, forgetBrowsersExcept, openLink } from "./Browser";
 import { ClientMenu } from "@octopus/shared/ClientMenu.tsx";
 import { Files } from "@octopus/shared/Files.tsx";
 import { filesOf, forgetFilesExcept } from "@octopus/shared/taskFiles.ts";
@@ -19,9 +19,13 @@ import { TerminalStacks } from "@octopus/shared/Terminals.tsx";
 import { TitleBar } from "./TitleBar";
 import type { Bounds, Modal as ModalName } from "@octopus/shared/generated.ts";
 
-/** This webview's own size, which grows only once the app has placed it and its renderer has taken the new size. */
-const [webview, setWebview] = createSignal({ width: innerWidth, height: innerHeight });
-addEventListener("resize", () => setWebview({ width: innerWidth, height: innerHeight }));
+/** This webview's own size, unrounded, which grows only once the app has placed it and its renderer has taken the new size. */
+const viewport = visualViewport!;
+const [webview, setWebview] = createSignal({ width: viewport.width, height: viewport.height });
+viewport.addEventListener("resize", () => setWebview({ width: viewport.width, height: viewport.height }));
+
+/** The app places the layer in whole device pixels, so it may stop short of a surface's far edge by up to one. */
+const PLACEMENT_SLACK = 1;
 
 /** The element's rect in window coordinates. */
 const box = (element: HTMLElement): Bounds => ({
@@ -83,7 +87,11 @@ function floating(surface: { name: string; modal: () => boolean; out: () => bool
   };
   const held = () => {
     const corner = reach();
-    return corner !== null && corner.right <= webview().width && corner.bottom <= webview().height;
+    return (
+      corner !== null &&
+      corner.right < webview().width + PLACEMENT_SLACK &&
+      corner.bottom < webview().height + PLACEMENT_SLACK
+    );
   };
   const shown = createMemo<boolean>((was) => out() && (was || held()), false);
   return { ref, shown };
@@ -145,7 +153,7 @@ export function Docked() {
             </div>
           </Show>
         </div>
-        <TerminalStacks />
+        <TerminalStacks openLink={openLink} />
       </div>
       <div class="tasks-view" style={{ display: ui.prefs.view === "tasks" ? "" : "none" }}>
         <Board />

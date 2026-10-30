@@ -1,7 +1,7 @@
 import { feel } from "./feel";
 import { COMMIT_PX, keepTouch } from "./touch";
 
-const LONG_PRESS_MS = 450;
+export const LONG_PRESS_MS = 450;
 
 export type Point = { x: number; y: number };
 
