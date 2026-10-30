@@ -327,6 +327,24 @@ impl Arg for AgentStatus {
     }
 }
 
+/// The hooks the server installs in a harness's agent, through which the agent reports its status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Hooks {
+    None,
+    ClaudeCode,
+}
+
+impl Hooks {
+    pub const ALL: [Self; 2] = [Self::None, Self::ClaudeCode];
+}
+
+impl Arg for Hooks {
+    fn shape() -> Shape {
+        choice(&Self::ALL)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Agent {

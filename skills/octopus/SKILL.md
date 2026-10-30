@@ -59,7 +59,7 @@ Declare how a harness starts its agent.
 - `--start <start>`: The args appended to argv on a session's first start, with {session} for the session id, e.g. ["--session-id","{session}"].
 - `--resume <resume>`: The args appended to argv on every later start, with {session} for the session id, e.g. ["--resume","{session}"].
 - `--install <install>`: The command that installs the agent, shown when it is missing.
-- `--hooks true|false`: Whether the agent reports its status with `agent report`.
+- `--hooks none|claude-code`: The hooks the server installs in the agent, through which it reports its status with `agent report`.
 
 ## `octopus agent report`
 

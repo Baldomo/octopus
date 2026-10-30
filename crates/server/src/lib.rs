@@ -1,6 +1,7 @@
 mod browser;
 mod checkouts;
 mod files;
+mod harness;
 mod listener;
 mod login;
 mod mic;
@@ -27,8 +28,8 @@ use octopus_proto::ops::{
 use octopus_proto::pairing::{Invite, Side};
 use octopus_proto::remote::{self, Endpoint, RelayUrl};
 use octopus_proto::types::{
-    AGENT_PANEL, Agent, AgentStatus, BrowserPanel, Checkout, ENV_SERVER, ENV_TASK, Panel, PtyId, SessionId, Task,
-    TaskId, web_page,
+    AGENT_PANEL, Agent, AgentStatus, BrowserPanel, Checkout, ENV_SERVER, ENV_TASK, Hooks, Panel, PtyId, SessionId,
+    Task, TaskId, web_page,
 };
 use octopus_proto::{Error, Event, Op, Outcome, Push, Request, parse_args};
 use tokio::sync::broadcast;
@@ -91,6 +92,8 @@ pub struct Server {
     endpoint: OnceLock<Endpoint>,
     offers: Mutex<Offers>,
     worktrees: PathBuf,
+    /// The `octopus` binary, through which an agent's hooks report.
+    octopus: PathBuf,
     host: Arc<HostClient>,
     state: Mutex<State>,
     clients: Mutex<HashMap<String, usize>>,
@@ -286,7 +289,7 @@ impl Server {
         let mut store = Store::open(store)?;
         let device = store.device_key()?;
         let browsers = store.browsers()?;
-        let host_address = host.address.clone();
+        let (host_program, host_address) = (host.program.clone(), host.address.clone());
         let host = Arc::new(HostClient::reach_or_start(host)?);
         let mut hosted: HashMap<PtyId, bool> =
             host.list()?.into_iter().map(|hosted| (hosted.id, hosted.running)).collect();
@@ -305,6 +308,7 @@ impl Server {
             endpoint: OnceLock::new(),
             offers: Mutex::default(),
             worktrees: worktrees.to_path_buf(),
+            octopus: host_program,
             host,
             state: Mutex::new(State {
                 store,
@@ -574,7 +578,7 @@ impl Server {
     fn agent_report(&self, op: AgentReport) -> Result<Revised, Error> {
         let mut state = lock(&self.state);
         let row = state.store.task(&op.task)?;
-        if !state.store.harness(&row.harness)?.is_some_and(|harness| harness.hooks) {
+        if state.store.harness(&row.harness)?.is_none_or(|harness| harness.hooks == Hooks::None) {
             return Err(Error::conflict(format!("harness {} declares no hooks", row.harness)));
         }
         match state.agents.get_mut(&row.id) {
@@ -747,6 +751,7 @@ impl Server {
         let session = row.session.as_ref().map(|session| session.0.as_str()).unwrap_or_default();
         let argv = std::iter::once(program.to_string_lossy().into_owned())
             .chain(args.iter().cloned())
+            .chain(harness::args(harness.hooks, &self.octopus))
             .chain(session_args.iter().map(|arg| arg.replace(SESSION, session)))
             .collect();
         let panel = PanelRow { id: PtyId::random(), task: row.id.clone(), name: AGENT_PANEL.to_string() };

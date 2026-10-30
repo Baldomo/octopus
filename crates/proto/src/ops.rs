@@ -7,8 +7,8 @@ use crate::frames::Op;
 use crate::pairing::{Invite, Proof};
 use crate::schema::{Field, record};
 use crate::types::{
-    AgentStatus, BrowserId, BrowserTarget, Checkout, Color, PtyId, SessionId, Task, TaskId, TaskState, Workspace,
-    WorkspaceId,
+    AgentStatus, BrowserId, BrowserTarget, Checkout, Color, Hooks, PtyId, SessionId, Task, TaskId, TaskState,
+    Workspace, WorkspaceId,
 };
 
 /// Declares an op: its args as a `record!`, its wire name, and the type of its result.
@@ -204,8 +204,8 @@ op!(
         resume: Vec<String>,
         /// The command that installs the agent, shown when it is missing.
         install: String,
-        /// Whether the agent reports its status with `agent report`.
-        hooks: bool,
+        /// The hooks the server installs in the agent, through which it reports its status with `agent report`.
+        hooks: Hooks,
     }
 );
 op!(

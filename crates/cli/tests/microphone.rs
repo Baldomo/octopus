@@ -11,7 +11,7 @@ use common::{Running, SERVER, connect, create, eventually, read_until, start_wit
 use octopus_client::{CallError, Connection, DataStream};
 use octopus_proto::Error;
 use octopus_proto::ops::{HarnessSet, TaskFocus, TermSend};
-use octopus_proto::types::{Checkout, MIC_FORMAT, PtyId, Stream, TaskId};
+use octopus_proto::types::{Checkout, Hooks, MIC_FORMAT, PtyId, Stream, TaskId};
 use octopus_shell::microphone::{Access, Capture, Chunk, Microphone};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
@@ -70,8 +70,14 @@ impl Listening {
             dir.path().join("heard.raw").display()
         );
         let argv = vec!["sh".into(), "-c".into(), script];
-        let harness =
-            HarnessSet { id: "rec".into(), argv, install: "true".into(), start: vec![], resume: vec![], hooks: false };
+        let harness = HarnessSet {
+            id: "rec".into(),
+            argv,
+            install: "true".into(),
+            start: vec![],
+            resume: vec![],
+            hooks: Hooks::None,
+        };
         holder.call(&harness).await.expect("harness.set");
         let id = create(&holder, &workspace, Checkout::Root, "rec").await;
         holder.call(&TaskFocus { task: id.clone() }).await.expect("focus");

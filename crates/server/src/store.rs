@@ -4,8 +4,8 @@ use std::path::Path;
 use octopus_proto::Error;
 use octopus_proto::device::{DeviceKey, PublicKey};
 use octopus_proto::types::{
-    AGENT_PANEL, BrowserId, BrowserPanel, Checkout, Color, PtyId, SessionId, TaskId, TaskState, Workspace, WorkspaceId,
-    from_wire, to_wire,
+    AGENT_PANEL, BrowserId, BrowserPanel, Checkout, Color, Hooks, PtyId, SessionId, TaskId, TaskState, Workspace,
+    WorkspaceId, from_wire, to_wire,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
@@ -17,7 +17,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
 INSERT OR IGNORE INTO meta (key, value) VALUES ('rev', 0);
 CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE);
-CREATE TABLE IF NOT EXISTS harnesses (id TEXT PRIMARY KEY, argv TEXT NOT NULL, install TEXT NOT NULL, hooks INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS harnesses (id TEXT PRIMARY KEY, argv TEXT NOT NULL, install TEXT NOT NULL, hooks TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     workspace TEXT NOT NULL REFERENCES workspaces(id),
@@ -91,7 +91,7 @@ pub struct Harness {
     pub start: Vec<String>,
     pub resume: Vec<String>,
     pub install: String,
-    pub hooks: bool,
+    pub hooks: Hooks,
 }
 
 fn owner_only(path: &Path) -> std::io::Result<()> {
@@ -135,10 +135,13 @@ fn task_row(row: &Row) -> rusqlite::Result<TaskRow> {
     })
 }
 
+/// The column's declared type, when the table has it.
+fn column_type(db: &Connection, table: &str, column: &str) -> rusqlite::Result<Option<String>> {
+    db.query_row("SELECT type FROM pragma_table_info(?1) WHERE name = ?2", [table, column], |row| row.get(0)).optional()
+}
+
 fn has_column(db: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
-    db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)", [table, column], |row| {
-        row.get(0)
-    })
+    column_type(db, table, column).map(|kind| kind.is_some())
 }
 
 fn migrate_columns(db: &Connection) -> rusqlite::Result<()> {
@@ -151,6 +154,17 @@ fn migrate_columns(db: &Connection) -> rusqlite::Result<()> {
         if has_column(db, table, column)? {
             db.execute(&format!("ALTER TABLE {table} DROP COLUMN {column}"), [])?;
         }
+    }
+    Ok(())
+}
+
+/// A store from a build whose harnesses declared hooks as a flag declares none for each of them.
+fn name_hooks(db: &Connection) -> rusqlite::Result<()> {
+    if column_type(db, "harnesses", "hooks")?.as_deref() == Some("INTEGER") {
+        let tx = db.unchecked_transaction()?;
+        tx.execute("ALTER TABLE harnesses DROP COLUMN hooks", [])?;
+        tx.execute("ALTER TABLE harnesses ADD COLUMN hooks TEXT NOT NULL DEFAULT 'none'", [])?;
+        tx.commit()?;
     }
     Ok(())
 }
@@ -187,6 +201,7 @@ impl Store {
         let db = Connection::open(path).map_err(Error::internal)?;
         db.execute_batch(SCHEMA).map_err(Error::internal)?;
         migrate_columns(&db).map_err(Error::internal)?;
+        name_hooks(&db).map_err(Error::internal)?;
         adopt_agent_terminals(&db).map_err(Error::internal)?;
         Ok(Self { db })
     }
@@ -393,7 +408,7 @@ impl Store {
             "INSERT INTO harnesses (id, argv, start, resume, install, hooks) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET argv = excluded.argv, start = excluded.start, resume = excluded.resume,
              install = excluded.install, hooks = excluded.hooks",
-            params![id, argv, start, resume, harness.install, harness.hooks],
+            params![id, argv, start, resume, harness.install, to_wire(&harness.hooks)],
         )
         .map_err(Error::internal)?;
         let rev = bump_rev(&tx)?;
@@ -402,10 +417,10 @@ impl Store {
     }
 
     pub fn harness(&self, id: &str) -> Result<Option<Harness>, Error> {
-        let row: Option<([String; 3], String, bool)> = self
+        let row: Option<([String; 3], String, Hooks)> = self
             .db
             .query_row("SELECT argv, start, resume, install, hooks FROM harnesses WHERE id = ?1", [id], |row| {
-                Ok(([row.get(0)?, row.get(1)?, row.get(2)?], row.get(3)?, row.get(4)?))
+                Ok(([row.get(0)?, row.get(1)?, row.get(2)?], row.get(3)?, wire_column(row, "hooks")?))
             })
             .optional()
             .map_err(Error::internal)?;
@@ -600,7 +615,10 @@ mod tests {
                  INSERT INTO tasks VALUES ('tsk_1', 'wsp_1', NULL, 't', 'pinned', 'root', 'h', '/w', NULL, NULL, NULL, 1);
                  CREATE TABLE terminals (task TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE);
                  INSERT INTO terminals VALUES ('tsk_1', 'pty_1');
-                 CREATE TABLE clients (name TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE);",
+                 CREATE TABLE clients (name TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE);
+                 CREATE TABLE harnesses (id TEXT PRIMARY KEY, argv TEXT NOT NULL, install TEXT NOT NULL,
+                 hooks INTEGER NOT NULL);
+                 INSERT INTO harnesses VALUES ('h', '[\"h\"]', 'true', 1);",
             )
             .expect("an earlier schema");
         drop(earlier);
@@ -609,6 +627,7 @@ mod tests {
         assert_eq!((task.archived_at, task.session), (None, None));
         assert!(!has_column(&store.db, "tasks", "focused_at").expect("table info"), "the dropped column goes");
         assert_eq!(store.clients().expect("clients"), []);
+        assert_eq!(store.harness("h").expect("its harness").map(|harness| harness.hooks), Some(Hooks::None));
         let agent = PanelRow { id: PtyId("pty_1".into()), task: TaskId("tsk_1".into()), name: AGENT_PANEL.into() };
         assert_eq!(store.reattach(&HashSet::from([agent.id.clone()])).expect("reattach"), [agent]);
     }

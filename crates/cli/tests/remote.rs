@@ -10,7 +10,7 @@ use octopus_client::{CallError, Connection, Identity};
 use octopus_proto::device::DeviceKey;
 use octopus_proto::ops::{BrowserOpen, HarnessSet, PairingForget, PairingList, PairingOffer, TaskFocus, TermSend};
 use octopus_proto::pairing::Invite;
-use octopus_proto::types::{BrowserId, BrowserPanel, BrowserTarget, Checkout, Stream, TaskId};
+use octopus_proto::types::{BrowserId, BrowserPanel, BrowserTarget, Checkout, Hooks, Stream, TaskId};
 use octopus_proto::{Error, Event};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -88,7 +88,7 @@ async fn a_task_runs_over_iroh_and_a_stalled_file_transfer_never_blocks_its_term
         install: "true".into(),
         start: vec![],
         resume: vec![],
-        hooks: false,
+        hooks: Hooks::None,
     };
     laptop.call(&harness).await.expect("harness.set");
     let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
