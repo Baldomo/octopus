@@ -152,7 +152,11 @@ body {
   inset: 0;
   background: var(--term);
 }
+.files {
+  position: relative;
+}
 .files:focus,
+.tree:focus,
 .rendered:focus {
   outline: none;
 }

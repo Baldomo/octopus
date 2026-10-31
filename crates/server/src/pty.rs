@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use nix::unistd::Pid;
 use octopus_proto::Error;
+use octopus_proto::types::TERM_SIZE_OSC;
 use portable_pty::{CommandBuilder, MasterPty, PtyPair, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, watch};
@@ -22,9 +23,151 @@ pub const INITIAL_SIZE: (u16, u16) = (80, 24);
 
 pub type Chunk = Arc<[u8]>;
 
+/// Output the program wrote at one size.
+struct Stretch {
+    cols: u16,
+    rows: u16,
+    bytes: VecDeque<u8>,
+}
+
+fn size_record(cols: u16, rows: u16) -> Vec<u8> {
+    format!("\x1b]{TERM_SIZE_OSC};{cols};{rows}\x07").into_bytes()
+}
+
+/// Where the output stands between the escape sequences and UTF-8 characters a terminal parses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Grammar {
+    Ground,
+    Escape,
+    Csi,
+    /// An OSC's string, which BEL or ST ends.
+    Osc,
+    /// A DCS, SOS, PM or APC string, which ST alone ends.
+    Str,
+    StrEscape,
+    Utf8 {
+        left: u8,
+    },
+}
+
+impl Grammar {
+    fn after(self, byte: u8) -> Self {
+        match (self, byte) {
+            (_, 0x18 | 0x1a) | (Self::Osc, 0x07) | (Self::StrEscape, b'\\') => Self::Ground,
+            (Self::Osc | Self::Str, 0x1b) => Self::StrEscape,
+            (Self::Osc | Self::Str, _) => self,
+            (Self::StrEscape, _) => Self::Escape.after(byte),
+            (_, 0x1b) => Self::Escape,
+            (Self::Escape, b'[') => Self::Csi,
+            (Self::Escape, b']') => Self::Osc,
+            (Self::Escape, b'P' | b'X' | b'^' | b'_') => Self::Str,
+            (Self::Escape, 0x00..=0x2f) => Self::Escape,
+            (Self::Escape, 0x80..) => Self::Ground.after(byte),
+            (Self::Csi, 0x40..=0x7e) | (Self::Escape, _) => Self::Ground,
+            (Self::Csi, _) => Self::Csi,
+            (Self::Utf8 { left }, 0x80..=0xbf) => {
+                if left == 1 {
+                    Self::Ground
+                } else {
+                    Self::Utf8 { left: left - 1 }
+                }
+            }
+            (Self::Ground | Self::Utf8 { .. }, 0xc0..=0xdf) => Self::Utf8 { left: 1 },
+            (Self::Ground | Self::Utf8 { .. }, 0xe0..=0xef) => Self::Utf8 { left: 2 },
+            (Self::Ground | Self::Utf8 { .. }, 0xf0..=0xf7) => Self::Utf8 { left: 3 },
+            (Self::Ground | Self::Utf8 { .. }, _) => Self::Ground,
+        }
+    }
+}
+
 struct Output {
-    scrollback: VecDeque<u8>,
+    /// The most recent output, oldest first, split where the terminal resized; never empty.
+    scrollback: VecDeque<Stretch>,
+    kept_bytes: usize,
+    grammar: Grammar,
+    /// A resize that came while the output stood inside a sequence or a character, which its size record would split.
+    pending_size: Option<(u16, u16)>,
     live: Option<broadcast::Sender<Chunk>>,
+}
+
+impl Output {
+    fn new(live: Option<broadcast::Sender<Chunk>>) -> Self {
+        let (cols, rows) = INITIAL_SIZE;
+        let scrollback = VecDeque::from([Stretch { cols, rows, bytes: VecDeque::new() }]);
+        Self { scrollback, kept_bytes: 0, grammar: Grammar::Ground, pending_size: None, live }
+    }
+
+    /// A resize waiting on a sequence lands right after the byte that ends it.
+    fn add(&mut self, chunk: &[u8]) {
+        let mut rest = chunk;
+        if let Some((cols, rows)) = self.pending_size {
+            let Some(end) = rest.iter().position(|&byte| {
+                self.grammar = self.grammar.after(byte);
+                self.grammar == Grammar::Ground
+            }) else {
+                return self.keep(rest);
+            };
+            let (whole, after) = rest.split_at(end + 1);
+            self.keep(whole);
+            self.pending_size = None;
+            self.record(cols, rows);
+            rest = after;
+        }
+        self.grammar = rest.iter().fold(self.grammar, |grammar, &byte| grammar.after(byte));
+        self.keep(rest);
+    }
+
+    fn resize(&mut self, cols: u16, rows: u16) {
+        if self.grammar == Grammar::Ground {
+            self.record(cols, rows);
+        } else {
+            self.pending_size = Some((cols, rows));
+        }
+    }
+
+    fn keep(&mut self, chunk: &[u8]) {
+        if chunk.is_empty() {
+            return;
+        }
+        self.scrollback.back_mut().expect("the scrollback is never empty").bytes.extend(chunk);
+        self.kept_bytes += chunk.len();
+        while self.kept_bytes > SCROLLBACK_BYTES {
+            let oldest = self.scrollback.front_mut().expect("the scrollback is never empty");
+            let cut = (self.kept_bytes - SCROLLBACK_BYTES).min(oldest.bytes.len());
+            oldest.bytes.drain(..cut);
+            self.kept_bytes -= cut;
+            if oldest.bytes.is_empty() && self.scrollback.len() > 1 {
+                self.scrollback.pop_front();
+            }
+        }
+        self.send(chunk);
+    }
+
+    /// A resize with no output since the last one replaces it.
+    fn record(&mut self, cols: u16, rows: u16) {
+        let last = self.scrollback.back_mut().expect("the scrollback is never empty");
+        if (last.cols, last.rows) == (cols, rows) {
+            return;
+        }
+        if last.bytes.is_empty() {
+            (last.cols, last.rows) = (cols, rows);
+        } else {
+            self.scrollback.push_back(Stretch { cols, rows, bytes: VecDeque::new() });
+        }
+        self.send(&size_record(cols, rows));
+    }
+
+    fn send(&self, bytes: &[u8]) {
+        if let Some(live) = &self.live {
+            let _no_receivers = live.send(Chunk::from(bytes));
+        }
+    }
+
+    fn replay(&self) -> Vec<u8> {
+        let stretch =
+            |stretch: &Stretch| size_record(stretch.cols, stretch.rows).into_iter().chain(stretch.bytes.clone());
+        self.scrollback.iter().flat_map(stretch).collect()
+    }
 }
 
 pub struct Attachment {
@@ -77,7 +220,7 @@ impl Pty {
             writer: Mutex::new(writer),
             master: Mutex::new(Some(pair.master)),
             process: Mutex::new(Some(child)),
-            output: Mutex::new(Output { scrollback: VecDeque::new(), live: Some(live) }),
+            output: Mutex::new(Output::new(Some(live))),
             output_at: AtomicI64::new(now()),
             exited: watch::Sender::new(false),
         });
@@ -93,15 +236,8 @@ impl Pty {
             if read == 0 {
                 break;
             }
-            let chunk = &buffer[..read];
             self.output_at.store(now(), Ordering::Relaxed);
-            let mut output = lock(&self.output);
-            output.scrollback.extend(chunk.iter());
-            let excess = output.scrollback.len().saturating_sub(SCROLLBACK_BYTES);
-            output.scrollback.drain(..excess);
-            if let Some(live) = &output.live {
-                let _no_receivers = live.send(Chunk::from(chunk));
-            }
+            lock(&self.output).add(&buffer[..read]);
         }
         lock(&self.output).live = None;
     }
@@ -117,10 +253,7 @@ impl Pty {
 
     pub fn attach(&self) -> Attachment {
         let output = lock(&self.output);
-        Attachment {
-            scrollback: output.scrollback.iter().copied().collect(),
-            live: output.live.as_ref().map(broadcast::Sender::subscribe),
-        }
+        Attachment { scrollback: output.replay(), live: output.live.as_ref().map(broadcast::Sender::subscribe) }
     }
 
     pub fn running(&self) -> bool {
@@ -168,11 +301,15 @@ impl Pty {
         writer.write_all(bytes).and_then(|()| writer.flush()).map_err(Error::internal)
     }
 
+    /// Holds the output while it resizes, so whatever the program redraws at the new size follows the size's record.
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), Error> {
+        let mut output = lock(&self.output);
         match lock(&self.master).as_ref() {
-            Some(master) => master.resize(size(cols, rows)).map_err(Error::internal),
-            None => Err(Error::conflict("the terminal has exited")),
+            Some(master) => master.resize(size(cols, rows)).map_err(Error::internal)?,
+            None => return Err(Error::conflict("the terminal has exited")),
         }
+        output.resize(cols, rows);
+        Ok(())
     }
 
     pub async fn terminate(self: Arc<Self>) {
@@ -337,5 +474,40 @@ mod disclaimed {
             libc::posix_spawnattr_destroy(&mut attr);
             spawned
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_replay_draws_each_stretch_at_its_size_and_trimming_keeps_the_size_it_cuts_into() {
+        let mut output = Output::new(None);
+        output.resize(100, 30);
+        output.add(b"wide");
+        output.resize(40, 20);
+        output.resize(46, 28);
+        output.add(b"narrow");
+        let narrow = [size_record(46, 28), b"narrow".to_vec()].concat();
+        assert_eq!(output.replay(), [size_record(100, 30), b"wide".to_vec(), narrow.clone()].concat());
+
+        output.add(&vec![b'.'; SCROLLBACK_BYTES - "wide".len() - "narrow".len() + 2]);
+        assert!(output.replay().starts_with(&[size_record(100, 30), b"de".to_vec(), narrow].concat()));
+        output.add(b"..");
+        assert!(output.replay().starts_with(&size_record(46, 28)));
+    }
+
+    #[test]
+    fn a_resize_inside_a_sequence_or_a_character_records_after_it_ends() {
+        let mut output = Output::new(None);
+        output.add(b"\x1b[38;5");
+        output.resize(46, 28);
+        output.add(b";245mred \xe2\x94");
+        output.resize(50, 30);
+        output.add(b"\x80 box");
+        let expected =
+            [size_record(80, 24), b"\x1b[38;5;245m".to_vec(), size_record(46, 28), b"red \xe2\x94\x80".to_vec()];
+        assert_eq!(output.replay(), [expected.concat(), size_record(50, 30), b" box".to_vec()].concat());
     }
 }

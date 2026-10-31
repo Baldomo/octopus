@@ -3,7 +3,7 @@
 use octopus_proto::ops::{Entry, EntryKind, Match, Offer, PairedClient};
 use octopus_proto::types::{
     AGENT_PANEL, Agent, AgentStatus, BrowserId, BrowserPanel, Checkout, Hue, NEW_BROWSER_PANEL, Panel, PtyId,
-    SessionId, Swatch, Task, TaskId, TaskState, Tone, WorkspaceId,
+    SessionId, Swatch, TERM_SIZE_OSC, Task, TaskId, TaskState, Tone, WorkspaceId,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -92,6 +92,7 @@ pub fn render() -> String {
         constant("ZOOMS", &ZOOMS),
         constant("AGENT_PANEL", &AGENT_PANEL),
         constant("NEW_BROWSER_PANEL", &NEW_BROWSER_PANEL),
+        constant("TERM_SIZE_OSC", &TERM_SIZE_OSC),
         constant("VERSION", &env!("CARGO_PKG_VERSION")),
         constant(
             "EVENTS",

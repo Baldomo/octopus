@@ -1,4 +1,5 @@
-import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, For, on, onCleanup, onMount, Show } from "solid-js";
+import { createStore } from "solid-js/store";
 import { backend } from "./backend";
 import { AGENT_PANEL, type Panel, type PtyId, type TaskRef, type TaskView } from "./generated";
 import { Glyph } from "./Glyph";
@@ -19,6 +20,13 @@ const chord = (event: KeyboardEvent) =>
   [event.ctrlKey && "ctrl", event.altKey && "alt", event.metaKey && "meta", event.shiftKey && "shift", event.key]
     .filter(Boolean)
     .join("+");
+
+/** Per task key, the shell tab chosen over the agent's. */
+const [chosen, setChosen] = createStore<Record<string, PtyId | null>>({});
+
+/** Opens a shell panel in a directory of the task's checkout and selects its tab. */
+export const openShell = (at: TaskRef, key: string, directory: string) =>
+  backend.termOpen(at, directory).then((panel) => setChosen(key, panel));
 
 /** Opens a link one of the task's terminals shows. */
 export type OpenLink = (task: TaskView, url: string, target: LinkTarget) => void;
@@ -43,9 +51,7 @@ function Term(props: { at: TaskRef; panel: Panel; visible: boolean; resumable: b
 
   onMount(() => {
     session.open(host);
-    const observer = new ResizeObserver(() => {
-      if (session.shown() && mine()) session.fit();
-    });
+    const observer = new ResizeObserver(session.fit);
     observer.observe(host);
     onCleanup(() => observer.disconnect());
   });
@@ -134,11 +140,11 @@ function AgentTab(props: { open: TaskView; on: boolean; shown: boolean; choose: 
 function Stack(props: { key: string; openLink: OpenLink }) {
   const task = () => model.tasks[props.key];
   const shown = () => ui.prefs.open === props.key && ui.prefs.view === "task";
-  const [chosen, setChosen] = createSignal<PtyId | null>(null);
+  const choose = (panel: PtyId | null) => setChosen(props.key, panel);
   const panels = () => task()?.task.panels ?? [];
   const agent = () => panels().find((panel) => panel.name === AGENT_PANEL);
   const shells = () => panels().filter((panel) => panel.name !== AGENT_PANEL);
-  const selected = () => shells().find((panel) => panel.id === chosen()) ?? agent();
+  const selected = () => shells().find((panel) => panel.id === chosen[props.key]) ?? agent();
   const agentOn = () => selected() === agent();
   const missing = () => {
     const kind = task()?.task.agent.kind;
@@ -150,7 +156,7 @@ function Stack(props: { key: string; openLink: OpenLink }) {
         {(open) => (
           <>
             <div class="tabs">
-              <AgentTab open={open()} on={agentOn()} shown={shown()} choose={() => setChosen(null)} />
+              <AgentTab open={open()} on={agentOn()} shown={shown()} choose={() => choose(null)} />
               <For each={shells()}>
                 {(panel) => {
                   const on = () => selected()?.id === panel.id;
@@ -159,7 +165,7 @@ function Stack(props: { key: string; openLink: OpenLink }) {
                       ref={keepInView(() => shown() && on())}
                       class="tab"
                       classList={{ on: on() }}
-                      onClick={() => setChosen(panel.id)}
+                      onClick={() => choose(panel.id)}
                     >
                       {panel.name}
                       <span
@@ -175,7 +181,7 @@ function Stack(props: { key: string; openLink: OpenLink }) {
                   );
                 }}
               </For>
-              <button class="tab plus" onClick={() => act(backend.termOpen(open().at).then(setChosen))}>
+              <button class="tab plus" onClick={() => act(openShell(open().at, props.key, "."))}>
                 +
               </button>
               <span class="spacer" />

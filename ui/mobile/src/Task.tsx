@@ -3,7 +3,7 @@ import { backend } from "@octopus/shared/backend.ts";
 import { AGENT_PANEL, type Panel, type PtyId, type TaskRef, type TaskView } from "@octopus/shared/generated.ts";
 import { ago, clock, ticking } from "@octopus/shared/SidebarControls.tsx";
 import { act, me, model, report, scale, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
-import { terminalSession } from "@octopus/shared/terminalSession.ts";
+import { cellSize, type Size, terminalSession } from "@octopus/shared/terminalSession.ts";
 import { colors, scheme } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
 import { animateList } from "./flip";
@@ -13,15 +13,24 @@ import { back, micDenied, openSheet } from "./nav";
 import { Circle, Gap, Glyph, Id, Para, sectionColor, ServerDot, Slot } from "./parts";
 import { phone } from "./phone";
 import type { Point } from "./press";
-import { scroller } from "./scroll";
+import { type Scroll, scroller } from "./scroll";
 import { TERMINAL_FONT } from "./symbols";
 import { termSelection } from "./termSelect";
 import { slidingThumb } from "./thumb";
 import { notify } from "./Toast";
 import { COMMIT_PX, owns, type Gesture } from "./touch";
 
-/** The keyboard's text field always holds this, so its delete has something to delete even when the line is empty. */
-const SENTINEL = " ";
+/**
+ * The keyboard's text field holds a block of spaces with its caret in the middle, so its delete always has something to
+ * delete and a space-bar drag has room to move the caret every way.
+ */
+const PAD_COLS = 24;
+const PAD_LINES = 3;
+const SINK_COLS = 2 * PAD_COLS;
+const SINK_ROWS = 2 * PAD_LINES + 1;
+const PADDED = Array(SINK_ROWS).fill(" ".repeat(SINK_COLS)).join("\n");
+const LINE_CHARS = SINK_COLS + 1;
+const CENTER = PAD_LINES * LINE_CHARS + PAD_COLS;
 const ESC = "\x1b";
 /** The terminal sets 13pt Meslo on 20pt rows. */
 const FONT_PX = 13;
@@ -41,8 +50,6 @@ const ARROWS: [string, string][] = [
   ["↓", "B"],
   ["→", "C"],
 ];
-
-type Size = { width: number; height: number };
 
 function observeSize(element: HTMLElement, set: (size: Size) => void) {
   const observer = new ResizeObserver(() => set({ width: element.clientWidth, height: element.clientHeight }));
@@ -81,7 +88,10 @@ function PhoneTerm(props: {
   const session = terminalSession({ at: props.at, panel: () => props.panel, shown: () => props.visible && opened() });
   const { xterm, mine } = session;
   xterm.options.disableStdin = true;
+  xterm.options.cursorInactiveStyle = "block";
   xterm.options.fontFamily = TERMINAL_FONT;
+  /** The phone shows its own thumbs, so the terminal's text runs to the pane's right edge. */
+  xterm.options.overviewRuler = {};
   const live = () => props.reach.is === "reachable";
   const [view, setView] = createSignal<Size>({ width: 0, height: 0 });
   const [screen, setScreen] = createSignal<Size>({ width: 0, height: 0 });
@@ -93,6 +103,10 @@ function PhoneTerm(props: {
     y: Math.max(screen().height - view().height, 0),
   });
 
+  const write = (keys: string) => {
+    toLastLine();
+    session.input(keys);
+  };
   /** Text the keyboard inserts, the first character as its control character while Ctrl is latched. */
   const typed = (text: string) => {
     if (text === "") return;
@@ -100,9 +114,11 @@ function PhoneTerm(props: {
       setCtrl(false);
       text = control(text.charAt(0)) + text.slice(1);
     }
-    session.input(text.replaceAll("\n", "\r"));
+    write(text.replaceAll("\n", "\r"));
   };
   const arrow = (code: string) => `${ESC}${xterm.modes.applicationCursorKeysMode ? "O" : "["}${code}`;
+  const arrows = (steps: number, backward: string, forward: string) =>
+    arrow(steps < 0 ? backward : forward).repeat(Math.abs(steps));
   const latch = () => {
     feel("select");
     setCtrl(!ctrl());
@@ -115,7 +131,7 @@ function PhoneTerm(props: {
   };
   const send = (keys: string) => {
     feel("tap");
-    session.input(keys);
+    write(keys);
   };
   /** Losing the lock to another client while showing it is worth a warning; taking it over, a success. */
   createEffect(
@@ -130,21 +146,63 @@ function PhoneTerm(props: {
     ),
   );
 
-  let sent = SENTINEL;
+  let sent = PADDED;
+  let restingCaret = CENTER;
   let composing = false;
   const resetSink = () => {
-    sink.value = sent = SENTINEL;
-    sink.setSelectionRange(SENTINEL.length, SENTINEL.length);
+    sink.value = sent = PADDED;
+    sink.setSelectionRange(CENTER, CENTER);
+    restingCaret = CENTER;
   };
-  /** Writes what changed in the field since the last input: a delete as Backspace, an insertion as itself. */
-  const sinkInput = () => {
-    const value = sink.value;
+  /**
+   * Writes what changed before the caret since the last input, the text after it staying as it was: a delete as
+   * Backspace, an insertion as itself. A held delete that deletes by words writes Ctrl-W, since the field before the
+   * caret is one run of blanks.
+   */
+  const sinkInput = (event: InputEvent) => {
+    if (event.inputType === "deleteWordBackward") {
+      write(control("w"));
+      return resetSink();
+    }
+    const { value, selectionEnd: end } = sink;
+    const sentBeforeCaret = sent.length - (value.length - end);
     let common = 0;
-    while (common < sent.length && common < value.length && sent[common] === value[common]) common++;
-    session.input("\x7f".repeat(sent.length - common));
-    typed(value.slice(common));
+    while (common < sentBeforeCaret && common < end && sent[common] === value[common]) common++;
+    write("\x7f".repeat(sentBeforeCaret - common));
+    typed(value.slice(common, end));
     sent = value;
     if (!composing) resetSink();
+  };
+  /**
+   * The space-bar drag moves the caret through the blank field, which moves the terminal's cursor as many cells. iOS
+   * places the dragged caret at the point the finger has travelled to since the drag began, so the caret recenters
+   * only once the keyboard next types or rises. A selection collapses to its end, so typing never replaces it.
+   */
+  const sinkCaretMoved = () => {
+    const { selectionStart, selectionEnd: at } = sink;
+    if (document.activeElement !== sink || composing || sink.value !== PADDED) return;
+    if (selectionStart !== at) return sink.setSelectionRange(at, at);
+    if (at === restingCaret) return;
+    const lines = Math.floor(at / LINE_CHARS) - Math.floor(restingCaret / LINE_CHARS);
+    const cols = (at % LINE_CHARS) - (restingCaret % LINE_CHARS);
+    write(arrows(lines, "A", "B") + arrows(cols, "D", "C"));
+    restingCaret = at;
+  };
+  /**
+   * The terminal draws its cursor blinking while the keyboard types into it, and solid otherwise. xterm draws no cursor
+   * until it has once been focused, so it opens drawn focused, then blurred.
+   */
+  const drawFocused = (focused: boolean) => xterm.textarea?.dispatchEvent(new FocusEvent(focused ? "focus" : "blur"));
+  /** A tap on the cursor's line moves the cursor to the tapped cell, or to the end of the line's text past it. */
+  const moveCursorTo = (point: Point) => {
+    const buffer = xterm.buffer.active;
+    const cell = selection.cellAt(point);
+    if (cell?.row !== buffer.baseY + buffer.cursorY) return;
+    const line = buffer.getLine(cell.row);
+    let textEnd = line?.length ?? 0;
+    while (textEnd > 0 && !line?.getCell(textEnd - 1)?.getChars()) textEnd--;
+    const col = Math.min(cell.col, Math.max(buffer.cursorX, textEnd));
+    if (col !== buffer.cursorX) write(arrows(col - buffer.cursorX, "D", "C"));
   };
 
   /**
@@ -152,8 +210,9 @@ function PhoneTerm(props: {
    * scrollback by whole lines, with the part of a line between them and the crop as the pan. It comes to rest on a line.
    */
   const cell = () => screen().height / xterm.rows;
+  const measured = () => cell() > 0;
   const scrolledLines = () => xterm.buffer.active.baseY;
-  const down = scroller({
+  const downward: Scroll = {
     at: () => xterm.buffer.active.viewportY * cell() + pan().y,
     end: () => scrolledLines() * cell() + most().y,
     rest: (at) => (at < scrolledLines() * cell() ? Math.round(at / cell()) * cell() : at),
@@ -162,7 +221,12 @@ function PhoneTerm(props: {
       xterm.scrollToLine(line);
       setPan({ x: pan().x, y: at - line * cell() });
     },
-  });
+  };
+  const down = scroller(downward);
+  const toLastLine = () => {
+    down.stop();
+    if (measured()) downward.apply(downward.end());
+  };
   const across = scroller({
     at: () => pan().x,
     end: () => most().x,
@@ -171,7 +235,7 @@ function PhoneTerm(props: {
   });
   /** Dragging scrolls the terminal, and pans a cropped one across too. */
   const drag: Gesture = ({ axis, at }) => {
-    if (!(cell() > 0) || (axis === "x" && !cropped())) return null;
+    if (!measured() || (axis === "x" && !cropped())) return null;
     const x = cropped() ? across.grab() : null;
     const y = down.grab();
     scrolling = true;
@@ -196,18 +260,8 @@ function PhoneTerm(props: {
   };
 
   /** Rows of 20pt at 13pt: the line height that turns the font's own cell into a 20pt one, measured once drawn. */
-  /** xterm measures a terminal that opened hidden only once it sees it on screen, so this measures it first. */
   const fitRows = () => {
-    const core = (
-      xterm as unknown as {
-        _core: {
-          _charSizeService: { measure: () => void };
-          _renderService: { dimensions: { css: { cell: { height: number } } } };
-        };
-      }
-    )._core;
-    core._charSizeService.measure();
-    const natural = core._renderService.dimensions.css.cell.height / xterm.options.lineHeight!;
+    const natural = cellSize(xterm).height / xterm.options.lineHeight!;
     if (natural > 0) xterm.options.lineHeight = (ROW_PX * scale(ui.prefs)) / natural;
   };
 
@@ -224,12 +278,16 @@ function PhoneTerm(props: {
     owns(pane, drag);
     selection.attach(pane);
     resetSink();
+    document.addEventListener("selectionchange", sinkCaretMoved);
+    onCleanup(() => document.removeEventListener("selectionchange", sinkCaretMoved));
   });
   onPainted(() => {
     session.open(host);
+    drawFocused(true);
+    drawFocused(false);
     observeSize(host, (size) => {
       setView(size);
-      if (session.shown() && mine()) session.fit();
+      session.fit();
     });
     drawn = xterm.element!.querySelector<HTMLElement>(".xterm-screen")!;
     observeSize(drawn, setScreen);
@@ -242,7 +300,7 @@ function PhoneTerm(props: {
     xterm.options.lineHeight = 1;
     requestAnimationFrame(() => {
       fitRows();
-      if (session.shown() && mine()) session.fit();
+      session.fit();
     });
   });
   /** The terminal draws on the screen's one surface, its plain text dim while another client holds it. */
@@ -253,11 +311,13 @@ function PhoneTerm(props: {
       background: color("--bg"),
       foreground: color(mine() ? "--term-text" : "--dim"),
       cursor: color("--text"),
+      cursorAccent: color("--bg"),
       selectionBackground: color("--select"),
     };
   });
   createEffect(() => {
-    if (xterm.element) xterm.element.style.transform = `translate(${-pan().x}px, ${-pan().y}px)`;
+    const { x, y } = pan();
+    if (opened()) xterm.element!.style.transform = `translate(${-x}px, ${-y}px)`;
   });
   /** A cropped terminal opens at its last line. */
   createEffect(() => setPan(cropped() ? { x: 0, y: most().y } : { x: 0, y: 0 }));
@@ -299,11 +359,14 @@ function PhoneTerm(props: {
           if (event.defaultPrevented || selection.onControls(event)) return;
           const touch = event.changedTouches[0];
           if (!from || !touch || Math.hypot(touch.clientX - from.x, touch.clientY - from.y) >= COMMIT_PX) return;
-          const tapped = selection.tap({ x: touch.clientX, y: touch.clientY });
+          const point = { x: touch.clientX, y: touch.clientY };
+          const tapped = selection.tap(point);
           if (!tapped && (!mine() || !live())) return;
           // The click a tap synthesizes would land on the pane and take the focus back from the keyboard.
           event.preventDefault();
-          if (!tapped) sink.focus();
+          if (tapped) return;
+          moveCursorTo(point);
+          sink.focus();
         }}
       >
         <div class="zoom-reset">
@@ -323,6 +386,13 @@ function PhoneTerm(props: {
         autocorrect="off"
         spellcheck={false}
         enterkeyhint="enter"
+        cols={SINK_COLS}
+        rows={SINK_ROWS}
+        onFocus={() => {
+          resetSink();
+          drawFocused(true);
+        }}
+        onBlur={() => drawFocused(false)}
         onInput={sinkInput}
         onCompositionStart={() => (composing = true)}
         onCompositionEnd={() => {
@@ -332,7 +402,7 @@ function PhoneTerm(props: {
         onKeyDown={(event) => {
           if (event.key !== "Enter") return;
           event.preventDefault();
-          session.input("\r");
+          write("\r");
         }}
       />
       <div class="foot" ref={animateList(":scope > *")}>
@@ -596,7 +666,7 @@ function TaskScreen(props: { open: TaskView }) {
               data-key="plus"
               role="button"
               aria-label="New shell"
-              onClick={() => live() && act(backend.termOpen(props.open.at).then(setChosen))}
+              onClick={() => live() && act(backend.termOpen(props.open.at, ".").then(setChosen))}
             >
               <Icon name="plus" />
             </span>

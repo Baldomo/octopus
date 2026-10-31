@@ -162,6 +162,11 @@ pub(crate) fn decode_reply(reply: &[u8]) -> io::Result<Outcome> {
 /// Sends `header` as one line and reads the one `Outcome` line that answers it, leaving every later byte unread.
 pub async fn open<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S, header: &impl Serialize) -> io::Result<Outcome> {
     stream.write_all(line(header).as_bytes()).await?;
+    read_outcome(stream).await
+}
+
+/// Reads the one `Outcome` line next on `stream`, leaving every later byte unread.
+pub async fn read_outcome<S: AsyncRead + Unpin>(stream: &mut S) -> io::Result<Outcome> {
     let mut reply = Vec::new();
     BufReader::with_capacity(REPLY_BUFFER, stream).read_until(b'\n', &mut reply).await?;
     decode_reply(&reply)

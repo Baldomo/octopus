@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use octopus_proto::device::PublicKey;
 use octopus_proto::local::{self, Listener};
-use octopus_proto::ops::{Paired, PairingPair, SessionHello, SessionPing};
+use octopus_proto::ops::{Done, Paired, PairingPair, SessionHello, SessionPing};
 use octopus_proto::remote::{self, Connection, Endpoint};
 use octopus_proto::types::{PtyId, Stream};
 use octopus_proto::{
@@ -318,6 +318,7 @@ async fn serve_control<R, W>(
 
 enum Opened {
     File(Vec<u8>),
+    Upload(crate::files::Upload),
     Pty(Arc<Terminal>, local::Stream),
     Tunnel(tokio::net::TcpStream),
     Mic(Arc<Terminal>),
@@ -331,6 +332,9 @@ async fn open(server: &Arc<Server>, name: &str, client: &str) -> Result<Opened, 
     match Stream::parse(name).ok_or_else(|| Error::invalid(format!("no stream named {name}")))? {
         Stream::File { task, path } => {
             Ok(Opened::File(blocking(server, move |server| server.read_file(&task, &path)).await?))
+        }
+        Stream::Upload { task, bytes, path } => {
+            Ok(Opened::Upload(blocking(server, move |server| server.upload_file(&task, &path, bytes)).await?))
         }
         Stream::Pty(id) => {
             let terminal = blocking(server, move |server| find_terminal(server, &id)).await?;
@@ -373,6 +377,12 @@ async fn serve_data_stream<R, W>(
     match opened {
         Opened::File(bytes) => {
             if write.write_all(&bytes).await.is_ok() {
+                let _peer_gone = write.shutdown().await;
+            }
+        }
+        Opened::Upload(upload) => {
+            let landed = Outcome::from(receive(&server, upload, input).await.map(|()| Done {}));
+            if write.write_all(line(&landed).as_bytes()).await.is_ok() {
                 let _peer_gone = write.shutdown().await;
             }
         }
@@ -432,6 +442,26 @@ async fn relay_terminal<R, W>(
         server.client_disconnected(&client);
     })
     .await;
+}
+
+/// Lands the upload once exactly its declared bytes arrive and the client finishes its stream; a short or long one
+/// lands nothing, and a long one stops being read one byte past its size.
+async fn receive<R: AsyncRead + Unpin>(
+    server: &Arc<Server>,
+    upload: crate::files::Upload,
+    input: BufReader<R>,
+) -> Result<(), Error> {
+    let gathering = upload.gathering.as_file().try_clone().map_err(Error::internal)?;
+    let mut file = tokio::fs::File::from_std(gathering);
+    let bytes = upload.bytes;
+    let arrived = tokio::io::copy(&mut input.take(bytes + 1), &mut file)
+        .await
+        .map_err(|error| Error::internal(format!("upload: {error}")))?;
+    if arrived != bytes {
+        return Err(Error::invalid(format!("the upload carried {arrived} bytes, not its declared {bytes}")));
+    }
+    file.sync_all().await.map_err(Error::internal)?;
+    blocking(server, move |_| upload.land()).await
 }
 
 /// Takes the holder's audio until it closes the stream or the lock leaves it, which closes the stream.

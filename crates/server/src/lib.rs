@@ -18,12 +18,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use octopus_proto::device::{DeviceKey, PublicKey};
 use octopus_proto::ops::{
-    AgentReport, BrowserOpen, Clients, Done, Entries, FileList, FileSearch, FileWrite, HarnessSet, Matches, Offer,
-    Opened, Paired, PairedClient, PairingForget, PairingList, PairingOffer, PairingPair, Revised, SessionHello,
-    SessionPing, SessionSync, Shown, Snapshot, TaskArchive, TaskCreate, TaskCreated, TaskFocus, TaskGet, TaskMove,
-    TaskRename, TaskSetSession, TermClaim, TermClose, TermOpen, TermResize, TermSend, TermTakeLock, Welcome,
-    WorkspaceAdd, WorkspaceCreated, WorkspaceList, WorkspaceRemove, WorkspaceRename, WorkspaceSetColor, Workspaces,
-    Written,
+    AgentReport, BrowserOpen, Clients, Done, Entries, FileCopy, FileCreate, FileDelete, FileList, FileMove, FileSearch,
+    FileWrite, HarnessSet, Matches, Offer, Opened, Paired, PairedClient, PairingForget, PairingList, PairingOffer,
+    PairingPair, Revised, SessionHello, SessionPing, SessionSync, Shown, Snapshot, TaskArchive, TaskCreate,
+    TaskCreated, TaskFocus, TaskGet, TaskMove, TaskRename, TaskSetSession, TermClaim, TermClose, TermOpen, TermResize,
+    TermSend, TermTakeLock, Welcome, WorkspaceAdd, WorkspaceCreated, WorkspaceList, WorkspaceRemove, WorkspaceRename,
+    WorkspaceSetColor, Workspaces, Written,
 };
 use octopus_proto::pairing::{Invite, Side};
 use octopus_proto::remote::{self, Endpoint, RelayUrl};
@@ -457,6 +457,18 @@ impl Server {
             FileWrite::NAME => call::<FileWrite>(args, |op| {
                 Ok(Written { bytes: files::write(&self.checkout_dir(&op.task)?, &op.path, op.content.as_bytes())? })
             }),
+            FileCreate::NAME => call::<FileCreate>(args, |op| {
+                files::create(&self.checkout_dir(&op.task)?, &op.path, op.kind).map(|()| Done {})
+            }),
+            FileMove::NAME => call::<FileMove>(args, |op| {
+                files::rename(&self.checkout_dir(&op.task)?, &op.from, &op.to).map(|()| Done {})
+            }),
+            FileCopy::NAME => call::<FileCopy>(args, |op| {
+                files::copy(&self.checkout_dir(&op.task)?, &op.from, &op.to).map(|()| Done {})
+            }),
+            FileDelete::NAME => call::<FileDelete>(args, |op| {
+                files::delete(&self.checkout_dir(&op.task)?, &op.path, op.trash).map(|()| Done {})
+            }),
             BrowserOpen::NAME => call::<BrowserOpen>(args, |op| self.browser_open(op)),
             FileSearch::NAME => call::<FileSearch>(args, |op| {
                 Ok(Matches { matches: files::search_literal(&self.checkout_dir(&op.task)?, &op.pattern) })
@@ -797,7 +809,7 @@ impl Server {
         if !row.state.is_live() {
             return Err(Error::conflict(format!("{} is ended; reopen it to open a shell", row.id)));
         }
-        let directory = PathBuf::from(row.directory);
+        let directory = files::directory(Path::new(&row.directory), &op.directory)?;
         let stem = shell.file_stem().unwrap_or(shell.as_os_str()).to_string_lossy().into_owned();
         let taken: HashSet<&str> = state.terminals(&op.task).map(|(name, _)| name).chain([AGENT_PANEL]).collect();
         let name = std::iter::once(stem.clone())
@@ -877,6 +889,10 @@ impl Server {
 
     pub(crate) fn read_file(&self, task: &TaskId, path: &str) -> Result<Vec<u8>, Error> {
         files::read(&self.checkout_dir(task)?, path)
+    }
+
+    pub(crate) fn upload_file(&self, task: &TaskId, path: &str, bytes: u64) -> Result<files::Upload, Error> {
+        files::upload(&self.checkout_dir(task)?, path, bytes)
     }
 
     fn watch_checkout(&self, state: &mut State, row: &TaskRow) -> Result<(), Error> {

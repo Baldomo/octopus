@@ -41,6 +41,7 @@ pub fn run(launch_problem: Option<String>) -> anyhow::Result<()> {
             commands::browser_show_page,
             commands::browser_go,
             commands::browser_close,
+            commands::file_outside,
         ])
         .setup(move |app| {
             octopus_shell::start(app.handle(), client, launch_problem);

@@ -11,6 +11,8 @@ export type Navigated = {
  */
 task: string, panel: BrowserId, url: string, };
 
+export type Outside = "reveal" | "open";
+
 export const FLOAT_LAYER = "float" as const;
 
 export const FLOAT_TOP = 38.0 as const;

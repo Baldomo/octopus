@@ -1,10 +1,13 @@
+use std::path::{Component, Path};
 use std::sync::Arc;
 
 use octopus_proto::ops::BrowserOpen;
 use octopus_proto::types::{BrowserId, BrowserTarget};
 use octopus_shell::hub::Hub;
 use octopus_shell::task_lists::TaskRef;
+use serde::Deserialize;
 use tauri::{AppHandle, State};
+use ts_rs::TS;
 
 use crate::browser::{Browsers, Go, OnScreen};
 
@@ -50,6 +53,35 @@ pub async fn browser_go(browsers: Browsing<'_>, at: TaskRef, panel: BrowserId, g
 #[tauri::command]
 pub async fn browser_close(browsers: Browsing<'_>, at: TaskRef, panel: BrowserId) -> Result<(), String> {
     browsers.close(&at, &panel).await
+}
+
+/// What this machine does with an entry of a task whose server runs here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum Outside {
+    /// Shows it in the system's file manager.
+    Reveal,
+    /// Opens it in its default app.
+    Open,
+}
+
+/// Acts on a checkout entry through this machine's own apps, which reach it only when its server runs here.
+#[tauri::command]
+pub fn file_outside(hub: Hubbed<'_>, at: TaskRef, path: String, how: Outside) -> Result<(), String> {
+    if hub.is_another_machine(&at.server) {
+        return Err(format!("{} runs on another machine", hub.label(&at.server)));
+    }
+    let relative = Path::new(&path);
+    if relative.components().any(|component| !matches!(component, Component::Normal(_) | Component::CurDir)) {
+        return Err(format!("{path} is not a path inside the checkout"));
+    }
+    let task = hub.model().tasks.remove(&at.key()).ok_or_else(|| format!("no task {}", at.task))?;
+    let entry = Path::new(&task.task.directory).join(relative);
+    match how {
+        Outside::Reveal => tauri_plugin_opener::reveal_item_in_dir(&entry),
+        Outside::Open => tauri_plugin_opener::open_path(&entry, None::<&str>),
+    }
+    .map_err(|error| format!("{}: {error}", entry.display()))
 }
 
 /// What double-clicking the title bar does, as the user set it: on macOS in System Settings ▸ Desktop & Dock,

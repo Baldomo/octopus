@@ -11,7 +11,7 @@ use anyhow::{Context, anyhow};
 use octopus_proto::device::DeviceKey;
 use octopus_proto::ops::{SessionHello, SessionPing};
 use octopus_proto::remote::{Connection as RemoteConnection, Dialer};
-use octopus_proto::types::Stream;
+use octopus_proto::types::{Stream, TaskId};
 use octopus_proto::{Error, Op, Outcome, Push, Request, ServerFrame, StreamHeader, line, local};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, WriteHalf};
@@ -252,6 +252,18 @@ impl Connection {
         let mut opened = self.link.open().await.context("open the stream")?;
         match octopus_proto::frames::open(&mut opened, &header).await.context("open the stream")? {
             Outcome::Ok(_) => Ok(opened),
+            Outcome::Err(error) => Err(CallError::Server(error)),
+        }
+    }
+
+    /// Sends `content` as a new file of a task's checkout, resolving once the server has landed it.
+    pub async fn upload(&self, task: TaskId, path: String, content: &[u8]) -> Result<(), CallError> {
+        let bytes = content.len() as u64;
+        let mut opened = self.open_data_stream(&Stream::Upload { task, bytes, path }).await?;
+        opened.write_all(content).await.context("send the upload")?;
+        opened.shutdown().await.context("finish the upload")?;
+        match octopus_proto::frames::read_outcome(&mut opened).await.context("hear the upload land")? {
+            Outcome::Ok(_) => Ok(()),
             Outcome::Err(error) => Err(CallError::Server(error)),
         }
     }

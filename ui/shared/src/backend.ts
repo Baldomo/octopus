@@ -4,6 +4,7 @@ import { EVENTS } from "./generated";
 import type {
   Boot,
   Entry,
+  EntryKind,
   FilesChanged,
   Match,
   Model,
@@ -24,6 +25,7 @@ import type {
 const octopus = (command: string) => `plugin:octopus|${command}`;
 
 const UTF8 = new TextDecoder("utf-8", { fatal: true });
+const asciiEscape = (char: string) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`;
 const fileBytes = (at: TaskRef, path: string) => invoke<ArrayBuffer>(octopus("file_read"), { at, path });
 
 export const backend = {
@@ -63,7 +65,7 @@ export const backend = {
   termInput: (attachment: number, keys: string) => invoke<void>(octopus("term_input"), { attachment, keys }),
   termDetach: (attachment: number) => invoke<void>(octopus("term_detach"), { attachment }),
   /** Resolves to the id of the shell panel it opens. */
-  termOpen: (at: TaskRef) => invoke<PtyId>(octopus("term_open"), { at }),
+  termOpen: (at: TaskRef, directory: string) => invoke<PtyId>(octopus("term_open"), { at, directory }),
   termClose: (at: TaskRef, panel: PtyId) => invoke<void>(octopus("term_close"), { at, panel }),
   termClaim: (at: TaskRef, panel: PtyId, cols: number, rows: number) =>
     invoke<void>(octopus("term_claim"), { at, panel, cols, rows }),
@@ -82,6 +84,16 @@ export const backend = {
       }
     }),
   fileWrite: (at: TaskRef, path: string, content: string) => invoke<void>(octopus("file_write"), { at, path, content }),
+  fileCreate: (at: TaskRef, path: string, kind: EntryKind) => invoke<void>(octopus("file_create"), { at, path, kind }),
+  fileMove: (at: TaskRef, from: string, to: string) => invoke<void>(octopus("file_move"), { at, from, to }),
+  fileCopy: (at: TaskRef, from: string, to: string) => invoke<void>(octopus("file_copy"), { at, from, to }),
+  /** `trash` sends it to the trash of the server's machine; otherwise it is gone for good. */
+  fileDelete: (at: TaskRef, path: string, trash: boolean) => invoke<void>(octopus("file_delete"), { at, path, trash }),
+  /** Creates a file of `bytes`; its header carries JSON, so every character past ASCII travels escaped. */
+  fileUpload: (at: TaskRef, path: string, bytes: ArrayBuffer) =>
+    invoke<void>(octopus("file_upload"), bytes, {
+      headers: { upload: JSON.stringify({ at, path }).replace(/[^\x20-\x7e]/g, asciiEscape) },
+    }),
   fileSearch: (at: TaskRef, pattern: string) => invoke<Match[]>(octopus("file_search"), { at, pattern }),
 };
 

@@ -310,6 +310,8 @@ export function termSelection(props: {
     Handles,
     /** Whether a touch landed on a handle or on Copy, which the terminal's own tap leaves alone. */
     onControls,
+    /** The cell under a point on the drawn screen, or null off it. */
+    cellAt: (point: Point) => cellAt(point, false),
     /** Clears a selection, or opens the URL under the tap; reports whether it did either. */
     tap: (point: Point) => {
       if (xterm.hasSelection()) {

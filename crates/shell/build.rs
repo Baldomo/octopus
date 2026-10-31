@@ -32,6 +32,11 @@ const COMMANDS: &[&str] = &[
     "file_list",
     "file_read",
     "file_write",
+    "file_create",
+    "file_move",
+    "file_copy",
+    "file_delete",
+    "file_upload",
     "file_search",
 ];
 

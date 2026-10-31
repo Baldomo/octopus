@@ -1,6 +1,6 @@
 import { createStore, produce, type SetStoreFunction } from "solid-js/store";
 import { backend } from "./backend";
-import type { Entry, FilesChanged, TaskRef, TaskView } from "./generated";
+import type { Entry, EntryKind, FilesChanged, TaskRef, TaskView } from "./generated";
 import { report } from "./state";
 
 type Monaco = typeof import("./monaco");
@@ -8,11 +8,13 @@ type Model = import("monaco-editor").editor.ITextModel;
 type ViewState = import("monaco-editor").editor.ICodeEditorViewState | null;
 
 let loading: Promise<Monaco> | undefined;
+/** Numbers each buffer's URI, which outlives its file's path when the file moves and a new one takes the path. */
+let buffers = 0;
 /** Monaco loads on the first file opened, off the launch path. */
 export const loadMonaco = () => (loading ??= import("./monaco"));
 
 export const join = (dir: string, name: string) => (dir === "." ? name : `${dir}/${name}`);
-const parentOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ".");
+export const parentOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ".");
 export const nameOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 
 const dirsOf = (path: string) => path.split("/").slice(0, -1);
@@ -32,7 +34,8 @@ export function tabHints(tabs: string[]) {
   return hints;
 }
 
-type Opened = { model: Model; saved: number; view: ViewState };
+/** `path` follows the file through moves, so its edits stay marked under its current name. */
+type Opened = { path: string; model: Model; saved: number; view: ViewState };
 
 type Tree = {
   listings: Record<string, Entry[]>;
@@ -45,7 +48,28 @@ type Tree = {
   rendered: Record<string, boolean>;
   /** The tree row to scroll into view once it shows. */
   revealing: string | null;
+  /** The tree's selected entries, which its actions act on. */
+  selected: string[];
+  /** The row the keyboard moves from, and the far end of a Shift range. */
+  focus: string | null;
+  /** The near end of a Shift range. */
+  anchor: string | null;
+  /** What the next paste copies, or moves when it was cut. */
+  clip: { paths: string[]; cut: boolean } | null;
 };
+
+/** Whether `path` is `dir` or lies inside it. */
+export const within = (path: string, dir: string) => dir === "." || path === dir || path.startsWith(`${dir}/`);
+
+/** `name`, or the first of "name copy", "name copy 2", … that `taken` lacks, its extension kept at the end. */
+export function freeName(name: string, taken: Set<string>) {
+  const dot = name.lastIndexOf(".");
+  const [stem, extension] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
+  const nth = (count: number) => (count === 0 ? name : `${stem} copy${count === 1 ? "" : ` ${count}`}${extension}`);
+  let count = 0;
+  while (taken.has(nth(count))) count++;
+  return nth(count);
+}
 
 export const extensionOf = (path: string) => {
   const name = nameOf(path);
@@ -86,8 +110,89 @@ export class TaskFiles {
       unreadable: {},
       rendered: {},
       revealing: null,
+      selected: [],
+      focus: null,
+      anchor: null,
+      clip: null,
     });
     this.list(".");
+  }
+
+  /** Selects `paths`, the keyboard at `focus` and a Shift range reaching from `anchor`. */
+  select(paths: string[], focus: string | null, anchor = focus) {
+    this.set({ selected: paths, focus, anchor });
+  }
+
+  setClip(clip: Tree["clip"]) {
+    this.set("clip", clip);
+  }
+
+  /** Lists again the folders holding `paths` that the tree shows, ahead of the server's change events. */
+  private relist(...paths: string[]) {
+    for (const dir of new Set(paths.map(parentOf))) if (this.state.listings[dir] !== undefined) this.list(dir);
+  }
+
+  /** Names in `dir` as the server holds them now, which a listing on screen may trail. */
+  async names(dir: string) {
+    return new Set((await backend.fileList(this.at, dir)).map((entry) => entry.name));
+  }
+
+  async create(path: string, kind: EntryKind) {
+    await backend.fileCreate(this.at, path, kind);
+    this.relist(path);
+    this.reveal(path, kind === "directory");
+    this.select([path], path);
+    if (kind === "file") await this.open(path);
+  }
+
+  /** Moves the entry, its open tabs and its place in the tree along with it. */
+  async move(from: string, to: string) {
+    await backend.fileMove(this.at, from, to);
+    this.relist(from, to);
+    const moved = (path: string) => (within(path, from) ? to + path.slice(from.length) : path);
+    const rekey = <T>(record: Record<string, T>) =>
+      Object.fromEntries(Object.entries(record).map(([path, value]) => [moved(path), value]));
+    const opened = [...this.opened.values()];
+    this.opened.clear();
+    for (const buffer of opened) {
+      buffer.path = moved(buffer.path);
+      this.opened.set(buffer.path, buffer);
+    }
+    this.set(
+      produce((state) => {
+        state.tabs = state.tabs.map(moved);
+        state.active = state.active === null ? null : moved(state.active);
+        state.listings = rekey(state.listings);
+        state.expanded = rekey(state.expanded);
+        state.loaded = rekey(state.loaded);
+        state.dirty = rekey(state.dirty);
+        state.unreadable = rekey(state.unreadable);
+        state.rendered = rekey(state.rendered);
+        state.selected = state.selected.map(moved);
+        state.focus = state.focus === null ? null : moved(state.focus);
+        state.anchor = state.anchor === null ? null : moved(state.anchor);
+      }),
+    );
+  }
+
+  copy(from: string, to: string) {
+    return backend.fileCopy(this.at, from, to).then(() => this.relist(to));
+  }
+
+  /** Closes the entry's clean tabs; a dirty one keeps its edits. */
+  async remove(path: string, trash: boolean) {
+    await backend.fileDelete(this.at, path, trash);
+    this.relist(path);
+    for (const tab of this.state.tabs.filter((tab) => within(tab, path) && !this.state.dirty[tab])) this.close(tab);
+    this.set("selected", (selected) => selected.filter((selected) => !within(selected, path)));
+  }
+
+  upload(path: string, bytes: ArrayBuffer) {
+    return backend.fileUpload(this.at, path, bytes).then(() => this.relist(path));
+  }
+
+  collapseAll() {
+    this.set("expanded", {});
   }
 
   list(dir: string) {
@@ -129,10 +234,10 @@ export class TaskFiles {
       throw error;
     });
     if (this.opened.has(path) || !this.state.tabs.includes(path)) return;
-    const uri = monaco.Uri.from({ scheme: "octopus", path: `/${this.key}/${path}` });
+    const uri = monaco.Uri.from({ scheme: "octopus", path: `/${this.key}/${++buffers}/${nameOf(path)}` });
     const model = monaco.editor.createModel(text, undefined, uri);
-    const opened = { model, saved: model.getAlternativeVersionId(), view: null };
-    model.onDidChangeContent(() => this.set("dirty", path, model.getAlternativeVersionId() !== opened.saved));
+    const opened: Opened = { path, model, saved: model.getAlternativeVersionId(), view: null };
+    model.onDidChangeContent(() => this.set("dirty", opened.path, model.getAlternativeVersionId() !== opened.saved));
     this.opened.set(path, opened);
     this.set(
       produce((state) => {
@@ -183,9 +288,7 @@ export class TaskFiles {
 
   /** A clean buffer follows the file on the server; a dirty one keeps the user's edits. */
   changed(paths: string[]) {
-    for (const dir of new Set(paths.map(parentOf))) {
-      if (this.state.listings[dir] !== undefined) this.list(dir);
-    }
+    this.relist(...paths);
     for (const path of paths) {
       const opened = this.opened.get(path);
       if (opened === undefined || this.state.dirty[path]) continue;

@@ -393,6 +393,10 @@ body {
   overflow: hidden !important;
 }
 
+.term-host .xterm-scrollable-element > .scrollbar {
+  display: none;
+}
+
 .term .thumb.across {
   bottom: 2px;
   height: 3px;
@@ -403,15 +407,18 @@ body {
   width: 3px;
 }
 
-/* the keyboard's text field, out of sight at the pane's top, which the keyboard never covers, so the page never scrolls to reveal it */
+/* the keyboard's text field, out of sight at the pane's top, which the keyboard never covers, so the page never scrolls to reveal it; its lines stand taller than the terminal's rows, so a sideways space-bar drag that wobbles stays on its line */
 .sink {
   position: absolute;
   left: 0;
   top: 0;
-  width: 1px;
-  height: 1px;
+  padding: 0;
+  border: 0;
   opacity: 0;
-  font-size: 16px;
+  pointer-events: none;
+  font: 13px/32px monospace;
+  white-space: pre;
+  overflow: hidden;
   resize: none;
 }
 

@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import { Board } from "./Board";
+import { desktop } from "./backend";
 import { Browser, forgetBrowsersExcept, openLink } from "./Browser";
 import { ClientMenu } from "@octopus/shared/ClientMenu.tsx";
 import { Files } from "@octopus/shared/Files.tsx";
@@ -146,7 +147,10 @@ export function Docked() {
           </div>
           <Show when={openView()} fallback={<div class="empty">No task is open.</div>}>
             <div class="surface" style={{ display: ui.prefs.surface === "files" ? "" : "none" }}>
-              <Files visible={ui.prefs.view === "task" && ui.prefs.surface === "files"} />
+              <Files
+                visible={ui.prefs.view === "task" && ui.prefs.surface === "files"}
+                outside={(task, path, how) => desktop.fileOutside(task.at, path, how)}
+              />
             </div>
             <div class="surface" style={{ display: ui.prefs.surface === "browser" ? "" : "none" }}>
               <Browser visible={ui.prefs.view === "task" && ui.prefs.surface === "browser"} />

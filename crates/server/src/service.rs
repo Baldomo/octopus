@@ -27,7 +27,7 @@ use crate::{lock, now, report};
 
 /// Bumped whenever an existing request or reply changes shape; a server refuses a host that speaks another. A host
 /// older than a request added since refuses that request.
-const PROTOCOL: u32 = 1;
+const PROTOCOL: u32 = 2;
 const HOST_START: Duration = Duration::from_secs(5);
 const HOST_START_POLL: Duration = Duration::from_millis(5);
 const WAIT_RETRY: Duration = Duration::from_secs(1);

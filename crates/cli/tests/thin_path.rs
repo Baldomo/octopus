@@ -104,7 +104,7 @@ async fn a_shell_panel_follows_the_agent_until_its_shell_exits_or_it_closes() {
     let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
     laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
 
-    let shell = laptop.call(&TermOpen { task: id.clone() }).await.expect("term.open").panel;
+    let shell = laptop.call(&TermOpen { task: id.clone(), directory: ".".into() }).await.expect("term.open").panel;
     let panels = task(&laptop, &id).await.panels;
     assert_eq!(panels.iter().map(|panel| &panel.id).collect::<Vec<_>>()[1..], [&shell]);
     assert_eq!(panels[0].name, "agent");
@@ -121,7 +121,7 @@ async fn a_shell_panel_follows_the_agent_until_its_shell_exits_or_it_closes() {
     read_until(&mut live, &format!("shell:{id}")).await;
     conflict(laptop.call(&TermClose { task: id.clone(), panel: "agent".into() }).await, "closing the agent panel");
 
-    let closed = laptop.call(&TermOpen { task: id.clone() }).await.expect("term.open").panel;
+    let closed = laptop.call(&TermOpen { task: id.clone(), directory: ".".into() }).await.expect("term.open").panel;
     let names: Vec<_> = task(&laptop, &id).await.panels.into_iter().map(|panel| panel.name).collect();
     assert_eq!(names[2], format!("{}-2", names[1]));
     laptop.call(&send("exit")).await.expect("exit the shell");
@@ -130,7 +130,7 @@ async fn a_shell_panel_follows_the_agent_until_its_shell_exits_or_it_closes() {
     assert_eq!(task(&laptop, &id).await.panels.len(), 1);
 
     laptop.call(&TaskMove { task: id.clone(), state: TaskState::Completed }).await.expect("complete");
-    conflict(laptop.call(&TermOpen { task: id }).await, "a shell in an ended task");
+    conflict(laptop.call(&TermOpen { task: id, directory: ".".into() }).await, "a shell in an ended task");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -147,7 +147,7 @@ async fn a_shell_panel_opens_before_its_login_profile_finishes_and_then_has_its_
     let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
 
     let opening = std::time::Instant::now();
-    let shell = laptop.call(&TermOpen { task: id.clone() }).await.expect("term.open").panel;
+    let shell = laptop.call(&TermOpen { task: id.clone(), directory: ".".into() }).await.expect("term.open").panel;
     assert!(opening.elapsed().as_secs() < PROFILE_SECONDS, "term.open waited on the profile");
     let mut live = laptop.open_data_stream(&Stream::Pty(shell.clone())).await.expect("attach the shell");
     let echo = TermSend {
@@ -225,7 +225,7 @@ async fn an_agent_outlives_a_restart_of_its_server_process() {
     set_harness(&laptop, "echo", echo_agent("agent:up"), Hooks::None).await;
     let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
     laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
-    laptop.call(&TermOpen { task: id.clone() }).await.expect("term.open");
+    laptop.call(&TermOpen { task: id.clone(), directory: ".".into() }).await.expect("term.open");
     let view = task(&laptop, &id).await;
     let agent = Stream::Pty(view.panels[0].id.clone());
     let mut live = laptop.open_data_stream(&agent).await.expect("attach");

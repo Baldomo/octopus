@@ -173,17 +173,38 @@ pub enum FileVerb {
         #[arg(long)]
         path: String,
     },
+    /// Create a file of a task's checkout from stdin, byte for byte; fails conflict when the path exists.
+    Upload {
+        #[arg(long, help = SERVER_HELP)]
+        server: String,
+        /// The task's id.
+        #[arg(long)]
+        task: String,
+        /// The new file, relative to the checkout.
+        #[arg(long)]
+        path: String,
+    },
 }
 
 impl FileVerb {
     pub async fn run(self) -> anyhow::Result<()> {
-        let Self::Read { server, task, path } = self;
-        let connection = connect(&server).await?;
-        let stream = Stream::File { task: TaskId(task), path };
-        let mut opened = connection.open_data_stream(&stream).await.map_err(call_error)?;
-        let mut bytes = Vec::new();
-        opened.read_to_end(&mut bytes).await.with_context(|| format!("read {}", stream.name()))?;
-        std::io::stdout().write_all(&bytes).context("write stdout")
+        match self {
+            Self::Read { server, task, path } => {
+                let connection = connect(&server).await?;
+                let stream = Stream::File { task: TaskId(task), path };
+                let mut opened = connection.open_data_stream(&stream).await.map_err(call_error)?;
+                let mut bytes = Vec::new();
+                opened.read_to_end(&mut bytes).await.with_context(|| format!("read {}", stream.name()))?;
+                std::io::stdout().write_all(&bytes).context("write stdout")
+            }
+            Self::Upload { server, task, path } => {
+                let connection = connect(&server).await?;
+                let mut content = Vec::new();
+                tokio::io::stdin().read_to_end(&mut content).await.context("read stdin")?;
+                connection.upload(TaskId(task), path, &content).await.map_err(call_error)?;
+                print(&octopus_proto::ops::Done {})
+            }
+        }
     }
 }
 

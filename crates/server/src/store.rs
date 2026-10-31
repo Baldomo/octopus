@@ -169,6 +169,59 @@ fn name_hooks(db: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+const CLAUDE_CODE: &str = "claude-code";
+
+impl Harness {
+    fn claude_code() -> Self {
+        let session = crate::SESSION.to_string();
+        Self {
+            argv: vec!["claude".into()],
+            start: vec!["--session-id".into(), session.clone()],
+            resume: vec!["--resume".into(), session],
+            install: "npm install -g @anthropic-ai/claude-code".into(),
+            hooks: Hooks::ClaudeCode,
+        }
+    }
+}
+
+fn put_harness(db: &Connection, id: &str, harness: &Harness) -> rusqlite::Result<()> {
+    let json = |args: &Vec<String>| serde_json::to_string(args).expect("a list of strings is JSON");
+    db.execute(
+        "INSERT INTO harnesses (id, argv, start, resume, install, hooks) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(id) DO UPDATE SET argv = excluded.argv, start = excluded.start, resume = excluded.resume,
+         install = excluded.install, hooks = excluded.hooks",
+        params![
+            id,
+            json(&harness.argv),
+            json(&harness.start),
+            json(&harness.resume),
+            harness.install,
+            to_wire(&harness.hooks)
+        ],
+    )
+    .map(drop)
+}
+
+/// Once per store, marked in `meta`, so a later `harness.set` stands: each harness whose argv runs the `claude`
+/// program reports through Claude Code hooks, and a store without a `claude-code` harness gains one.
+fn install_claude_code(db: &Connection) -> rusqlite::Result<()> {
+    let tx = db.unchecked_transaction()?;
+    if tx.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('claude_code_installed', 1)", [])? == 0 {
+        return Ok(());
+    }
+    tx.execute(
+        "UPDATE harnesses SET hooks = ?1
+         WHERE json_extract(argv, '$[0]') = 'claude' OR json_extract(argv, '$[0]') LIKE '%/claude'",
+        [to_wire(&Hooks::ClaudeCode)],
+    )?;
+    let present: bool =
+        tx.query_row("SELECT EXISTS(SELECT 1 FROM harnesses WHERE id = ?1)", [CLAUDE_CODE], |row| row.get(0))?;
+    if !present {
+        put_harness(&tx, CLAUDE_CODE, &Harness::claude_code())?;
+    }
+    tx.commit()
+}
+
 /// A store from a build that kept one agent terminal per task gains each as the task's agent panel.
 fn adopt_agent_terminals(db: &Connection) -> rusqlite::Result<()> {
     let present: bool = db.query_row(
@@ -202,6 +255,7 @@ impl Store {
         db.execute_batch(SCHEMA).map_err(Error::internal)?;
         migrate_columns(&db).map_err(Error::internal)?;
         name_hooks(&db).map_err(Error::internal)?;
+        install_claude_code(&db).map_err(Error::internal)?;
         adopt_agent_terminals(&db).map_err(Error::internal)?;
         Ok(Self { db })
     }
@@ -401,16 +455,8 @@ impl Store {
     }
 
     pub fn set_harness(&mut self, id: &str, harness: &Harness) -> Result<u64, Error> {
-        let json = |args: &Vec<String>| serde_json::to_string(args).map_err(Error::internal);
-        let (argv, start, resume) = (json(&harness.argv)?, json(&harness.start)?, json(&harness.resume)?);
         let tx = self.db.transaction().map_err(Error::internal)?;
-        tx.execute(
-            "INSERT INTO harnesses (id, argv, start, resume, install, hooks) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(id) DO UPDATE SET argv = excluded.argv, start = excluded.start, resume = excluded.resume,
-             install = excluded.install, hooks = excluded.hooks",
-            params![id, argv, start, resume, harness.install, to_wire(&harness.hooks)],
-        )
-        .map_err(Error::internal)?;
+        put_harness(&tx, id, harness).map_err(Error::internal)?;
         let rev = bump_rev(&tx)?;
         tx.commit().map_err(Error::internal)?;
         Ok(rev)
@@ -618,7 +664,8 @@ mod tests {
                  CREATE TABLE clients (name TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE);
                  CREATE TABLE harnesses (id TEXT PRIMARY KEY, argv TEXT NOT NULL, install TEXT NOT NULL,
                  hooks INTEGER NOT NULL);
-                 INSERT INTO harnesses VALUES ('h', '[\"h\"]', 'true', 1);",
+                 INSERT INTO harnesses VALUES ('h', '[\"h\"]', 'true', 1);
+                 INSERT INTO harnesses VALUES ('claude-code', '[\"/opt/bin/claude\"]', 'true', 0);",
             )
             .expect("an earlier schema");
         drop(earlier);
@@ -628,7 +675,32 @@ mod tests {
         assert!(!has_column(&store.db, "tasks", "focused_at").expect("table info"), "the dropped column goes");
         assert_eq!(store.clients().expect("clients"), []);
         assert_eq!(store.harness("h").expect("its harness").map(|harness| harness.hooks), Some(Hooks::None));
+        let claude = store.harness("claude-code").expect("its harness").expect("kept");
+        assert_eq!(
+            (claude.argv, claude.install, claude.hooks),
+            (vec!["/opt/bin/claude".into()], "true".into(), Hooks::ClaudeCode)
+        );
         let agent = PanelRow { id: PtyId("pty_1".into()), task: TaskId("tsk_1".into()), name: AGENT_PANEL.into() };
         assert_eq!(store.reattach(&HashSet::from([agent.id.clone()])).expect("reattach"), [agent]);
+    }
+
+    #[test]
+    fn a_fresh_store_runs_claude_code_with_hooks_until_the_user_sets_it_otherwise() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("store.db");
+        let mut store = Store::open(&path).expect("a fresh store");
+        let claude_code = Harness {
+            argv: vec!["claude".into()],
+            start: vec!["--session-id".into(), "{session}".into()],
+            resume: vec!["--resume".into(), "{session}".into()],
+            install: "npm install -g @anthropic-ai/claude-code".into(),
+            hooks: Hooks::ClaudeCode,
+        };
+        assert_eq!(store.harness("claude-code").expect("harness"), Some(claude_code.clone()));
+        let without_hooks = Harness { hooks: Hooks::None, ..claude_code };
+        store.set_harness("claude-code", &without_hooks).expect("harness.set");
+        drop(store);
+        let store = Store::open(&path).expect("reopen");
+        assert_eq!(store.harness("claude-code").expect("harness"), Some(without_hooks));
     }
 }

@@ -1,10 +1,9 @@
-import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { type ITheme, Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { backend, Channel } from "./backend";
-import type { Panel, TaskRef } from "./generated";
+import { type Panel, type TaskRef, TERM_SIZE_OSC } from "./generated";
 import { act, me, report, serverView } from "./state";
 import { colors, px, type Scheme, scheme, token } from "./tokens";
 
@@ -46,6 +45,22 @@ const LOCK_SETTLES_MS = 500;
 export const [windowShown, setWindowShown] = createSignal(true);
 
 type Cells = { cols: number; rows: number };
+export type Size = { width: number; height: number };
+type Core = { _charSizeService: { measure: () => void }; _renderService: { dimensions: { css: { cell: Size } } } };
+/** A terminal's size record, written by its server as `<cols>;<rows>`. */
+const SIZE_RECORD = /^(\d+);(\d+)$/;
+/** A program can print a size record too; past this many cells a side, one would freeze the client allocating it. */
+const MOST_CELLS = 1000;
+
+/**
+ * The cell xterm draws, which only its private services know. It measures afresh, since xterm measures a terminal that
+ * opened hidden only once it sees it on screen.
+ */
+export function cellSize(xterm: Terminal): Size {
+  const core = (xterm as unknown as { _core: Core })._core;
+  core._charSizeService.measure();
+  return core._renderService.dimensions.css.cell;
+}
 
 export type TerminalSession = {
   xterm: Terminal;
@@ -55,7 +70,7 @@ export type TerminalSession = {
   input: (keys: string) => void;
   /** Moves the lock here at the pane's size. */
   take: () => void;
-  /** Sizes the terminal to its pane, which only the lock holder does. */
+  /** Sizes the terminal to its pane while this client holds the lock. */
   fit: () => void;
   /** Opens the terminal in `pane`, the element whose size is the pane's, drawing through WebGL where it can. */
   open: (pane: HTMLElement) => void;
@@ -64,15 +79,13 @@ export type TerminalSession = {
 /**
  * A terminal keeps its screen while it stays mounted, and holds a data stream only while it is `shown`, the app shows
  * it, and its server is reachable; the server reads that stream as this client showing the terminal. A shown terminal
- * with a free lock is claimed at the pane's size. The holder fits the PTY to its pane; every other client draws it at
- * the holder's size.
+ * with a free lock is claimed at the pane's size. The holder sizes the PTY to its pane. The output carries the PTY's
+ * size wherever it changes, and every client draws the terminal at the size it reads there, so each byte lands on the
+ * screen it was written for.
  */
 export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown: () => boolean }): TerminalSession {
   const mine = createMemo(() => props.panel().lock_holder === me());
   const shown = createMemo(props.shown);
-  const fitter = new FitAddon();
-  const pane = (): Cells | undefined => fitter.proposeDimensions();
-  const fit = () => fitter.fit();
   const xterm = new Terminal({
     fontFamily: token("--mono-terminal"),
     fontSize: px("--fs-mono"),
@@ -80,7 +93,23 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
     scrollback: SCROLLBACK_LINES,
     overviewRuler: { width: px("--scrollbar-w") },
   });
-  xterm.loadAddon(fitter);
+  xterm.parser.registerOscHandler(TERM_SIZE_OSC, (record) => {
+    const size = SIZE_RECORD.exec(record);
+    const [cols, rows] = [Number(size?.[1]), Number(size?.[2])];
+    if (cols >= 1 && cols <= MOST_CELLS && rows >= 1 && rows <= MOST_CELLS) xterm.resize(cols, rows);
+    return true;
+  });
+  /** The cells that fit the element the terminal opened in, beside the overview ruler along its right edge. */
+  const pane = (): Cells | undefined => {
+    const host = xterm.element?.parentElement;
+    if (!host?.clientWidth || !host.clientHeight) return undefined;
+    const cell = cellSize(xterm);
+    if (!cell.width || !cell.height) return undefined;
+    return {
+      cols: Math.floor((host.clientWidth - (xterm.options.overviewRuler?.width ?? 0)) / cell.width),
+      rows: Math.floor(host.clientHeight / cell.height),
+    };
+  };
   let attachment: number | null = null;
   /** Whether the server has this client's stream open, so a claim always reaches it showing the terminal. */
   const [attached, setAttached] = createSignal(false);
@@ -128,11 +157,14 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
   const unlessOutrun = (sent: Promise<void>, stillMine: () => boolean) =>
     sent.catch((error) => setTimeout(() => stillMine() && report(error), LOCK_SETTLES_MS));
   /** A drag or a rotation resizes once per frame, since every resize the server takes is published. */
-  let resizing = 0;
-  const resize = () => {
-    cancelAnimationFrame(resizing);
-    resizing = requestAnimationFrame(() => {
-      if (mine()) unlessOutrun(backend.termResize(props.at, props.panel().id, xterm.cols, xterm.rows), mine);
+  let fitting = 0;
+  const fit = () => {
+    cancelAnimationFrame(fitting);
+    fitting = requestAnimationFrame(() => {
+      const size = pane();
+      const { id, cols, rows } = props.panel();
+      if (!mine() || !size || (size.cols === cols && size.rows === rows)) return;
+      unlessOutrun(backend.termResize(props.at, id, size.cols, size.rows), mine);
     });
   };
   const atPaneSize = (send: (size: Cells) => Promise<void>, what: string, stillMine: () => boolean) => {
@@ -140,9 +172,6 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
     if (size) unlessOutrun(send(size), stillMine);
     else report(`the terminal's pane has no size to ${what} the terminal at yet`);
   };
-  xterm.onResize(() => {
-    if (mine()) resize();
-  });
 
   const streaming = createMemo(() => shown() && windowShown() && serverView(props.at.server)?.reachable === true);
   createEffect(
@@ -168,18 +197,11 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
   );
   createEffect(
     on([mine, shown], ([holding, visible]) => {
-      if (!visible || !holding) return;
-      fit();
-      resize();
-    }),
-  );
-  createEffect(
-    on([mine, shown, () => props.panel().cols, () => props.panel().rows], ([holding, visible]) => {
-      if (visible && !holding) xterm.resize(props.panel().cols, props.panel().rows);
+      if (visible && holding) fit();
     }),
   );
   onCleanup(() => {
-    cancelAnimationFrame(resizing);
+    cancelAnimationFrame(fitting);
     detach();
     xterm.dispose();
   });

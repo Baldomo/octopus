@@ -4,14 +4,14 @@ use std::time::Instant;
 use octopus_client::CallError;
 use octopus_proto::Error;
 use octopus_proto::ops::{
-    Entry, FileList, FileSearch, FileWrite, Match, Offer, PairedClient, PairingForget, PairingList, PairingOffer,
-    TaskArchive, TaskCreate, TaskFocus, TaskMove, TaskRename, TermClaim, TermClose, TermOpen, TermResize, TermTakeLock,
-    WorkspaceAdd, WorkspaceRemove,
+    Entry, EntryKind, FileCopy, FileCreate, FileDelete, FileList, FileMove, FileSearch, FileWrite, Match, Offer,
+    PairedClient, PairingForget, PairingList, PairingOffer, TaskArchive, TaskCreate, TaskFocus, TaskMove, TaskRename,
+    TermClaim, TermClose, TermOpen, TermResize, TermTakeLock, WorkspaceAdd, WorkspaceRemove,
 };
 use octopus_proto::pairing::Invite;
 use octopus_proto::types::{Checkout, Color, PtyId, SessionId, Stream, Swatch, TaskId, TaskState, WorkspaceId};
 use serde::{Deserialize, Serialize};
-use tauri::ipc::{Channel, InvokeResponseBody, Response};
+use tauri::ipc::{Channel, InvokeBody, InvokeResponseBody, Response};
 use tauri::{Runtime, State};
 use tokio::io::AsyncReadExt;
 use ts_rs::TS;
@@ -201,8 +201,8 @@ pub fn term_detach(terminals: State<Terminals>, attachment: u64) {
 
 /// Resolves to the id of the shell panel it opens.
 #[tauri::command]
-pub async fn term_open(hub: Hubbed<'_>, at: TaskRef) -> Result<PtyId, String> {
-    Ok(hub.call(&at.server, &TermOpen { task: at.task }).await?.panel)
+pub async fn term_open(hub: Hubbed<'_>, at: TaskRef, directory: String) -> Result<PtyId, String> {
+    Ok(hub.call(&at.server, &TermOpen { task: at.task, directory }).await?.panel)
 }
 
 #[tauri::command]
@@ -249,6 +249,46 @@ pub async fn file_read(hub: Hubbed<'_>, at: TaskRef, path: String) -> Result<Res
 #[tauri::command]
 pub async fn file_write(hub: Hubbed<'_>, at: TaskRef, path: String, content: String) -> Result<(), String> {
     hub.call(&at.server, &FileWrite { task: at.task, path, content }).await.map(drop)
+}
+
+#[tauri::command]
+pub async fn file_create(hub: Hubbed<'_>, at: TaskRef, path: String, kind: EntryKind) -> Result<(), String> {
+    hub.call(&at.server, &FileCreate { task: at.task, path, kind }).await.map(drop)
+}
+
+#[tauri::command]
+pub async fn file_move(hub: Hubbed<'_>, at: TaskRef, from: String, to: String) -> Result<(), String> {
+    hub.call(&at.server, &FileMove { task: at.task, from, to }).await.map(drop)
+}
+
+#[tauri::command]
+pub async fn file_copy(hub: Hubbed<'_>, at: TaskRef, from: String, to: String) -> Result<(), String> {
+    hub.call(&at.server, &FileCopy { task: at.task, from, to }).await.map(drop)
+}
+
+#[tauri::command]
+pub async fn file_delete(hub: Hubbed<'_>, at: TaskRef, path: String, trash: bool) -> Result<(), String> {
+    hub.call(&at.server, &FileDelete { task: at.task, path, trash }).await.map(drop)
+}
+
+/// Where an upload's bytes go, in its `upload` header as JSON with every character past ASCII escaped.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Upload {
+    at: TaskRef,
+    path: String,
+}
+
+/// Creates a file from the raw body of the call, byte for byte.
+#[tauri::command]
+pub async fn file_upload(hub: Hubbed<'_>, request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let header = request.headers().get("upload").ok_or("an upload names its file in the upload header")?;
+    let Upload { at, path } = serde_json::from_slice(header.as_bytes()).map_err(|error| error.to_string())?;
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("an upload's bytes come as the raw body".into());
+    };
+    let connection = hub.connection(&at.server)?;
+    connection.upload(at.task, path, bytes).await.map_err(|error| hub.failure(&at.server, error))
 }
 
 #[tauri::command]

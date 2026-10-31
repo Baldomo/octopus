@@ -69,6 +69,7 @@ function BoardColumn(props: { section: string; column: Column }) {
 
 export function Board() {
   const section = () => model.lists.sections.find((candidate) => candidate.name === ui.prefs.board);
+  const shown = () => ui.prefs.view === "tasks";
   return (
     <div class="pane">
       <Show when={section()} fallback={<div class="empty">Pick a section in the sidebar to see its tasks.</div>}>
@@ -78,8 +79,10 @@ export function Board() {
           </div>
         )}
       </Show>
-      <MenuHost />
-      <Toast />
+      <Show when={shown()}>
+        <MenuHost />
+        <Toast />
+      </Show>
     </div>
   );
 }

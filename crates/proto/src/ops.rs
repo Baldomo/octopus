@@ -292,10 +292,12 @@ pub struct Opened {
 }
 
 op!(
-    /// Open a shell panel in a live task: the user's login shell, in the task's checkout.
+    /// Open a shell panel in a live task: the user's login shell, in a directory of the task's checkout.
     TermOpen = "term.open" -> Opened {
         /// The task's id.
         task: TaskId,
+        /// The directory the shell starts in, relative to the checkout; . for its root.
+        directory: String,
     }
 );
 op!(
@@ -370,6 +372,16 @@ pub enum EntryKind {
     Directory,
 }
 
+impl EntryKind {
+    pub const ALL: [Self; 2] = [Self::File, Self::Directory];
+}
+
+impl crate::schema::Arg for EntryKind {
+    fn shape() -> crate::schema::Shape {
+        crate::types::choice(&Self::ALL)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Entry {
@@ -421,6 +433,52 @@ op!(
         path: String,
         /// The file's new content, as text.
         content: String,
+    }
+);
+op!(
+    /// Create an empty file or directory in a task's checkout, with the directories above it; fails conflict when
+    /// the path exists.
+    FileCreate = "file.create" -> Done {
+        /// The task's id.
+        task: TaskId,
+        /// The new entry, relative to the checkout.
+        path: String,
+        /// What to create.
+        kind: EntryKind,
+    }
+);
+op!(
+    /// Move or rename a file or directory of a task's checkout; fails conflict when the destination exists.
+    FileMove = "file.move" -> Done {
+        /// The task's id.
+        task: TaskId,
+        /// The entry, relative to the checkout.
+        from: String,
+        /// Its new path, relative to the checkout.
+        to: String,
+    }
+);
+op!(
+    /// Copy a file or directory of a task's checkout, a directory with everything in it; fails conflict when the
+    /// destination exists.
+    FileCopy = "file.copy" -> Done {
+        /// The task's id.
+        task: TaskId,
+        /// The entry, relative to the checkout.
+        from: String,
+        /// The copy's path, relative to the checkout.
+        to: String,
+    }
+);
+op!(
+    /// Delete a file or directory of a task's checkout, a directory with everything in it.
+    FileDelete = "file.delete" -> Done {
+        /// The task's id.
+        task: TaskId,
+        /// The entry, relative to the checkout.
+        path: String,
+        /// Whether it goes to the trash of the server's machine rather than being removed for good.
+        trash: bool,
     }
 );
 op!(
@@ -488,6 +546,10 @@ pub fn commands() -> Vec<Command> {
         command::<TermResize>(),
         command::<FileList>(),
         command::<FileWrite>(),
+        command::<FileCreate>(),
+        command::<FileMove>(),
+        command::<FileCopy>(),
+        command::<FileDelete>(),
         command::<FileSearch>(),
         command::<BrowserOpen>(),
         command::<PairingOffer>(),

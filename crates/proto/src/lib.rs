@@ -71,6 +71,8 @@ mod tests {
         let file = Stream::File { task: TaskId("tsk_1".into()), path: "src/main.rs".into() };
         assert_eq!(file.name(), "file:tsk_1/src/main.rs");
         assert_eq!(Stream::parse(&file.name()), Some(file));
+        let upload = Stream::Upload { task: TaskId("tsk_1".into()), bytes: 4, path: "logo.png".into() };
+        assert_eq!(Stream::parse(&upload.name()), Some(upload));
         assert_eq!(Stream::parse("pty:pty_2"), Some(Stream::Pty(PtyId("pty_2".into()))));
         assert_eq!(Stream::parse(&Stream::Tunnel(5173).name()), Some(Stream::Tunnel(5173)));
         assert_eq!(Stream::parse("tunnel:http"), None);

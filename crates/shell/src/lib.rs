@@ -78,6 +78,11 @@ pub fn commands<R: Runtime>() -> tauri::plugin::Builder<R> {
         commands::file_list,
         commands::file_read,
         commands::file_write,
+        commands::file_create,
+        commands::file_move,
+        commands::file_copy,
+        commands::file_delete,
+        commands::file_upload,
         commands::file_search,
     ])
 }

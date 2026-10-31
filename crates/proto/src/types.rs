@@ -104,13 +104,16 @@ impl Arg for Option<u64> {
     }
 }
 
-fn choice<T: Serialize>(all: &[T]) -> Shape {
+pub(crate) fn choice<T: Serialize>(all: &[T]) -> Shape {
     Shape::Choice(all.iter().map(to_wire).collect())
 }
 
 pub const ENV_TASK: &str = "OCTOPUS_TASK";
 pub const ENV_SERVER: &str = "OCTOPUS_SERVER";
 pub const AGENT_PANEL: &str = "agent";
+/// The OSC a terminal's output stream carries its size in, `ESC ] 6286 ; <cols> ; <rows> BEL`, wherever the size
+/// changes, so a client parses every byte at the size the program wrote it at.
+pub const TERM_SIZE_OSC: u16 = 6286;
 
 /// Parses a unit enum from its wire spelling, e.g. `"pinned"`.
 pub fn from_wire<T: DeserializeOwned>(text: &str) -> Result<T, String> {
@@ -382,6 +385,13 @@ pub enum Stream {
         task: TaskId,
         path: String,
     },
+    /// A new file's `bytes`, which the client sends and finishes; the server then answers with one outcome line. The
+    /// count tells a finished upload from one whose sender died.
+    Upload {
+        task: TaskId,
+        bytes: u64,
+        path: String,
+    },
     /// A TCP connection to a port on the server's machine.
     Tunnel(u16),
     /// The lock holder's microphone, as `MIC_FORMAT`, into the terminal's virtual microphone.
@@ -409,6 +419,7 @@ impl Stream {
         match self {
             Self::Pty(pty) => format!("pty:{pty}"),
             Self::File { task, path } => format!("file:{task}/{path}"),
+            Self::Upload { task, bytes, path } => format!("upload:{task}/{bytes}/{path}"),
             Self::Tunnel(port) => format!("tunnel:{port}"),
             Self::Mic(pty) => format!("mic:{pty}"),
         }
@@ -420,6 +431,15 @@ impl Stream {
             ("file", rest) => {
                 let (task, path) = rest.split_once('/')?;
                 Some(Self::File { task: TaskId(task.to_string()), path: path.to_string() })
+            }
+            ("upload", rest) => {
+                let (task, rest) = rest.split_once('/')?;
+                let (bytes, path) = rest.split_once('/')?;
+                Some(Self::Upload {
+                    task: TaskId(task.to_string()),
+                    bytes: bytes.parse().ok()?,
+                    path: path.to_string(),
+                })
             }
             ("tunnel", port) => Some(Self::Tunnel(port.parse().ok()?)),
             ("mic", pty) => Some(Self::Mic(PtyId(pty.to_string()))),

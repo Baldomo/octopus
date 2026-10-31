@@ -6,6 +6,7 @@ use serde_json::json;
 use ts_rs::Config;
 
 use crate::browser::{Go, NAVIGATED_EVENT, Navigated, OnScreen};
+use crate::commands::Outside;
 use crate::layers::{FLOAT, title_bar_height};
 
 /// Where the rendered file lives, relative to the workspace root.
@@ -13,7 +14,7 @@ pub const PATH: &str = "ui/desktop/src/generated.ts";
 
 pub fn render() -> String {
     let config = Config::default().with_large_int("number");
-    let declarations = octopus_shell::declarations!(&config, OnScreen, Go, Navigated);
+    let declarations = octopus_shell::declarations!(&config, OnScreen, Go, Navigated, Outside);
     let constants = [
         constant("FLOAT_LAYER", &FLOAT),
         constant("FLOAT_TOP", &title_bar_height()),

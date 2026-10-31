@@ -16,7 +16,7 @@ export function closeMenu() {
 }
 
 /** Toggles menu `id` below `anchor`, or opens it at `point` for a right-click. */
-function openMenu(id: string, anchor: HTMLElement, body: () => JSX.Element, point: Point | null = null) {
+export function openMenu(id: string, anchor: HTMLElement, body: () => JSX.Element, point: Point | null = null) {
   if (ui.client_menu) showClientMenu(false);
   setOpened(point === null && isMenuOpen(id) ? null : { id, anchor, point, body });
 }
@@ -90,8 +90,9 @@ function Popover(props: { menu: Opened }) {
   );
 }
 
-/** Renders the open menu, placed within the element that holds the host. */
+/** Renders the open menu, placed within the element that holds the host; a host that goes takes its menu along. */
 export function MenuHost() {
+  onCleanup(closePopover);
   return (
     <Show when={opened()} keyed>
       {(menu) => <Popover menu={menu} />}

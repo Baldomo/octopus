@@ -129,10 +129,11 @@ Print a task.
 
 ## `octopus term open`
 
-Open a shell panel in a live task: the user's login shell, in the task's checkout.
+Open a shell panel in a live task: the user's login shell, in a directory of the task's checkout.
 
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
+- `--directory <directory>`: The directory the shell starts in, relative to the checkout; . for its root.
 
 ## `octopus term close`
 
@@ -199,6 +200,42 @@ Create a file in a task's checkout, or replace its content.
 - `--path <path>`: The file, relative to the checkout.
 - `--content <content>`: The file's new content, as text.
 
+## `octopus file create`
+
+Create an empty file or directory in a task's checkout, with the directories above it; fails conflict when the path exists.
+
+- `--server <server>`: The paired server's name.
+- `--task <task>`: The task's id.
+- `--path <path>`: The new entry, relative to the checkout.
+- `--kind file|directory`: What to create.
+
+## `octopus file move`
+
+Move or rename a file or directory of a task's checkout; fails conflict when the destination exists.
+
+- `--server <server>`: The paired server's name.
+- `--task <task>`: The task's id.
+- `--from <from>`: The entry, relative to the checkout.
+- `--to <to>`: Its new path, relative to the checkout.
+
+## `octopus file copy`
+
+Copy a file or directory of a task's checkout, a directory with everything in it; fails conflict when the destination exists.
+
+- `--server <server>`: The paired server's name.
+- `--task <task>`: The task's id.
+- `--from <from>`: The entry, relative to the checkout.
+- `--to <to>`: The copy's path, relative to the checkout.
+
+## `octopus file delete`
+
+Delete a file or directory of a task's checkout, a directory with everything in it.
+
+- `--server <server>`: The paired server's name.
+- `--task <task>`: The task's id.
+- `--path <path>`: The entry, relative to the checkout.
+- `--trash true|false`: Whether it goes to the trash of the server's machine rather than being removed for good.
+
 ## `octopus file search`
 
 Find each line of a task's checkout that contains a text.
@@ -214,6 +251,14 @@ Write a file of a task's checkout to stdout, byte for byte.
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
 - `--path <path>`: The file, relative to the checkout.
+
+## `octopus file upload`
+
+Create a file of a task's checkout from stdin, byte for byte; fails conflict when the path exists.
+
+- `--server <server>`: The paired server's name.
+- `--task <task>`: The task's id.
+- `--path <path>`: The new file, relative to the checkout.
 
 ## `octopus browser open`
 

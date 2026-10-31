@@ -1,58 +1,14 @@
 import { createEffect, createMemo, For, lazy, on, Show } from "solid-js";
 import { keepInView } from "./keepInView";
 import { commands, hint, mac } from "./commands";
-import { filesOf, join, loadMonaco, nameOf, renderable, tabHints, type TaskFiles } from "./taskFiles";
+import { FileTree, type Outside } from "./FileTree";
+import { MenuHost } from "./Menu";
+import { Toast } from "./SidebarControls";
+import { filesOf, loadMonaco, nameOf, renderable, tabHints, type TaskFiles } from "./taskFiles";
 import { act, openView, report } from "./state";
 
 type Editor = import("monaco-editor").editor.IStandaloneCodeEditor;
 type Shown = { files: TaskFiles; path: string } | undefined;
-
-/** DESIGN's tree indents each level, and spaces the modified mark, with two non-breaking spaces. */
-const GAP = "  ";
-const indent = (depth: number) => GAP.repeat(depth);
-
-function Tree(props: { files: TaskFiles; dir: string; depth: number }) {
-  const scrollWhenRevealed = (path: string) => (row: HTMLElement) =>
-    createEffect(() => {
-      if (props.files.state.revealing !== path) return;
-      row.scrollIntoView({ block: "nearest" });
-      props.files.revealed();
-    });
-  return (
-    <For each={props.files.state.listings[props.dir] ?? []}>
-      {(entry) => {
-        const path = join(props.dir, entry.name);
-        if (entry.kind === "directory") {
-          const expanded = () => props.files.state.expanded[path] === true;
-          return (
-            <>
-              <div class="dir" title={path} ref={scrollWhenRevealed(path)} onClick={() => props.files.toggle(path)}>
-                {indent(props.depth)}
-                {expanded() ? "▾" : "▸"} {entry.name}
-              </div>
-              <Show when={expanded()}>
-                <Tree files={props.files} dir={path} depth={props.depth + 1} />
-              </Show>
-            </>
-          );
-        }
-        const dirty = () => props.files.state.dirty[path] === true;
-        return (
-          <div
-            title={path}
-            ref={scrollWhenRevealed(path)}
-            classList={{ on: props.files.state.active === path, mod: dirty() }}
-            onClick={() => act(props.files.open(path))}
-          >
-            {indent(props.depth)}
-            {entry.name}
-            {dirty() ? `${GAP}M` : ""}
-          </div>
-        );
-      }}
-    </For>
-  );
-}
 
 /** A tab names its file, and the fewest trailing directories that tell it from another open tab of the same name. */
 function EditorTabs(props: { files: TaskFiles; visible: boolean }) {
@@ -157,7 +113,7 @@ function FileHead(props: { files: TaskFiles; path: string }) {
   );
 }
 
-export function Files(props: { visible: boolean }) {
+export function Files(props: { visible: boolean; outside?: Outside }) {
   let host!: HTMLDivElement;
   let editor: Editor | undefined;
   let showing: Shown;
@@ -213,9 +169,9 @@ export function Files(props: { visible: boolean }) {
 
   return (
     <div class="files" tabIndex={-1}>
-      <div class="tree">
-        <Show when={files()}>{(taskFiles) => <Tree files={taskFiles()} dir="." depth={0} />}</Show>
-      </div>
+      <Show when={files()} keyed fallback={<div class="tree" />}>
+        {(taskFiles) => <FileTree files={taskFiles} task={openView()!} outside={props.outside} />}
+      </Show>
       <div class="editor">
         <Show when={files()} fallback={<div class="etabs" />}>
           {(taskFiles) => <EditorTabs files={taskFiles()} visible={props.visible} />}
@@ -239,6 +195,10 @@ export function Files(props: { visible: boolean }) {
           </Show>
         </div>
       </div>
+      <Show when={props.visible}>
+        <MenuHost />
+        <Toast />
+      </Show>
     </div>
   );
 }
