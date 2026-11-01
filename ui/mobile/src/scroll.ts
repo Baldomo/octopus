@@ -1,10 +1,5 @@
-import { animate, SNAPPY, type Running } from "./motion";
+import { animate, give, SNAPPY, ungive, type Running } from "@octopus/shared/motion.ts";
 
-/** How far a surface dragged `over` past its edge follows the finger: about half as far, less the further it goes. */
-const GIVE = 0.55;
-const GIVE_SPAN_PX = 600;
-export const give = (over: number) => (over * GIVE) / (1 + Math.abs(over) / GIVE_SPAN_PX);
-const ungive = (given: number) => given / (GIVE - Math.abs(given) / GIVE_SPAN_PX);
 /** `at` with `bend` applied to however far it stands past either end of 0 to `end`. */
 const beyond = (at: number, end: number, bend: (over: number) => number) =>
   at < 0 ? bend(at) : at > end ? end + bend(at - end) : at;

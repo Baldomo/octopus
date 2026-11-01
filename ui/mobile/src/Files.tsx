@@ -4,7 +4,7 @@ import { Rendered } from "@octopus/shared/Rendered.tsx";
 import { act, scale, model, ui } from "@octopus/shared/state.ts";
 import { filesOf, join, loadMonaco, nameOf, renderable, tabHints, type TaskFiles } from "@octopus/shared/taskFiles.ts";
 import { colors, scheme, token } from "@octopus/shared/tokens.ts";
-import { animateList } from "./flip";
+import { animateList } from "@octopus/shared/flip.ts";
 import { slidingThumb } from "./thumb";
 import { Icon } from "./Icon";
 import { onPainted } from "./motion";

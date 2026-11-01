@@ -1,13 +1,15 @@
 use std::io::{Read, Write};
 
 use octopus_client::Connection;
+use octopus_proto::term::Piece;
 use octopus_proto::types::Stream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 const CTRL_RIGHT_BRACKET_DETACHES: u8 = 0x1d;
 const KEY_BYTES: usize = 1024;
-const OUTPUT_BYTES: usize = 8192;
+/// RIS: the terminal clears its screen, history and modes, as a client does before it draws a screen.
+const RESET: &[u8] = b"\x1bc";
 
 struct RawMode;
 
@@ -27,7 +29,7 @@ impl Drop for RawMode {
 /// Finishes the stream on the way out, so the server reads a detach, not a lost connection.
 pub async fn run(connection: &Connection, stream: &Stream) -> anyhow::Result<()> {
     let opened = connection.open_data_stream(stream).await.map_err(crate::call_error)?;
-    let (mut from_pty, mut to_pty) = tokio::io::split(opened);
+    let (from_pty, mut to_pty) = tokio::io::split(opened);
     let _raw = RawMode::enter()?;
     let (keys, mut typed) = mpsc::unbounded_channel::<Vec<u8>>();
     std::thread::spawn(move || {
@@ -39,24 +41,34 @@ pub async fn run(connection: &Connection, stream: &Stream) -> anyhow::Result<()>
             }
         }
     });
-    let mut buffer = [0u8; OUTPUT_BYTES];
-    let mut stdout = std::io::stdout();
-    loop {
-        tokio::select! {
-            read = from_pty.read(&mut buffer) => match read {
-                Ok(0) | Err(_) => break,
-                Ok(read) => {
-                    stdout.write_all(&buffer[..read])?;
-                    stdout.flush()?;
+    let showing = async {
+        let mut from_pty = BufReader::new(from_pty);
+        let mut stdout = std::io::stdout();
+        while let Some(piece) = Piece::read_from(&mut from_pty).await? {
+            match piece {
+                Piece::Screen(screen) => {
+                    stdout.write_all(RESET)?;
+                    stdout.write_all(&screen.bytes)?;
                 }
-            },
-            keys = typed.recv() => match keys {
-                Some(keys) if keys.contains(&CTRL_RIGHT_BRACKET_DETACHES) => break,
-                Some(keys) => to_pty.write_all(&keys).await?,
-                None => break,
-            },
+                Piece::Output(bytes) => stdout.write_all(&bytes)?,
+            }
+            stdout.flush()?;
         }
-    }
+        anyhow::Ok(())
+    };
+    let typing = async {
+        while let Some(keys) = typed.recv().await {
+            if keys.contains(&CTRL_RIGHT_BRACKET_DETACHES) {
+                break;
+            }
+            to_pty.write_all(&keys).await?;
+        }
+        anyhow::Ok(())
+    };
+    let ended = tokio::select! {
+        shown = showing => shown,
+        typed = typing => typed,
+    };
     let _server_gone = to_pty.shutdown().await;
-    Ok(())
+    ended
 }

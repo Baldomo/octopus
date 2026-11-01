@@ -1,9 +1,11 @@
 import { createEffect, For, on, onCleanup, Show } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
-import { dragSource, dropTarget, isDragged, showsDropHint } from "./drag";
 import type { Column, Section } from "@octopus/shared/generated.ts";
 import { Glyph } from "@octopus/shared/Glyph.tsx";
 import { dropHint } from "@octopus/shared/drop.ts";
+import { animateList } from "@octopus/shared/flip.ts";
+import { dropTarget, isAway, isLanding, isLifted, lifting, liftsIn } from "@octopus/shared/lift.ts";
+import { liftOnDrag, type Within } from "./lift";
 import { GroupHead } from "./Group";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { commands, hint } from "@octopus/shared/commands.ts";
@@ -35,22 +37,26 @@ import {
 } from "@octopus/shared/state.ts";
 import { floatTop } from "./layer";
 
+const IN_SIDEBAR: Within = { stage: ".sidebar", list: ".groups", free: false };
+
+/** The sidebar's rows and its sections' parts, which slide to where each change puts them. */
+const ITEMS = ".wsh, .gh, .task, .drophint, .empty-state";
+
+/** A state's group of a section, which shows while empty only to take a task lifted in its section. */
 function Group(props: { section: string; column: Column }) {
   const target = dropTarget(props.section, props.column.state);
   return (
-    <Show
-      when={props.column.rows.length > 0}
-      fallback={
-        <Show when={showsDropHint(props.section)}>
-          <div class="drophint" classList={{ over: target.over() }} {...target.attributes}>
-            {dropHint(props.column.state)}
-          </div>
-        </Show>
-      }
-    >
-      <div class="group" classList={{ over: target.over() }} {...target.attributes}>
+    <Show when={props.column.rows.length > 0 || liftsIn(props.section)}>
+      <div class="group" classList={{ over: target.over() }} data-state={props.column.state} {...target.attributes}>
         <GroupHead state={props.column.state} />
-        <For each={props.column.rows}>
+        <For
+          each={props.column.rows}
+          fallback={
+            <div class="drophint" data-key={`${props.section}/${props.column.state}/empty`}>
+              {dropHint(props.column.state)}
+            </div>
+          }
+        >
           {(row) => {
             let element!: HTMLDivElement;
             const id = `task:${row.key}`;
@@ -62,15 +68,18 @@ function Group(props: { section: string; column: Column }) {
                 classList={{
                   sub: row.depth > 0,
                   active: isOpen(row.key),
-                  dragging: isDragged(row.key),
+                  lifting: isLifted(row.key),
+                  away: isAway(row.key),
+                  landing: isLanding(row.key),
                   "menu-open": isMenuOpen(id),
                 }}
+                data-key={row.key}
                 style={{ "--depth": row.depth }}
                 tabindex="0"
                 onClick={() => openTask(row.key)}
                 onContextMenu={onRightClick(id, () => element, menu)}
                 onKeyDown={(event) => event.key === "F2" && startRename("task", row.key)}
-                {...dragSource(row, props.section, props.column.state)}
+                {...liftOnDrag(row, props.section, IN_SIDEBAR)}
               >
                 <Glyph glyph={row.glyph} />
                 <Show
@@ -195,8 +204,8 @@ function ServerName(props: { name: string }) {
  * The unpinned sidebar goes once the pointer leaves its column, which runs from the window's left edge to the
  * sidebar's right edge, so a pointer resting on the edge that revealed it keeps it open. A modal's scrim takes the
  * pointer without it leaving, so a pointer that was in the column when a modal opened leaves it when the modal closes
- * somewhere off the column. The sidebar stays while it holds the keyboard, and goes when it lets go if the pointer
- * left meanwhile. Hiding forgets the pointer, as a column that stops taking it under a still pointer never sees it
+ * somewhere off the column. The sidebar stays while it holds the keyboard or a lifted task, and goes when it lets go
+ * if the pointer left meanwhile. Hiding forgets the pointer, as a column that stops taking it under a still pointer never sees it
  * leave.
  */
 function autohide(column: HTMLElement) {
@@ -214,7 +223,7 @@ function autohide(column: HTMLElement) {
     hovered = false;
     if (!ui.prefs.pinned) showSidebar(false);
   };
-  const settled = () => ui.modal === null && !holdsKeyboard();
+  const settled = () => ui.modal === null && !holdsKeyboard() && !lifting();
   createEffect(() => {
     if (!ui.sidebar) hovered = false;
   });
@@ -260,7 +269,7 @@ export function Sidebar(props: { floats: (aside: HTMLElement, column: HTMLElemen
             +
           </button>
         </div>
-        <div class="groups">
+        <div class="groups" ref={animateList(ITEMS)}>
           <For each={model.lists.sections}>{(section) => <SectionGroups section={section} />}</For>
           <AddWorkspace />
         </div>

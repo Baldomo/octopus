@@ -1,5 +1,6 @@
 mod browser;
 mod checkouts;
+mod emulator;
 mod files;
 mod harness;
 mod listener;
@@ -829,12 +830,14 @@ impl Server {
         if state.agent_terminal(&op.task).is_some_and(|agent| agent.id == terminal.id) {
             return Err(Error::conflict(format!("the agent panel of {} closes only with its agent", op.task)));
         }
-        terminal.forget()?;
         let shell = state.take_shell(&op.task, &terminal.id).expect("a panel other than the agent's is a shell");
         Ok(Revised { rev: self.drop_shell(&mut state, &op.task, &shell)? })
     }
 
     fn drop_shell(&self, state: &mut State, task: &TaskId, shell: &Shell) -> Result<u64, Error> {
+        if let Err(error) = shell.terminal.forget() {
+            report!("end the shell {} of {task}: {error}", shell.terminal.id);
+        }
         state.store.forget_panel(&shell.terminal.id)?;
         self.touch_task(state, task)
     }
@@ -846,9 +849,6 @@ impl Server {
             return self.touch_task(state, task).map(drop);
         }
         let Some(shell) = state.take_shell(task, id) else { return Ok(()) };
-        if let Err(error) = shell.terminal.forget() {
-            report!("drop the scrollback of the exited shell {id}: {error}");
-        }
         self.drop_shell(state, task, &shell).map(drop)
     }
 

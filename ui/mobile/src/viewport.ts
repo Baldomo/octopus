@@ -1,5 +1,6 @@
 import { report } from "@octopus/shared/state.ts";
-import { curve, KEYBOARD, reduced } from "./motion";
+import { curve, reduced } from "@octopus/shared/motion.ts";
+import { KEYBOARD } from "./motion";
 import { phone } from "./phone";
 
 /** A viewport shorter than the tallest one seen in this orientation by more than this has the keyboard over it. */

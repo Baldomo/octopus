@@ -111,9 +111,6 @@ pub(crate) fn choice<T: Serialize>(all: &[T]) -> Shape {
 pub const ENV_TASK: &str = "OCTOPUS_TASK";
 pub const ENV_SERVER: &str = "OCTOPUS_SERVER";
 pub const AGENT_PANEL: &str = "agent";
-/// The OSC a terminal's output stream carries its size in, `ESC ] 6286 ; <cols> ; <rows> BEL`, wherever the size
-/// changes, so a client parses every byte at the size the program wrote it at.
-pub const TERM_SIZE_OSC: u16 = 6286;
 
 /// Parses a unit enum from its wire spelling, e.g. `"pinned"`.
 pub fn from_wire<T: DeserializeOwned>(text: &str) -> Result<T, String> {

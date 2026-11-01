@@ -9,6 +9,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+alacritty_terminal = { version = "0.26.0", default-features = false }
 anyhow = "1.0.104"
 fastrand = "2.5.0"
 ignore = "0.4.33"

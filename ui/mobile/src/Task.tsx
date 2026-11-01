@@ -7,7 +7,8 @@ import { act, me, model, report, scale, serverLabel, serverView, ui } from "@oct
 import { cellSize, type Size, terminalSession } from "@octopus/shared/terminalSession.ts";
 import { colors, scheme } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
-import { animateList } from "./flip";
+import { animateList } from "@octopus/shared/flip.ts";
+import { EachPanel } from "@octopus/shared/panels.ts";
 import { Icon } from "./Icon";
 import { onPainted } from "./motion";
 import { back, micDenied, openSheet } from "./nav";
@@ -586,25 +587,21 @@ function TaskScreen(props: { open: TaskView }) {
           <Missing open={props.open} />
         </Show>
       </Show>
-      <For each={panels().map((panel) => panel.id)}>
-        {(id) => (
-          <Show when={panels().find((panel) => panel.id === id)}>
-            {(panel) => (
-              <PhoneTerm
-                at={props.open.at}
-                panel={panel()}
-                visible={selected()?.id === id}
-                reach={reach()}
-                ended={ended()}
-                resumable={!ended() && panel().name === AGENT_PANEL && !panel().running}
-                tail={tail()}
-                typed={typing()}
-                typing={setTyping}
-              />
-            )}
-          </Show>
+      <EachPanel panels={panels()}>
+        {(panel) => (
+          <PhoneTerm
+            at={props.open.at}
+            panel={panel()}
+            visible={selected()?.id === panel().id}
+            reach={reach()}
+            ended={ended()}
+            resumable={!ended() && panel().name === AGENT_PANEL && !panel().running}
+            tail={tail()}
+            typed={typing()}
+            typing={setTyping}
+          />
         )}
-      </For>
+      </EachPanel>
       <div class="foot" ref={animateList(":scope > *")}>
         <Show when={gone()}>
           {(down) => (

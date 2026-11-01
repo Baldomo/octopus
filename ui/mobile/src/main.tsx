@@ -1,10 +1,10 @@
 import inter from "@fontsource-variable/inter/files/inter-latin-opsz-normal.woff2?url";
 import { createEffect, createSignal, For, Match, on, Switch } from "solid-js";
-import { render } from "solid-js/web";
 import "virtual:design.css";
 import "./app.css";
 import { backend, events } from "@octopus/shared/backend.ts";
 import { loadFonts } from "@octopus/shared/fonts.ts";
+import { mount } from "@octopus/shared/mount.ts";
 import type { Appearance } from "@octopus/shared/generated.ts";
 import { applyBoot, applyModel, applyUi, report, servers, setServers, ui } from "@octopus/shared/state.ts";
 import { setWindowShown } from "@octopus/shared/terminalSession.ts";
@@ -161,7 +161,7 @@ async function start() {
     events.filesChanged(applyFilesChanged),
   ]);
   applyBoot(await backend.boot());
-  render(() => <App />, document.body);
+  mount(() => <App />, document.body);
 }
 
 start()

@@ -16,6 +16,7 @@ import type {
   Swatch,
   TaskRef,
   TaskState,
+  TermScreen,
   Ui,
   UiAct,
   WorkspaceId,
@@ -60,7 +61,7 @@ export const backend = {
   taskArchive: (at: TaskRef) => invoke<void>(octopus("task_archive"), { at }),
   /** Resolves to the created task's key. */
   taskCreate: (task: NewTask) => invoke<string>(octopus("task_create"), { task }),
-  termAttach: (at: TaskRef, pty: PtyId, output: Channel<ArrayBuffer>) =>
+  termAttach: (at: TaskRef, pty: PtyId, output: Channel<TermScreen | ArrayBuffer>) =>
     invoke<number>(octopus("term_attach"), { at, pty, output }),
   termInput: (attachment: number, keys: string) => invoke<void>(octopus("term_input"), { attachment, keys }),
   termDetach: (attachment: number) => invoke<void>(octopus("term_detach"), { attachment }),

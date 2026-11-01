@@ -133,6 +133,36 @@ async fn a_shell_panel_follows_the_agent_until_its_shell_exits_or_it_closes() {
     conflict(laptop.call(&TermOpen { task: id, directory: ".".into() }).await, "a shell in an ended task");
 }
 
+/// The shell ignores the host's SIGTERM, so its exit lands only at the SIGKILL 5 s later, long after the close.
+#[tokio::test(flavor = "multi_thread")]
+async fn closing_a_shell_the_terminal_host_already_ended_drops_its_panel() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
+    let laptop = connect(&running, "laptop").await;
+    let workspace = workspace(&laptop, dir.path()).await;
+    set_harness(&laptop, "echo", echo_agent("agent:up"), Hooks::None).await;
+    let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
+    let shell = laptop.call(&TermOpen { task: id.clone(), directory: ".".into() }).await.expect("term.open").panel;
+    let mut live = laptop.open_data_stream(&Stream::Pty(shell.clone())).await.expect("attach the shell");
+    let trap = "trap '' TERM; echo trap$((1+1))";
+    let send = TermSend { task: id.clone(), panel: shell.0.clone(), text: trap.into(), enter: true, take_lock: true };
+    laptop.call(&send).await.expect("make the shell ignore SIGTERM");
+    read_until(&mut live, "trap2").await;
+
+    let forget = json!({ "op": "forget", "id": shell });
+    let (_, forgot) =
+        octopus_proto::local::open_blocking(&dir.path().join("host.sock"), &forget).expect("reach the host");
+    assert!(matches!(forgot, Outcome::Ok(_)), "the host forgets the shell: {forgot:?}");
+
+    let close = TermClose { task: id.clone(), panel: shell.0.clone() };
+    laptop.call(&close).await.expect("term.close of a shell the host forgot");
+    assert!(task(&laptop, &id).await.panels.iter().all(|panel| panel.id != shell));
+    match laptop.call(&close).await {
+        Err(CallError::Server(Error::NotFound { .. })) => {}
+        other => panic!("closing a closed shell must fail not_found, got {other:?}"),
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_shell_panel_opens_before_its_login_profile_finishes_and_then_has_its_environment() {
     const PROFILE_SECONDS: u64 = 2;

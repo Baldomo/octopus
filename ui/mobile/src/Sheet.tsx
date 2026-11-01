@@ -12,22 +12,8 @@ import {
 } from "solid-js";
 import { scale, ui } from "@octopus/shared/state.ts";
 import { back, type Toward } from "./nav";
-import {
-  afterFrame,
-  curve,
-  draw,
-  FADE,
-  FADE_MS,
-  glide,
-  LEAVE,
-  PROJECT_S,
-  PUSH,
-  reduced,
-  SHEET,
-  SNAPPY,
-  type Gliding,
-  type Look,
-} from "./motion";
+import { curve, FADE, FADE_MS, PROJECT_S, reduced, SNAPPY } from "@octopus/shared/motion.ts";
+import { afterFrame, draw, glide, LEAVE, PUSH, SHEET, type Gliding, type Look } from "./motion";
 import { Circle, Slot } from "./parts";
 import { driveSheetBack, releaseSheetBack } from "./stack";
 import { owns, type Gesture } from "./touch";

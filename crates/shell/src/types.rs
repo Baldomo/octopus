@@ -1,9 +1,10 @@
 //! The TypeScript the UI compiles against, rendered from the Rust types and constants that cross the IPC boundary.
 
 use octopus_proto::ops::{Entry, EntryKind, Match, Offer, PairedClient};
+use octopus_proto::term::HISTORY_LINES;
 use octopus_proto::types::{
     AGENT_PANEL, Agent, AgentStatus, BrowserId, BrowserPanel, Checkout, Hue, NEW_BROWSER_PANEL, Panel, PtyId,
-    SessionId, Swatch, TERM_SIZE_OSC, Task, TaskId, TaskState, Tone, WorkspaceId,
+    SessionId, Swatch, Task, TaskId, TaskState, Tone, WorkspaceId,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -15,6 +16,7 @@ use crate::hub::{FILES_CHANGED_EVENT, FilesChanged, MODEL_EVENT, Model, SERVERS_
 use crate::microphone::MICROPHONE_DENIED_EVENT;
 use crate::task_lists::{Column, Glyph, Lists, Row, Section, TaskRef, WorkspaceRef};
 use crate::task_view::TaskView;
+use crate::terminal::TermScreen;
 use crate::ui::{
     Bounds, FOCUSED_EVENT, Floated, Modal, Prefs, Reveal, SHOWN_EVENT, Split, Surface, UI_EVENT, Ui, UiAct, View,
     Viewport,
@@ -67,6 +69,7 @@ pub fn render() -> String {
         WorkspaceRef,
         Lists,
         TaskView,
+        TermScreen,
         ServerView,
         Model,
         FilesChanged,
@@ -96,7 +99,7 @@ pub fn render() -> String {
         constant("ZOOMS", &ZOOMS),
         constant("AGENT_PANEL", &AGENT_PANEL),
         constant("NEW_BROWSER_PANEL", &NEW_BROWSER_PANEL),
-        constant("TERM_SIZE_OSC", &TERM_SIZE_OSC),
+        constant("TERM_HISTORY_LINES", &HISTORY_LINES),
         constant("VERSION", &env!("CARGO_PKG_VERSION")),
         constant(
             "EVENTS",

@@ -3,7 +3,7 @@ import { type ITheme, Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { backend, Channel } from "./backend";
-import { type Panel, type TaskRef, TERM_SIZE_OSC } from "./generated";
+import { type Panel, type TaskRef, TERM_HISTORY_LINES, type TermScreen } from "./generated";
 import { lockClaim } from "./lockClaim";
 import { act, me, report, serverView } from "./state";
 import { colors, px, type Scheme, scheme, token } from "./tokens";
@@ -36,7 +36,6 @@ function terminalTheme(current: Scheme): ITheme {
   });
 }
 
-const SCROLLBACK_LINES = 10_000;
 /** A dropped stream retries after this, by which time a server that went away reads as unreachable. */
 const REATTACH_MS = 500;
 /** A refusal waits this long for the lock's move that caused it to reach the model before it counts as a problem. */
@@ -58,10 +57,6 @@ export const readOnlyLabel = (panel: Panel) =>
 type Cells = { cols: number; rows: number };
 export type Size = { width: number; height: number };
 type Core = { _charSizeService: { measure: () => void }; _renderService: { dimensions: { css: { cell: Size } } } };
-/** A terminal's size record, written by its server as `<cols>;<rows>`. */
-const SIZE_RECORD = /^(\d+);(\d+)$/;
-/** A program can print a size record too; past this many cells a side, one would freeze the client allocating it. */
-const MOST_CELLS = 1000;
 
 /**
  * The cell xterm draws, which only its private services know. It measures afresh, since xterm measures a terminal that
@@ -92,8 +87,8 @@ export type TerminalSession = {
  * it, and its server is reachable; the server reads that stream as this client showing the terminal. A look claims a
  * free lock at the pane's size: the terminal starting to show while its server is reachable, or the window coming into
  * focus while it shows. A stream reopening for the client that held the lock when the last one ended claims too. The holder sizes the PTY to its pane.
- * The output carries the PTY's size wherever it changes, and every client draws the terminal at the size it reads
- * there, so each byte lands on the screen it was written for.
+ * The server sends the whole screen at the PTY's size on attaching and on every resize, and every client redraws it at
+ * that size.
  */
 export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown: () => boolean }): TerminalSession {
   const mine = createMemo(() => props.panel().lock_holder === me());
@@ -102,14 +97,8 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
     fontFamily: token("--mono-terminal"),
     fontSize: px("--fs-mono"),
     cursorBlink: true,
-    scrollback: SCROLLBACK_LINES,
+    scrollback: TERM_HISTORY_LINES,
     overviewRuler: { width: px("--scrollbar-w") },
-  });
-  xterm.parser.registerOscHandler(TERM_SIZE_OSC, (record) => {
-    const size = SIZE_RECORD.exec(record);
-    const [cols, rows] = [Number(size?.[1]), Number(size?.[2])];
-    if (cols >= 1 && cols <= MOST_CELLS && rows >= 1 && rows <= MOST_CELLS) xterm.resize(cols, rows);
-    return true;
   });
   /** The cells that fit the element the terminal opened in, beside the overview ruler along its right edge. */
   const pane = (): Cells | undefined => {
@@ -130,15 +119,21 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
   /** Counts streams that ended under a running PTY, each of which calls for a fresh attachment. */
   const [drops, setDrops] = createSignal(0);
 
-  /** The server sends the scrollback first, so the screen resets on the first chunk; an empty chunk ends the stream. */
+  /** A screen resets the terminal to its size before its bytes draw it; an empty message ends the stream. */
   const attach = async () => {
     const current = ++generation;
-    const output = new Channel<ArrayBuffer>();
-    let replaying = true;
+    const output = new Channel<TermScreen | ArrayBuffer>();
     let ended = false;
-    output.onmessage = (bytes) => {
+    output.onmessage = (piece) => {
       if (current !== generation) return;
-      if (bytes.byteLength === 0) {
+      if (!(piece instanceof ArrayBuffer)) {
+        xterm.write(new Uint8Array(), () => {
+          xterm.reset();
+          xterm.resize(piece.cols, piece.rows);
+        });
+        return;
+      }
+      if (piece.byteLength === 0) {
         ended = true;
         attachment = null;
         claim.ended(mine());
@@ -146,11 +141,7 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
         if (props.panel().running) setTimeout(() => setDrops((count) => count + 1), REATTACH_MS);
         return;
       }
-      if (replaying) {
-        xterm.reset();
-        replaying = false;
-      }
-      xterm.write(new Uint8Array(bytes));
+      xterm.write(new Uint8Array(piece));
     };
     const opened = await backend.termAttach(props.at, props.panel().id, output);
     if (current === generation && !ended) {

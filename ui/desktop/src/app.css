@@ -92,6 +92,10 @@ body {
   text-align: center;
 }
 
+/* A card lifted off the board stands over the whole view. */
+.tasks-view {
+  position: relative;
+}
 /* The board's menus place themselves within its pane. */
 .tasks-view .pane {
   overflow: auto;

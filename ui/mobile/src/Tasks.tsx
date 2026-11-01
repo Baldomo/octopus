@@ -1,12 +1,13 @@
 import { For, Show } from "solid-js";
 import type { Column, Row, Section } from "@octopus/shared/generated.ts";
-import { isOpen, model, report, servers, toggleCollapsed, ui } from "@octopus/shared/state.ts";
+import { isOpen, model, report, scale, servers, toggleCollapsed, ui } from "@octopus/shared/state.ts";
 import { backend } from "@octopus/shared/backend.ts";
 import { dropHint } from "@octopus/shared/drop.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { Icon } from "./Icon";
-import { animateList } from "./flip";
-import { dropTarget, isAway, isLanding, isLifted, lift, liftsIn } from "./lift";
+import { animateList } from "@octopus/shared/flip.ts";
+import { dropTarget, isAway, isLanding, isLifted, lift, liftsIn, type Point } from "@octopus/shared/lift.ts";
+import { feel } from "./feel";
 import { go, openSheet, openTask } from "./nav";
 import { Circle, Glyph, Id, ServerDot, Slot } from "./parts";
 import { pressed } from "./press";
@@ -15,6 +16,22 @@ import { pullToRefresh } from "./pull";
 const ITEMS = ".sech, .gl, .row, .empty, .addws";
 
 export const refreshServers = () => backend.serversRefresh().catch(report);
+
+/** Lifts a top-level task's row on Tasks or its card on a board, its ghost on the screen's content. */
+export const liftOnPhone = (row: Row, section: string) => (element: HTMLElement, from: Point) => {
+  const stage = element.closest<HTMLElement>(".content");
+  const list = element.closest<HTMLElement>(".list, .cards");
+  if (row.depth > 0 || stage === null || list === null) return null;
+  return lift(row, section, element, from, {
+    stage,
+    list,
+    free: list.classList.contains("cards"),
+    throws: true,
+    covered: () => false,
+    zoom: scale(ui.prefs),
+    feel,
+  });
+};
 
 function TaskRow(props: { row: Row; section: string; group: Column }) {
   return (
@@ -31,7 +48,7 @@ function TaskRow(props: { row: Row; section: string; group: Column }) {
       {...pressed(
         () => openTask(props.row.key, props.row.at),
         () => openSheet({ is: "task", key: props.row.key, open: null }),
-        (element, from) => lift(props.row, props.section, element, from),
+        liftOnPhone(props.row, props.section),
       )}
     >
       <Slot>
@@ -56,7 +73,7 @@ function Group(props: { section: string; group: Column }) {
       <For
         each={props.group.rows}
         fallback={
-          <div class="empty" data-key={`${props.section}/${props.group.state}/empty`}>
+          <div class="empty drophint" data-key={`${props.section}/${props.group.state}/empty`}>
             {dropHint(props.group.state)}
           </div>
         }

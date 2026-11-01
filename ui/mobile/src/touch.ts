@@ -1,4 +1,4 @@
-import { tracker } from "./motion";
+import { tracker } from "@octopus/shared/motion.ts";
 import { cancelPresses, type Point } from "./press";
 
 /** How far a touch travels before it commits to the axis it moved along most. */

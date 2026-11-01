@@ -1,5 +1,6 @@
 import { For, Show, type JSX } from "solid-js";
 import type { Glyph as Status, ServerView } from "@octopus/shared/generated.ts";
+import { turning } from "@octopus/shared/Glyph.tsx";
 import { model } from "@octopus/shared/state.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
@@ -24,30 +25,28 @@ export const Circle = (props: { icon: IconName; label: string; on?: boolean; tap
   </button>
 );
 
+const look: Record<Status, () => JSX.Element> = {
+  working: () => (
+    <svg class="spin" viewBox="0 0 12 12">
+      <circle cx="6" cy="6" r="5" pathLength="100" ref={turning} />
+    </svg>
+  ),
+  waiting: () => <i class="dot needs" />,
+  idle: () => <i class="dot idle" />,
+  completed: () => (
+    <span class="end">
+      <Icon name="check" />
+    </span>
+  ),
+  cancelled: () => (
+    <span class="end">
+      <Icon name="x" />
+    </span>
+  ),
+};
+
 /** A task's status: working spins, waiting is amber, idle a ring, and an ended task its check or cross. */
-export function Glyph(props: { status: Status }) {
-  return (
-    <>
-      {
-        {
-          working: <i class="spin" />,
-          waiting: <i class="dot needs" />,
-          idle: <i class="dot idle" />,
-          completed: (
-            <span class="end">
-              <Icon name="check" />
-            </span>
-          ),
-          cancelled: (
-            <span class="end">
-              <Icon name="x" />
-            </span>
-          ),
-        }[props.status]
-      }
-    </>
-  );
-}
+export const Glyph = (props: { status: Status }) => <>{look[props.status]()}</>;
 
 /** A server's dot: filled while reachable, hollow while not, an amber ring while the phone reconnects to it. */
 export const ServerDot = (props: { server: ServerView | undefined; reconnecting?: boolean }) => (

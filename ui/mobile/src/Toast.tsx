@@ -2,7 +2,8 @@ import { createEffect, createSignal, on, Show } from "solid-js";
 import { scale, ui } from "@octopus/shared/state.ts";
 import { feel } from "./feel";
 import { Icon } from "./Icon";
-import { glide, play, reduced, SNAPPY, tracker, type Gliding } from "./motion";
+import { play, reduced, SNAPPY, tracker } from "@octopus/shared/motion.ts";
+import { glide, type Gliding } from "./motion";
 import { Slot } from "./parts";
 
 const SAID_MS = 4000;

@@ -1,7 +1,8 @@
 //! The terminal host: a process of its own that keeps every terminal, so terminals outlive the server process.
 //!
 //! Each connection to the host opens with one `HostRequest` line and gets one `Outcome` line back. An `attach`
-//! connection then carries the terminal's scrollback and live output; an `input` connection carries bytes to it.
+//! connection then carries the terminal's pieces, its screen and then its live output; an `input` connection carries
+//! bytes to it.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -14,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use octopus_proto::local::{self, BlockingStream, Listener};
+use octopus_proto::term::Piece;
 use octopus_proto::types::PtyId;
 use octopus_proto::{Error, Outcome, line};
 use serde::de::DeserializeOwned;
@@ -27,7 +29,7 @@ use crate::{lock, now, report};
 
 /// Bumped whenever an existing request or reply changes shape; a server refuses a host that speaks another. A host
 /// older than a request added since refuses that request.
-const PROTOCOL: u32 = 2;
+const PROTOCOL: u32 = 3;
 const HOST_START: Duration = Duration::from_secs(5);
 const HOST_START_POLL: Duration = Duration::from_millis(5);
 const WAIT_RETRY: Duration = Duration::from_secs(1);
@@ -208,13 +210,13 @@ async fn serve<S: AsyncRead + AsyncWrite + Send + 'static>(terminals: Terminals,
 
 /// Ends an attachment that falls behind, so its client never sees output with a gap.
 async fn stream_output<W: AsyncWrite + Unpin>(attachment: Attachment, write: &mut W) -> std::io::Result<()> {
-    write.write_all(&attachment.scrollback).await?;
+    Piece::Screen(attachment.screen).write_to(write).await?;
     if let Some(mut live) = attachment.live {
         loop {
             match live.recv().await {
-                Ok(chunk) => write.write_all(&chunk).await?,
+                Ok(piece) => piece.write_to(write).await?,
                 Err(broadcast::error::RecvError::Lagged(missed)) => {
-                    report!("closing an attachment {missed} chunks behind");
+                    report!("closing an attachment {missed} pieces behind");
                     break;
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
@@ -299,7 +301,7 @@ impl HostClient {
         Ok(listing.terminals)
     }
 
-    /// The terminal's scrollback, then live bytes until it exits.
+    /// The terminal's screen, then its live pieces until it exits.
     pub async fn attach(&self, id: &PtyId) -> Result<local::Stream, Error> {
         let request = HostRequest::Attach { id: id.clone() };
         let (stream, outcome) = local::open(&self.address, &request).await.map_err(|error| self.failed(error))?;
@@ -523,9 +525,12 @@ impl Terminal {
         self.host.call(&HostRequest::Terminate { id: self.id.clone() })
     }
 
-    /// Ends the terminal and drops its scrollback.
+    /// Ends the terminal and drops its scrollback; a terminal the host no longer has is already gone.
     pub fn forget(&self) -> Result<(), Error> {
-        self.host.forget(&self.id)
+        match self.host.forget(&self.id) {
+            Err(Error::NotFound { .. }) => Ok(()),
+            forgot => forgot,
+        }
     }
 
     pub async fn attach(&self) -> Result<local::Stream, Error> {

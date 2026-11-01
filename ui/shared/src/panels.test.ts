@@ -1,0 +1,50 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { createMemo, createRoot, createSignal, onCleanup } from "solid-js";
+import type { Panel } from "./generated.ts";
+import { EachPanel } from "./panels.ts";
+
+const shell = (id: string, lock_holder: string | null = null): Panel => ({
+  id,
+  name: id,
+  running: true,
+  lock_holder,
+  cols: 80,
+  rows: 24,
+  listening: false,
+});
+
+function mounted(panels: Panel[]) {
+  const [list, setList] = createSignal(panels);
+  const mounts: string[] = [];
+  const unmounts: string[] = [];
+  const children = createRoot(() =>
+    EachPanel({
+      get panels() {
+        return list();
+      },
+      children: (panel) => {
+        const holder = createMemo(() => panel().lock_holder);
+        mounts.push(panel().id);
+        onCleanup(() => unmounts.push(`${panel().id}:${holder()}`));
+        return panel().id;
+      },
+    }),
+  ) as unknown as () => string[];
+  children();
+  return { children, setList, mounts, unmounts };
+}
+
+test("a closed panel's child unmounts reading the panel as it last was", () => {
+  const shown = mounted([shell("agent"), shell("zsh", "phone")]);
+  shown.setList([shell("agent")]);
+  assert.deepEqual(shown.children(), ["agent"]);
+  assert.deepEqual(shown.unmounts, ["zsh:phone"]);
+});
+
+test("a panel keeps its child while its fields change", () => {
+  const shown = mounted([shell("zsh")]);
+  shown.setList([shell("zsh", "phone")]);
+  assert.deepEqual(shown.children(), ["zsh"]);
+  assert.deepEqual(shown.mounts, ["zsh"]);
+});

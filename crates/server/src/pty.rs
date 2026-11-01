@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -7,173 +7,54 @@ use std::time::Duration;
 
 use nix::unistd::Pid;
 use octopus_proto::Error;
-use octopus_proto::types::TERM_SIZE_OSC;
+use octopus_proto::term::{Piece, Screen};
 use portable_pty::{CommandBuilder, MasterPty, PtyPair, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, watch};
 
+use crate::emulator::Emulator;
 use crate::{lock, now, report};
 
-const SCROLLBACK_BYTES: usize = 1 << 20;
-const LIVE_CHUNKS: usize = 1024;
+const LIVE_PIECES: usize = 1024;
 const READ_BYTES: usize = 8192;
 const KILL_GRACE: Duration = Duration::from_secs(5);
 /// Every terminal starts at this size, and a restarted server puts every terminal it adopts back to it.
 pub const INITIAL_SIZE: (u16, u16) = (80, 24);
 
-pub type Chunk = Arc<[u8]>;
-
-/// Output the program wrote at one size.
-struct Stretch {
-    cols: u16,
-    rows: u16,
-    bytes: VecDeque<u8>,
-}
-
-fn size_record(cols: u16, rows: u16) -> Vec<u8> {
-    format!("\x1b]{TERM_SIZE_OSC};{cols};{rows}\x07").into_bytes()
-}
-
-/// Where the output stands between the escape sequences and UTF-8 characters a terminal parses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Grammar {
-    Ground,
-    Escape,
-    Csi,
-    /// An OSC's string, which BEL or ST ends.
-    Osc,
-    /// A DCS, SOS, PM or APC string, which ST alone ends.
-    Str,
-    StrEscape,
-    Utf8 {
-        left: u8,
-    },
-}
-
-impl Grammar {
-    fn after(self, byte: u8) -> Self {
-        match (self, byte) {
-            (_, 0x18 | 0x1a) | (Self::Osc, 0x07) | (Self::StrEscape, b'\\') => Self::Ground,
-            (Self::Osc | Self::Str, 0x1b) => Self::StrEscape,
-            (Self::Osc | Self::Str, _) => self,
-            (Self::StrEscape, _) => Self::Escape.after(byte),
-            (_, 0x1b) => Self::Escape,
-            (Self::Escape, b'[') => Self::Csi,
-            (Self::Escape, b']') => Self::Osc,
-            (Self::Escape, b'P' | b'X' | b'^' | b'_') => Self::Str,
-            (Self::Escape, 0x00..=0x2f) => Self::Escape,
-            (Self::Escape, 0x80..) => Self::Ground.after(byte),
-            (Self::Csi, 0x40..=0x7e) | (Self::Escape, _) => Self::Ground,
-            (Self::Csi, _) => Self::Csi,
-            (Self::Utf8 { left }, 0x80..=0xbf) => {
-                if left == 1 {
-                    Self::Ground
-                } else {
-                    Self::Utf8 { left: left - 1 }
-                }
-            }
-            (Self::Ground | Self::Utf8 { .. }, 0xc0..=0xdf) => Self::Utf8 { left: 1 },
-            (Self::Ground | Self::Utf8 { .. }, 0xe0..=0xef) => Self::Utf8 { left: 2 },
-            (Self::Ground | Self::Utf8 { .. }, 0xf0..=0xf7) => Self::Utf8 { left: 3 },
-            (Self::Ground | Self::Utf8 { .. }, _) => Self::Ground,
-        }
-    }
-}
-
+/// The terminal's screen and the pieces it sends each attached client, kept in step under one lock.
 struct Output {
-    /// The most recent output, oldest first, split where the terminal resized; never empty.
-    scrollback: VecDeque<Stretch>,
-    kept_bytes: usize,
-    grammar: Grammar,
-    /// A resize that came while the output stood inside a sequence or a character, which its size record would split.
-    pending_size: Option<(u16, u16)>,
-    live: Option<broadcast::Sender<Chunk>>,
+    emulator: Emulator,
+    /// `None` once the program's output has ended.
+    live: Option<broadcast::Sender<Piece>>,
 }
 
 impl Output {
-    fn new(live: Option<broadcast::Sender<Chunk>>) -> Self {
-        let (cols, rows) = INITIAL_SIZE;
-        let scrollback = VecDeque::from([Stretch { cols, rows, bytes: VecDeque::new() }]);
-        Self { scrollback, kept_bytes: 0, grammar: Grammar::Ground, pending_size: None, live }
+    fn new(live: Option<broadcast::Sender<Piece>>) -> Self {
+        Self { emulator: Emulator::new(INITIAL_SIZE.0, INITIAL_SIZE.1), live }
     }
 
-    /// A resize waiting on a sequence lands right after the byte that ends it.
-    fn add(&mut self, chunk: &[u8]) {
-        let mut rest = chunk;
-        if let Some((cols, rows)) = self.pending_size {
-            let Some(end) = rest.iter().position(|&byte| {
-                self.grammar = self.grammar.after(byte);
-                self.grammar == Grammar::Ground
-            }) else {
-                return self.keep(rest);
-            };
-            let (whole, after) = rest.split_at(end + 1);
-            self.keep(whole);
-            self.pending_size = None;
-            self.record(cols, rows);
-            rest = after;
-        }
-        self.grammar = rest.iter().fold(self.grammar, |grammar, &byte| grammar.after(byte));
-        self.keep(rest);
+    fn add(&mut self, bytes: &[u8]) {
+        self.emulator.advance(bytes);
+        self.send(Piece::Output(bytes.into()));
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {
-        if self.grammar == Grammar::Ground {
-            self.record(cols, rows);
-        } else {
-            self.pending_size = Some((cols, rows));
-        }
+        self.emulator.resize(cols, rows);
+        let screen = self.emulator.screen();
+        self.send(Piece::Screen(screen));
     }
 
-    fn keep(&mut self, chunk: &[u8]) {
-        if chunk.is_empty() {
-            return;
-        }
-        self.scrollback.back_mut().expect("the scrollback is never empty").bytes.extend(chunk);
-        self.kept_bytes += chunk.len();
-        while self.kept_bytes > SCROLLBACK_BYTES {
-            let oldest = self.scrollback.front_mut().expect("the scrollback is never empty");
-            let cut = (self.kept_bytes - SCROLLBACK_BYTES).min(oldest.bytes.len());
-            oldest.bytes.drain(..cut);
-            self.kept_bytes -= cut;
-            if oldest.bytes.is_empty() && self.scrollback.len() > 1 {
-                self.scrollback.pop_front();
-            }
-        }
-        self.send(chunk);
-    }
-
-    /// A resize with no output since the last one replaces it.
-    fn record(&mut self, cols: u16, rows: u16) {
-        let last = self.scrollback.back_mut().expect("the scrollback is never empty");
-        if (last.cols, last.rows) == (cols, rows) {
-            return;
-        }
-        if last.bytes.is_empty() {
-            (last.cols, last.rows) = (cols, rows);
-        } else {
-            self.scrollback.push_back(Stretch { cols, rows, bytes: VecDeque::new() });
-        }
-        self.send(&size_record(cols, rows));
-    }
-
-    fn send(&self, bytes: &[u8]) {
+    fn send(&self, piece: Piece) {
         if let Some(live) = &self.live {
-            let _no_receivers = live.send(Chunk::from(bytes));
+            let _no_receivers = live.send(piece);
         }
-    }
-
-    fn replay(&self) -> Vec<u8> {
-        let stretch =
-            |stretch: &Stretch| size_record(stretch.cols, stretch.rows).into_iter().chain(stretch.bytes.clone());
-        self.scrollback.iter().flat_map(stretch).collect()
     }
 }
 
 pub struct Attachment {
-    pub scrollback: Vec<u8>,
+    pub screen: Screen,
     /// `None` once the terminal's output has ended.
-    pub live: Option<broadcast::Receiver<Chunk>>,
+    pub live: Option<broadcast::Receiver<Piece>>,
 }
 
 /// A PTY and its process, owned by the terminal host.
@@ -215,7 +96,7 @@ impl Pty {
         drop(pair.slave);
         let reader = pair.master.try_clone_reader().map_err(Error::internal)?;
         let writer = pair.master.take_writer().map_err(Error::internal)?;
-        let (live, _) = broadcast::channel(LIVE_CHUNKS);
+        let (live, _) = broadcast::channel(LIVE_PIECES);
         let pty = Arc::new(Self {
             writer: Mutex::new(writer),
             master: Mutex::new(Some(pair.master)),
@@ -252,8 +133,8 @@ impl Pty {
     }
 
     pub fn attach(&self) -> Attachment {
-        let output = lock(&self.output);
-        Attachment { scrollback: output.replay(), live: output.live.as_ref().map(broadcast::Sender::subscribe) }
+        let mut output = lock(&self.output);
+        Attachment { screen: output.emulator.screen(), live: output.live.as_ref().map(broadcast::Sender::subscribe) }
     }
 
     pub fn running(&self) -> bool {
@@ -301,7 +182,7 @@ impl Pty {
         writer.write_all(bytes).and_then(|()| writer.flush()).map_err(Error::internal)
     }
 
-    /// Holds the output while it resizes, so whatever the program redraws at the new size follows the size's record.
+    /// Holds the output while it resizes, so whatever the program redraws at the new size follows the new screen.
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), Error> {
         let mut output = lock(&self.output);
         match lock(&self.master).as_ref() {
@@ -479,35 +360,134 @@ mod disclaimed {
 
 #[cfg(test)]
 mod tests {
+    use alacritty_terminal::Term;
+    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::index::{Column, Line};
+    use alacritty_terminal::term::cell::Flags;
+    use alacritty_terminal::term::test::TermSize;
+    use alacritty_terminal::term::{Config, TermMode};
+    use alacritty_terminal::vte::ansi::Processor;
+
     use super::*;
 
-    #[test]
-    fn a_replay_draws_each_stretch_at_its_size_and_trimming_keeps_the_size_it_cuts_into() {
-        let mut output = Output::new(None);
-        output.resize(100, 30);
-        output.add(b"wide");
-        output.resize(40, 20);
-        output.resize(46, 28);
-        output.add(b"narrow");
-        let narrow = [size_record(46, 28), b"narrow".to_vec()].concat();
-        assert_eq!(output.replay(), [size_record(100, 30), b"wide".to_vec(), narrow.clone()].concat());
+    /// A client: a terminal that reads the pieces as a client does, so it shows what that client draws.
+    struct Client {
+        term: Term<VoidListener>,
+        parser: Processor,
+    }
 
-        output.add(&vec![b'.'; SCROLLBACK_BYTES - "wide".len() - "narrow".len() + 2]);
-        assert!(output.replay().starts_with(&[size_record(100, 30), b"de".to_vec(), narrow].concat()));
-        output.add(b"..");
-        assert!(output.replay().starts_with(&size_record(46, 28)));
+    impl Client {
+        fn new() -> Self {
+            Self { term: Term::new(Config::default(), &TermSize::new(1, 1), VoidListener), parser: Processor::new() }
+        }
+
+        fn read(&mut self, piece: &Piece) {
+            match piece {
+                Piece::Screen(Screen { cols, rows, bytes }) => {
+                    *self = Self::new();
+                    self.term.resize(TermSize::new((*cols).into(), (*rows).into()));
+                    self.parser.advance(&mut self.term, bytes);
+                }
+                Piece::Output(bytes) => self.parser.advance(&mut self.term, bytes),
+            }
+        }
+
+        /// Every line from the oldest, trailing blanks trimmed.
+        fn lines(&self) -> Vec<String> {
+            let grid = self.term.grid();
+            (grid.topmost_line().0..=grid.bottommost_line().0)
+                .map(|line| {
+                    let row = &grid[Line(line)];
+                    (0..grid.columns()).map(|column| row[Column(column)].c).collect::<String>().trim_end().to_string()
+                })
+                .collect()
+        }
+
+        fn cursor(&self) -> (i32, usize) {
+            let point = self.term.grid().cursor.point;
+            (point.line.0, point.column.0)
+        }
+    }
+
+    fn output() -> Output {
+        Output::new(None)
+    }
+
+    fn attach(output: &mut Output) -> Client {
+        let mut client = Client::new();
+        client.read(&Piece::Screen(output.emulator.screen()));
+        client
     }
 
     #[test]
-    fn a_resize_inside_a_sequence_or_a_character_records_after_it_ends() {
-        let mut output = Output::new(None);
-        output.add(b"\x1b[38;5");
-        output.resize(46, 28);
-        output.add(b";245mred \xe2\x94");
-        output.resize(50, 30);
-        output.add(b"\x80 box");
-        let expected =
-            [size_record(80, 24), b"\x1b[38;5;245m".to_vec(), size_record(46, 28), b"red \xe2\x94\x80".to_vec()];
-        assert_eq!(output.replay(), [expected.concat(), size_record(50, 30), b" box".to_vec()].concat());
+    fn output_written_wide_reflows_into_the_screen_a_narrower_attach_draws() {
+        let mut output = output();
+        output.resize(110, 30);
+        let long = "0123456789".repeat(10);
+        output.add(format!("\x1b[1;31m{long}\x1b[0m\r\nnext\r\n\x1b[?1h$ ").as_bytes());
+        output.resize(47, 12);
+
+        let client = attach(&mut output);
+        let Screen { cols, rows, .. } = output.emulator.screen();
+        assert_eq!((cols, rows), (47, 12));
+        let lines = client.lines();
+        let drawn = lines.iter().position(|line| line.starts_with("0123")).expect("the long line");
+        assert_eq!(lines[drawn..drawn + 5], [&long[..47], &long[47..94], &long[94..], "next", "$"]);
+        let grid = client.term.grid();
+        let wrapped = &grid[Line(i32::try_from(drawn + 1).unwrap() - i32::try_from(grid.history_size()).unwrap())];
+        assert!(wrapped[Column(0)].flags.contains(Flags::BOLD), "attributes survive the reflow");
+        assert_eq!(client.cursor().1, 2);
+        assert!(client.term.mode().contains(TermMode::APP_CURSOR));
+    }
+
+    #[test]
+    fn a_program_printing_a_size_record_of_its_own_changes_nothing() {
+        let mut output = output();
+        output.add(b"\x1b]6286;10;5\x07plain");
+        let Screen { cols, rows, bytes } = output.emulator.screen();
+        assert_eq!((cols, rows), INITIAL_SIZE);
+        assert!(!String::from_utf8_lossy(&bytes).contains("6286"));
+        assert_eq!(attach(&mut output).lines()[0], "plain");
+    }
+
+    #[test]
+    fn a_character_split_across_an_attach_arrives_whole() {
+        let mut output = output();
+        output.add("a\x1b[38;5".as_bytes());
+        output.add(b";245mb\xe2\x94");
+        let mut client = attach(&mut output);
+        let rest = b"\x80c";
+        output.add(rest);
+        client.read(&Piece::Output(rest[..].into()));
+        assert_eq!(client.lines()[0], "ab─c");
+        assert_eq!(attach(&mut output).lines()[0], "ab─c");
+    }
+
+    #[test]
+    fn a_cursor_saved_before_an_attach_restores_after_it() {
+        let mut output = output();
+        output.add(b"\x1b[3;5H\x1b7\x1b[H");
+        let mut client = attach(&mut output);
+        assert_eq!(client.cursor(), (0, 0));
+        client.read(&Piece::Output(b"\x1b8"[..].into()));
+        assert_eq!(client.cursor(), (2, 4));
+    }
+
+    #[test]
+    fn a_full_screen_program_redraws_over_the_shell_it_returns_to() {
+        let mut output = output();
+        output.add(b"$ vim\r\n\x1b[?1049h\x1b[Hfile\x1b[24;1H-- INSERT --\x1b[1;5H");
+        let mut client = attach(&mut output);
+        assert!(client.term.mode().contains(TermMode::ALT_SCREEN));
+        assert_eq!(client.lines()[0], "file");
+        assert_eq!(client.lines()[23], "-- INSERT --");
+        assert_eq!(client.cursor(), (0, 4));
+        let leave = b"\x1b[?1049l";
+        output.add(leave);
+        client.read(&Piece::Output(leave[..].into()));
+        assert_eq!(client.lines()[0], "$ vim");
+        assert_eq!(client.cursor(), (1, 0));
+        assert_eq!(attach(&mut output).lines()[..2], ["$ vim", ""]);
     }
 }

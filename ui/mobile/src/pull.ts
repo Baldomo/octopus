@@ -1,8 +1,8 @@
 import { onCleanup } from "solid-js";
 import { scale, ui } from "@octopus/shared/state.ts";
 import { feel } from "./feel";
-import { draw, glide, SNAPPY, type Gliding, type Look } from "./motion";
-import { give } from "./scroll";
+import { give, SNAPPY } from "@octopus/shared/motion.ts";
+import { draw, glide, type Gliding, type Look } from "./motion";
 import { owns } from "./touch";
 
 /** Where letting go refreshes, and where the list waits while it does. */

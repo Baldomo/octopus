@@ -1,12 +1,10 @@
+import type { Lift, Point } from "@octopus/shared/lift.ts";
 import { feel } from "./feel";
 import { COMMIT_PX, keepTouch } from "./touch";
 
+export type { Point };
+
 export const LONG_PRESS_MS = 450;
-
-export type Point = { x: number; y: number };
-
-/** An element lifted under a held finger: moving the finger drags it, and lifting the finger drops it. */
-export type Lift = { move: (to: Point) => void; drop: () => void; cancel: () => void };
 
 /** Every press under a finger, which a gesture that takes the finger over ends. */
 const presses = new Set<() => void>();

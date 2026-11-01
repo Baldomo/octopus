@@ -4,6 +4,7 @@ import { backend } from "./backend";
 import { AGENT_PANEL, type Panel, type PtyId, type TaskRef, type TaskView } from "./generated";
 import { Glyph } from "./Glyph";
 import { keepInView } from "./keepInView";
+import { EachPanel } from "./panels";
 import { commands, hint, mac } from "./commands";
 import { act, model, serverLabel, ui } from "./state";
 import { type LinkTarget, openLinks, type OpenUrl } from "./terminalLinks";
@@ -195,21 +196,17 @@ function Stack(props: { key: string; openLink: OpenLink }) {
                 <Missing open={open()} />
               </Show>
             </Show>
-            <For each={panels().map((panel) => panel.id)}>
-              {(id) => (
-                <Show when={panels().find((panel) => panel.id === id)}>
-                  {(panel) => (
-                    <Term
-                      at={open().at}
-                      panel={panel()}
-                      visible={shown() && selected()?.id === id}
-                      resumable={open().live && panel().name === AGENT_PANEL && !panel().running}
-                      openLink={(url, target) => props.openLink(open(), url, target)}
-                    />
-                  )}
-                </Show>
+            <EachPanel panels={panels()}>
+              {(panel) => (
+                <Term
+                  at={open().at}
+                  panel={panel()}
+                  visible={shown() && selected()?.id === panel().id}
+                  resumable={open().live && panel().name === AGENT_PANEL && !panel().running}
+                  openLink={(url, target) => props.openLink(open(), url, target)}
+                />
               )}
-            </For>
+            </EachPanel>
           </>
         )}
       </Show>

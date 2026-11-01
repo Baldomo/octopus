@@ -106,6 +106,8 @@ export type TaskView = { key: string, at: TaskRef, section: string,
  */
 crumbs: Array<string>, live: boolean, glyph: Glyph, task: Task, };
 
+export type TermScreen = { cols: number, rows: number, };
+
 export type ServerView = { name: string, 
 /**
  * What the window calls the server: "local" for one on the local socket, else its name.
@@ -228,7 +230,7 @@ export const AGENT_PANEL = "agent" as const;
 
 export const NEW_BROWSER_PANEL = "new" as const;
 
-export const TERM_SIZE_OSC = 6286 as const;
+export const TERM_HISTORY_LINES = 10000 as const;
 
 export const VERSION = "0.0.0" as const;
 

@@ -744,10 +744,6 @@ body {
   }
 }
 
-.spin {
-  animation: spin 900ms linear infinite;
-}
-
 :is(button, [role="button"]) {
   transition:
     opacity 240ms ease-out,

@@ -46,7 +46,7 @@ function clearance(spot: Spot, movers: Mover[]) {
  * A list whose items, `selector` within it, move to where a change puts them, fade in where one adds them once the
  * items sliding off that place have cleared it, and fade out where one removes them, each keyed by its `data-key` or
  * else by itself. It follows every change to its children before the change paints. An item held `.landing` is left
- * for its drop to place. Under reduced motion items only fade.
+ * for its drop to place, and an item that lays out nowhere is left out. Under reduced motion items only fade.
  */
 export function animateList(selector: string) {
   return (root: HTMLElement) => {
@@ -56,7 +56,9 @@ export function animateList(selector: string) {
     const moving = new WeakMap<Element, Animation>();
     const keyOf = (element: HTMLElement) => element.dataset.key ?? element;
     const items = () =>
-      [...root.querySelectorAll<HTMLElement>(selector)].filter((element) => !element.classList.contains(GHOST));
+      [...root.querySelectorAll<HTMLElement>(selector)].filter(
+        (element) => !element.classList.contains(GHOST) && element.getClientRects().length > 0,
+      );
     /** Where an item lays out within the list, untouched by its own animation or the list's scroll. */
     const where = (element: HTMLElement) => {
       let [x, y] = [0, 0];

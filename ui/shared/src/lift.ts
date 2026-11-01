@@ -1,16 +1,35 @@
 import { createRoot, createSelector, createSignal } from "solid-js";
-import { backend } from "@octopus/shared/backend.ts";
-import { TASK_STATES, type Row, type TaskState } from "@octopus/shared/generated.ts";
-import { model, report, scale, ui } from "@octopus/shared/state.ts";
-import { feel } from "./feel";
+import { backend } from "./backend";
 import { awaitArrival, followChange } from "./flip";
-import { animate, curve, play, PROJECT_S, reduced, SNAPPY, tracker, type Running } from "./motion";
-import type { Lift, Point } from "./press";
-import { give } from "./scroll";
+import { TASK_STATES, type Row, type TaskState } from "./generated";
+import { animate, curve, give, play, PROJECT_S, reduced, SNAPPY, tracker, type Running } from "./motion";
+import { model, report } from "./state";
+
+export type Point = { x: number; y: number };
+
+/** A task lifted under a held pointer: moving the pointer drags it, letting go drops it, and cancelling flies it home. */
+export type Lift = { move: (to: Point) => void; drop: () => void; cancel: () => void };
+
+/**
+ * Where a task lifts: its ghost stands in `stage`, which holds still while `list`, the scroller of its rows, scrolls.
+ * A `free` ghost follows the pointer anywhere on the stage, else only up and down the list. A surface that `throws`
+ * drops a task where the pointer's speed carries it, else where the pointer lets go. `covered` tells the points where
+ * other UI stands over the surface, which take no drop. `zoom` is how many screen pixels one of the layout's takes,
+ * and `feel` plays a haptic where the device has one.
+ */
+export type Surface = {
+  stage: HTMLElement;
+  list: HTMLElement;
+  free: boolean;
+  throws: boolean;
+  covered: (at: Point) => boolean;
+  zoom: number;
+  feel: (kind: "select" | "drop") => void;
+};
 
 /**
  * The task in hand: its own row and its subtasks' travel with it, and `toward` is the state it goes to, the one under
- * the finger while held and the one it dropped on until it lands there.
+ * the pointer while held and the one it dropped on until it lands there.
  */
 type Hand = {
   key: string;
@@ -24,7 +43,7 @@ const [hand, setHand] = createSignal<Hand | null>(null);
 /** The rows of a dropped task that stay out of sight while its ghost lands where they arrive. */
 const [landing, setLanding] = createSignal<string[]>([]);
 
-/** How near a scroller's edge the finger scrolls it, and how far it scrolls each frame at the very edge. */
+/** How near a scroller's edge the pointer scrolls it, and how far it scrolls each frame at the very edge. */
 const EDGE_PX = 48;
 const EDGE_SCROLL_PX = 12;
 /** How long a dropped ghost waits for its row to arrive before it flies back. */
@@ -44,13 +63,15 @@ export const isAway = createRoot(() =>
 );
 export const isLanding = createRoot(() => createSelector(landing, (key: string, keys) => keys.includes(key)));
 
-/** Whether a finger holds a task lifted in `section`, or one dropped there still lands. */
+export const lifting = () => hand() !== null;
+
+/** Whether a pointer holds a task lifted in `section`, or one dropped there still lands. */
 export const liftsIn = (section: string) => {
   const held = hand();
   return held?.section === section && (!held.dropped || held.toward !== null);
 };
 
-/** A group or state tab that takes a task lifted in its section to its state. */
+/** A group, column or state tab that takes a task lifted in its section to its state. */
 export const dropTarget = (section: string, state: TaskState) => ({
   over: () => {
     const held = hand();
@@ -59,27 +80,31 @@ export const dropTarget = (section: string, state: TaskState) => ({
   attributes: { "data-drop-section": section, "data-drop-state": state },
 });
 
-function targetAt({ x, y }: Point, task: { section: string; state: TaskState }) {
-  const element = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drop-state]");
-  const state = TASK_STATES.find((candidate) => candidate === element?.dataset.dropState);
-  return element?.dataset.dropSection === task.section && state !== undefined && state !== task.state ? state : null;
+function targetAt(at: Point, task: { section: string; state: TaskState }, covered: (at: Point) => boolean) {
+  if (covered(at)) return null;
+  const element = document.elementFromPoint(at.x, at.y)?.closest<HTMLElement>("[data-drop-state]");
+  if (!element || element.dataset.dropSection !== task.section) return null;
+  const state = TASK_STATES.find((candidate) => candidate === element.dataset.dropState);
+  return state === undefined || state === task.state ? null : { state, element };
 }
 
-/** How far to scroll along one axis of a box toward the edge the finger is near. */
+/** How far to scroll along one axis of a box toward the edge the pointer is near. */
 function edgePush(at: number, start: number, end: number) {
   const near = (distance: number) => (EDGE_SCROLL_PX * Math.max(0, EDGE_PX - distance)) / EDGE_PX;
   return near(end - at) - near(at - start);
 }
 
-/** Scrolls every scroller under the finger toward the edge of it the finger is near; true when one moved. */
+const scrolls = (overflow: string) => overflow === "auto" || overflow === "scroll";
+
+/** Scrolls every scroller under the pointer toward the edge of it the pointer is near; true when one moved. */
 function autoscroll({ x, y }: Point) {
   let moved = false;
   for (let element = document.elementFromPoint(x, y); element !== null; element = element.parentElement) {
     const box = element.getBoundingClientRect();
     const { overflowX, overflowY } = getComputedStyle(element);
     const [top, left] = [element.scrollTop, element.scrollLeft];
-    if (overflowY === "auto") element.scrollTop += edgePush(y, box.top, box.bottom);
-    if (overflowX === "auto") element.scrollLeft += edgePush(x, box.left, box.right);
+    if (scrolls(overflowY)) element.scrollTop += edgePush(y, box.top, box.bottom);
+    if (scrolls(overflowX)) element.scrollLeft += edgePush(x, box.left, box.right);
     moved ||= element.scrollTop !== top || element.scrollLeft !== left;
   }
   return moved;
@@ -96,6 +121,9 @@ function rest(element: Element, zoom: number) {
   return { left: box.left - slide.m41 * zoom, top: box.top - slide.m42 * zoom };
 }
 
+/** The height an item takes in its list, its top margin included. */
+const footprint = (element: HTMLElement) => element.offsetHeight + parseFloat(getComputedStyle(element).marginTop);
+
 /** Whether `a` sorts before `b` in a group, which orders its rows by title and then by where each task lives. */
 function sortsBefore(a: Row, b: Row) {
   const order = (row: Row) => [row.title.toLowerCase(), row.at.server, row.at.task];
@@ -108,37 +136,42 @@ function sortsBefore(a: Row, b: Row) {
 let ending: (() => void) | null = null;
 
 /**
- * Lifts a top-level task's row or card as a ghost that rises under the finger and follows it one to one: up and down
- * its list on Tasks, anywhere on its board, rubber-banding past the top and foot. Over another state of its section its
- * rows give up their place, and that state's group opens one where the task will sit or, on a board, the ghost thins
- * over the state's tab so its ring shows. Letting go drops it where the throw projects: the ghost flies there at the
- * finger's speed and the rows show once they arrive, or it flies home.
+ * Lifts a top-level task's row or card as a ghost that rises under the pointer and follows it one to one, rubber-banding
+ * past the list's top and foot. Over another state of its section its rows give up their place, and that state's group
+ * or column opens one where the task will sit or, on a state tab, the ghost thins so the tab's ring shows. Letting go
+ * drops it where the throw projects: the ghost flies there at the pointer's speed and the rows show once they arrive,
+ * or it flies home.
  */
-export function lift(row: Row, section: string, element: HTMLElement, from: Point): Lift | null {
-  const content = element.closest<HTMLElement>(".content");
-  const list = element.closest<HTMLElement>(".list, .cards");
-  if (row.depth > 0 || content === null || list === null) return null;
+export function lift(row: Row, section: string, element: HTMLElement, from: Point, surface: Surface): Lift {
+  const { stage, list, free, throws, covered, zoom, feel } = surface;
   ending?.();
-  const board = list.classList.contains("cards");
-  const zoom = scale(ui.prefs);
-  const origin = element.getBoundingClientRect();
-  const carried = [element];
-  for (let next = element.nextElementSibling; next instanceof HTMLElement; next = next.nextElementSibling) {
-    if (Number(next.style.getPropertyValue("--d")) === 0) break;
-    carried.push(next);
-  }
-  const room = carried.reduce((height, each) => height + each.offsetHeight, 0);
+  const shown = model.lists.sections.find((each) => each.name === section);
+  const rowsOf = (state: TaskState) =>
+    (free ? shown?.columns : shown?.groups)?.find((each) => each.state === state)?.rows ?? [];
+  const own = rowsOf(row.state);
+  const after = own.slice(own.findIndex((each) => each.key === row.key) + 1);
+  const nextTopLevel = after.findIndex((each) => each.depth === 0);
+  const subtasks = nextTopLevel < 0 ? after : after.slice(0, nextTopLevel);
+  const keys = [row.key, ...subtasks.map((each) => each.key)];
+  const carried = keys
+    .map((key) => list.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`))
+    .filter((each) => each !== null);
+  const room = carried.reduce((height, each) => height + footprint(each), 0);
+  const margin = parseFloat(getComputedStyle(element).marginTop) * zoom;
 
+  const origin = element.getBoundingClientRect();
+  const stageBox = stage.getBoundingClientRect();
   const ghost = element.cloneNode(true) as HTMLElement;
   ghost.classList.add("ghost");
   ghost.removeAttribute("data-pressed");
-  ghost.style.top = `${(origin.top - content.getBoundingClientRect().top) / zoom}px`;
+  ghost.style.top = `${(origin.top - stageBox.top) / zoom - stage.clientTop}px`;
+  ghost.style.setProperty("--from-left", `${(origin.left - stageBox.left) / zoom - stage.clientLeft}px`);
+  ghost.style.setProperty("--from-width", `${origin.width / zoom}px`);
   ghost.style.setProperty("--ws", getComputedStyle(element).getPropertyValue("--ws"));
-  content.append(ghost);
+  stage.append(ghost);
   void ghost.offsetWidth;
   ghost.classList.add("up");
 
-  const keys = carried.map((each) => each.dataset.key ?? "");
   const task = { key: row.key, section, state: row.state, carried: keys };
   setHand({ ...task, toward: null, dropped: false });
   const takeOver = () => {
@@ -154,7 +187,7 @@ export function lift(row: Row, section: string, element: HTMLElement, from: Poin
   };
   ending = takeOver;
 
-  /** Where the ghost stands off the row it lifted from, in the layout's points. */
+  /** Where the ghost stands off the row it lifted from, in the layout's pixels. */
   let at = { x: 0, y: 0 };
   const motion = tracker();
   const place = (x: number, y: number) => {
@@ -182,8 +215,8 @@ export function lift(row: Row, section: string, element: HTMLElement, from: Poin
   });
 
   /**
-   * The place a state's group opens where the task will sit among its rows, ordered by title, and where that is on
-   * the screen; an empty group's hint stands where it will sit.
+   * The place a state's group or column opens where the task will sit among its rows, ordered by title, and where
+   * that is on the screen; an empty one's hint stands where it will sit.
    */
   let gap: { element: HTMLElement; side: "marginTop" | "paddingBottom" } | null = null;
   const ownPlace = () => rest(element, zoom);
@@ -194,47 +227,56 @@ export function lift(row: Row, section: string, element: HTMLElement, from: Poin
   };
   const openGap = (state: TaskState) => {
     const group = list.querySelector<HTMLElement>(
-      `.grp[data-state="${state}"][data-drop-section="${CSS.escape(section)}"]`,
+      `[data-state="${state}"][data-drop-section="${CSS.escape(section)}"]`,
     );
     if (group === null) return;
-    const hint = group.querySelector(".empty");
-    if (hint) return void (slot = () => ({ left: origin.left, top: rest(hint, zoom).top }));
-    const rows = model.lists.sections
-      .find((shown) => shown.name === section)
-      ?.groups.find((each) => each.state === state);
-    const after = rows?.rows.find((each) => each.depth === 0 && sortsBefore(row, each));
-    const next = after && group.querySelector<HTMLElement>(`[data-key="${CSS.escape(after.key)}"]`);
-    gap = next ? { element: next, side: "marginTop" } : { element: group, side: "paddingBottom" };
-    gap.element.style[gap.side] = `${room}px`;
-    slot = next
-      ? () => ({ left: origin.left, top: rest(next, zoom).top - room * zoom })
-      : () => ({ left: origin.left, top: group.getBoundingClientRect().bottom - room * zoom });
+    const hint = group.querySelector(".drophint");
+    if (hint)
+      return void (slot = () => ({ left: free ? rest(hint, zoom).left : origin.left, top: rest(hint, zoom).top }));
+    const rowElement = (key: string) => group.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`);
+    const rows = rowsOf(state).filter((each) => each.depth === 0);
+    const first = rows[0] && rowElement(rows[0].key);
+    const next = rows.find((each) => sortsBefore(row, each));
+    const nextElement = next && rowElement(next.key);
+    const left = () => (free && first ? rest(first, zoom).left : origin.left);
+    if (nextElement) {
+      gap = { element: nextElement, side: "marginTop" };
+      nextElement.style.marginTop = `${parseFloat(getComputedStyle(nextElement).marginTop) + room}px`;
+      slot = () => ({ left: left(), top: rest(nextElement, zoom).top - room * zoom });
+    } else {
+      const style = getComputedStyle(group);
+      const below = parseFloat(style.paddingBottom) + parseFloat(style.borderBottomWidth) + room;
+      gap = { element: group, side: "paddingBottom" };
+      group.style.paddingBottom = `${parseFloat(style.paddingBottom) + room}px`;
+      slot = () => ({ left: left(), top: group.getBoundingClientRect().bottom - below * zoom + margin });
+    }
   };
 
   /** Heads the task to `state`, or back to its own place at null, the list making room as it goes. */
-  const aim = (state: TaskState | null, dropped: boolean) => {
+  const aim = (target: { state: TaskState; element: HTMLElement } | null, dropped: boolean) => {
     const was = hand();
+    const state = target?.state ?? null;
     if (was === null || (state === was.toward && dropped === was.dropped)) return;
     if (state !== was.toward) closeGap();
     setHand({ ...was, toward: state, dropped });
-    ghost.classList.toggle("aiming", board && state !== null);
+    ghost.classList.toggle("aiming", target !== null && !list.contains(target.element));
     if (state !== null && state !== was.toward) openGap(state);
     followChange(list);
     if (state !== null && !dropped) feel("select");
   };
 
-  let finger = from;
+  let pointer = from;
   let frame = 0;
   const follow = () => {
-    const bounds = (board ? content : list).getBoundingClientRect();
-    const top = within(origin.top + finger.y - from.y, bounds.top, bounds.bottom - origin.height);
-    const left = board ? origin.left + finger.x - from.x : origin.left;
-    const shown = offset({ left, top });
-    place(shown.x, shown.y);
-    aim(targetAt(finger, task), false);
+    const bounds = (free ? stage : list).getBoundingClientRect();
+    const top = within(origin.top + pointer.y - from.y, bounds.top, bounds.bottom - origin.height);
+    const left = free ? origin.left + pointer.x - from.x : origin.left;
+    const spot = offset({ left, top });
+    place(spot.x, spot.y);
+    aim(targetAt(pointer, task, covered), false);
   };
   const scroll = () => {
-    if (autoscroll(finger)) follow();
+    if (autoscroll(pointer)) follow();
     frame = requestAnimationFrame(scroll);
   };
 
@@ -310,26 +352,29 @@ export function lift(row: Row, section: string, element: HTMLElement, from: Poin
     };
   };
 
+  /** Where the pointer's throw carries it, kept within the surface. */
+  const projected = () => {
+    const speed = motion.velocity();
+    const bounds = (free ? stage : list).getBoundingClientRect();
+    return {
+      x: Math.min(Math.max(pointer.x + speed.x * zoom * PROJECT_S, bounds.left + 1), bounds.right - 1),
+      y: Math.min(Math.max(pointer.y + speed.y * zoom * PROJECT_S, bounds.top + 1), bounds.bottom - 1),
+    };
+  };
+
   return {
     move: (to) => {
-      finger = to;
+      pointer = to;
       follow();
       if (frame === 0) frame = requestAnimationFrame(scroll);
     },
     drop: () => {
       cancelAnimationFrame(frame);
-      const speed = motion.velocity();
-      const bounds = (board ? content : list).getBoundingClientRect();
-      const ahead = {
-        x: Math.min(Math.max(finger.x + speed.x * zoom * PROJECT_S, bounds.left + 1), bounds.right - 1),
-        y: Math.min(Math.max(finger.y + speed.y * zoom * PROJECT_S, bounds.top + 1), bounds.bottom - 1),
-      };
-      const state = targetAt(ahead, task);
-      if (state === null) return home();
-      aim(state, true);
+      const target = targetAt(throws ? projected() : pointer, task, covered);
+      if (target === null) return home();
+      aim(target, true);
       feel("drop");
-      const tab = document.elementFromPoint(ahead.x, ahead.y)?.closest(".tab");
-      const refused = tab ? into(tab, state) : land(state);
+      const refused = list.contains(target.element) ? land(target.state) : into(target.element, target.state);
       let failed = false;
       const fail = () => {
         if (failed || ending !== takeOver) return;
@@ -337,7 +382,7 @@ export function lift(row: Row, section: string, element: HTMLElement, from: Poin
         refused();
       };
       setTimeout(fail, LANDS_MS);
-      backend.taskMove(row.at, state).catch((error) => {
+      backend.taskMove(row.at, target.state).catch((error) => {
         fail();
         report(error);
       });

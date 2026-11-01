@@ -1,6 +1,7 @@
 import { createEffect, createSignal, For, on, onCleanup, type JSX } from "solid-js";
 import { back, screens, sheet, type Screen } from "./nav";
-import { afterFrame, draw, FADE, glide, POP, PUSH, reduced, type Look } from "./motion";
+import { FADE, reduced } from "@octopus/shared/motion.ts";
+import { afterFrame, draw, glide, POP, PUSH, type Look } from "./motion";
 import { ownsScreenEdge } from "./touch";
 import { releaseFocus } from "./viewport";
 

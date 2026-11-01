@@ -5,15 +5,15 @@ import { model, serverLabel } from "@octopus/shared/state.ts";
 import { keepInView } from "@octopus/shared/keepInView.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
-import { animateList } from "./flip";
-import { dropTarget, isAway, isLanding, isLifted, lift } from "./lift";
-import { animate, FADE, play, PROJECT_S, PUSH, reduced, type Running } from "./motion";
+import { animateList } from "@octopus/shared/flip.ts";
+import { dropTarget, isAway, isLanding, isLifted } from "@octopus/shared/lift.ts";
+import { animate, FADE, give, play, PROJECT_S, reduced, type Running } from "@octopus/shared/motion.ts";
+import { PUSH } from "./motion";
 import { back, openSheet, openTask, screen } from "./nav";
 import { Circle, Glyph, Gap, Id, Slot } from "./parts";
 import { pressed } from "./press";
 import { pullToRefresh } from "./pull";
-import { give } from "./scroll";
-import { refreshServers } from "./Tasks";
+import { liftOnPhone, refreshServers } from "./Tasks";
 import { slidingThumb } from "./thumb";
 import { owns } from "./touch";
 
@@ -36,7 +36,7 @@ function Card(props: { row: Row; section: string; column: Column }) {
       {...pressed(
         () => openTask(props.row.key, props.row.at),
         () => openSheet({ is: "task", key: props.row.key, open: null }),
-        (element, from) => lift(props.row, props.section, element, from),
+        liftOnPhone(props.row, props.section),
       )}
     >
       <Slot>
