@@ -90,6 +90,14 @@ Move a task to a state.
 - `--task <task>`: The task's id.
 - `--state pinned|temporary|completed|cancelled`: The state to move it to.
 
+## `octopus task set-parent`
+
+Nest a task under another task of its workspace, or make it a root task; it keeps its state and its subtasks.
+
+- `--server <server>`: The paired server's name.
+- `--task <task>`: The task's id.
+- `--parent <parent>`: The parent task's id; none for a root task.
+
 ## `octopus task rename`
 
 Rename a task; a worktree task's branch keeps its name.
@@ -119,6 +127,7 @@ Focus a task, starting its agent if it has none.
 
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
+- `--args <args>`: The args an agent this focus starts runs after its harness's argv and hooks, before its start or resume args, e.g. ["--model","opus"]; a running agent keeps the args it started with.
 
 ## `octopus task get`
 
@@ -262,12 +271,39 @@ Create a file of a task's checkout from stdin, byte for byte; fails conflict whe
 
 ## `octopus browser open`
 
-Show a page in one of a task's browser panels, on every client that renders the task.
+Show a page in one of a task's browser panels on every client that renders the task, loading it again when the panel already shows it.
 
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
-- `--url <url>`: The page, an http or https URL; one on localhost:<port> reaches that port on the server's machine.
-- `--panel <panel>`: `new` for a new browser panel, or an existing browser panel's id.
+- `--url <url>`: The page: an http or https URL, one on localhost:<port> reaching that port on the server's machine, or file:// and an absolute path on the server's machine.
+- `--panel <panel>`: `new` for a new browser panel, `background` for a new one no client selects or loads until it is chosen, or an existing browser panel's id.
+
+## `octopus browser report`
+
+Record the page a client's browser panel navigated to, which no other client loads until the panel reopens.
+
+- `--server <server>`: The paired server's name.
+- `--task <task>`: The task's id.
+- `--panel <panel>`: The browser panel's id.
+- `--url <url>`: The page the browser panel shows.
+- `--title <title>`: The page's title, empty when it has none.
+
+## `octopus browser close`
+
+Close one of a task's browser panels on every client.
+
+- `--server <server>`: The paired server's name.
+- `--task <task>`: The task's id.
+- `--panel <panel>`: The browser panel's id.
+
+## `octopus browser move`
+
+Move one of a task's browser panels to another place among them, on every client.
+
+- `--server <server>`: The paired server's name.
+- `--task <task>`: The task's id.
+- `--panel <panel>`: The browser panel's id.
+- `--to <to>`: The index the browser panel takes among the task's browser panels, the first at 0.
 
 ## `octopus pairing offer`
 

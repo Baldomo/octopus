@@ -46,7 +46,7 @@ async fn a_focused_task_runs_its_agent_terminal_end_to_end() {
 
     let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
     assert_eq!(task(&laptop, &id).await.agent, Agent::NotStarted);
-    laptop.call(&TaskFocus { task: id.clone() }).await.expect("task.focus");
+    laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("task.focus");
     let view = task(&laptop, &id).await;
     assert_eq!(view.agent, Agent::Running { status: AgentStatus::Idle });
     let agent = Stream::Pty(view.panels.first().expect("agent panel").id.clone());
@@ -102,7 +102,7 @@ async fn a_shell_panel_follows_the_agent_until_its_shell_exits_or_it_closes() {
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "echo", echo_agent("agent:up"), Hooks::None).await;
     let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
-    laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+    laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
 
     let shell = laptop.call(&TermOpen { task: id.clone(), directory: ".".into() }).await.expect("term.open").panel;
     let panels = task(&laptop, &id).await.panels;
@@ -210,13 +210,13 @@ async fn a_missing_harness_runs_nothing_and_reports_its_install_command() {
     laptop.call(&harness).await.expect("harness.set");
 
     let missing = create(&laptop, &workspace, Checkout::Root, "claude-code").await;
-    laptop.call(&TaskFocus { task: missing.clone() }).await.expect("focus");
+    laptop.call(&TaskFocus { task: missing.clone(), args: vec![] }).await.expect("focus");
     let view = task(&laptop, &missing).await;
     assert_eq!(view.agent, Agent::HarnessNotInstalled { install });
     assert!(view.panels.is_empty());
 
     let unknown = create(&laptop, &workspace, Checkout::Root, "aider").await;
-    laptop.call(&TaskFocus { task: unknown.clone() }).await.expect("focus");
+    laptop.call(&TaskFocus { task: unknown.clone(), args: vec![] }).await.expect("focus");
     assert_eq!(task(&laptop, &unknown).await.agent, Agent::HarnessUnknown);
     match laptop.call(&AgentReport { task: missing, status: AgentStatus::Working }).await {
         Err(CallError::Server(Error::Conflict { message })) => {
@@ -237,7 +237,7 @@ async fn concurrent_focuses_start_one_agent() {
     set_harness(&laptop, "echo", echo_agent(&format!("start >> {}", starts.display())), Hooks::None).await;
     let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
 
-    let focus = TaskFocus { task: id.clone() };
+    let focus = TaskFocus { task: id.clone(), args: vec![] };
     let (first, second) = tokio::join!(laptop.call(&focus), desk.call(&focus));
     first.expect("focus from laptop");
     second.expect("focus from desk");
@@ -254,7 +254,7 @@ async fn an_agent_outlives_a_restart_of_its_server_process() {
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "echo", echo_agent("agent:up"), Hooks::None).await;
     let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
-    laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+    laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
     laptop.call(&TermOpen { task: id.clone(), directory: ".".into() }).await.expect("term.open");
     let view = task(&laptop, &id).await;
     let agent = Stream::Pty(view.panels[0].id.clone());
@@ -284,13 +284,13 @@ async fn after_a_machine_restart_the_next_focus_starts_the_agent_again() {
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "echo", echo_agent("agent:up"), Hooks::None).await;
     let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
-    laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+    laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
 
     let after = start(dir.path(), "after.sock", "rebooted-host.sock").await;
     let laptop = connect(&after, "laptop").await;
     let forgotten = task(&laptop, &id).await;
     assert_eq!((forgotten.agent, forgotten.panels), (Agent::NotStarted, vec![]));
-    laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus after restart");
+    laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus after restart");
     assert_eq!(task(&laptop, &id).await.agent, Agent::Running { status: AgentStatus::Idle });
 }
 
@@ -314,7 +314,7 @@ async fn an_agent_owns_its_terminal_and_answers_for_its_own_privacy_permissions(
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "probe", vec!["perl".into(), "-e".into(), PROBE.into()], Hooks::None).await;
     let id = create(&laptop, &workspace, Checkout::Root, "probe").await;
-    laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+    laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
     let agent = Stream::Pty(task(&laptop, &id).await.panels[0].id.clone());
     let mut live = laptop.open_data_stream(&agent).await.expect("attach");
     let seen = read_until(&mut live, ":end").await;
@@ -346,7 +346,7 @@ async fn an_agent_that_cannot_start_fails_the_focus_with_the_reason() {
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "garbage", vec![garbage.to_string_lossy().into()], Hooks::None).await;
     let id = create(&laptop, &workspace, Checkout::Root, "garbage").await;
-    match laptop.call(&TaskFocus { task: id }).await {
+    match laptop.call(&TaskFocus { task: id, args: vec![] }).await {
         Err(CallError::Server(Error::Internal { message })) => {
             assert_eq!(message, format!("start {}: Exec format error (os error 8)", garbage.display()));
         }
@@ -362,7 +362,7 @@ async fn an_agent_that_ignores_sigterm_and_sighup_is_killed_after_the_grace() {
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "stubborn", echo_agent("trapped; trap '' TERM HUP; echo ignoring"), Hooks::None).await;
     let id = create(&laptop, &workspace, Checkout::Root, "stubborn").await;
-    laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+    laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
     let agent = Stream::Pty(task(&laptop, &id).await.panels[0].id.clone());
     read_until(&mut laptop.open_data_stream(&agent).await.expect("attach"), "ignoring").await;
     laptop.call(&TaskMove { task: id.clone(), state: TaskState::Completed }).await.expect("complete");
@@ -376,18 +376,15 @@ fn args_agent() -> Vec<String> {
     ["sh", "-c", "echo args: \"$@\"; exec cat", "sh"].map(String::from).to_vec()
 }
 
-async fn focus_prints(connection: &Connection, id: &TaskId, line: &str) {
-    connection.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+async fn focus_prints(connection: &Connection, id: &TaskId, args: &[&str], line: &str) {
+    let args = args.iter().map(ToString::to_string).collect();
+    connection.call(&TaskFocus { task: id.clone(), args }).await.expect("focus");
     let agent = Stream::Pty(task(connection, id).await.panels[0].id.clone());
     read_until(&mut connection.open_data_stream(&agent).await.expect("attach"), line).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn every_start_after_a_session_s_first_resumes_it() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let running = start(dir.path(), "server.sock", "host.sock").await;
-    let laptop = connect(&running, "laptop").await;
-    let workspace = workspace(&laptop, dir.path()).await;
+/// The `sessions` harness, whose agent prints the args after its argv.
+async fn set_sessions_harness(connection: &Connection) {
     let [start, resume] =
         [["--session-id", "{session}"], ["--resume", "{session}"]].map(|args| args.map(String::from).to_vec());
     let harness = HarnessSet {
@@ -398,25 +395,57 @@ async fn every_start_after_a_session_s_first_resumes_it() {
         install: "true".into(),
         hooks: Hooks::None,
     };
-    laptop.call(&harness).await.expect("harness.set");
+    connection.call(&harness).await.expect("harness.set");
+}
+
+fn interrupt(task: &TaskId) -> TermSend {
+    TermSend { task: task.clone(), panel: "agent".into(), text: "\u{3}".into(), enter: false, take_lock: true }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_focus_s_args_reach_the_agent_it_starts_and_no_running_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
+    let laptop = connect(&running, "laptop").await;
+    let desk = connect(&running, "desk").await;
+    let workspace = workspace(&laptop, dir.path()).await;
+    set_sessions_harness(&laptop).await;
+    let id = create(&laptop, &workspace, Checkout::Root, "sessions").await;
+
+    focus_prints(&laptop, &id, &["--model", "opus"], "args: --model opus --session-id ").await;
+    let started = task(&laptop, &id).await;
+    desk.call(&TaskFocus { task: id.clone(), args: vec!["--other".into()] }).await.expect("focus the running agent");
+    assert_eq!(task(&desk, &id).await.panels, started.panels, "the running agent keeps the args it started with");
+
+    laptop.call(&interrupt(&id)).await.expect("ctrl-c");
+    eventually("the interrupted agent ending", async || task(&laptop, &id).await.agent == Agent::NotStarted).await;
+    let session = started.session.expect("the first start names a session");
+    focus_prints(&desk, &id, &["--other"], &format!("args: --other --resume {}", session.0)).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_start_after_a_session_s_first_resumes_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
+    let laptop = connect(&running, "laptop").await;
+    let workspace = workspace(&laptop, dir.path()).await;
+    set_sessions_harness(&laptop).await;
 
     let id = create(&laptop, &workspace, Checkout::Root, "sessions").await;
-    laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+    laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
     let session = task(&laptop, &id).await.session.expect("the first start names a session");
-    focus_prints(&laptop, &id, &format!("args: --session-id {}", session.0)).await;
+    focus_prints(&laptop, &id, &[], &format!("args: --session-id {}", session.0)).await;
 
-    let ctrl_c =
-        TermSend { task: id.clone(), panel: "agent".into(), text: "\u{3}".into(), enter: false, take_lock: true };
-    laptop.call(&ctrl_c).await.expect("ctrl-c");
+    laptop.call(&interrupt(&id)).await.expect("ctrl-c");
     eventually("the interrupted agent ending", async || task(&laptop, &id).await.agent == Agent::NotStarted).await;
     let ended = task(&laptop, &id).await;
     assert!(!ended.panels[0].running, "the ended agent's panel stays, showing its scrollback");
-    focus_prints(&laptop, &id, &format!("args: --resume {}", session.0)).await;
+    focus_prints(&laptop, &id, &[], &format!("args: --resume {}", session.0)).await;
 
     laptop.call(&TaskMove { task: id.clone(), state: TaskState::Completed }).await.expect("complete");
     laptop.call(&TaskMove { task: id.clone(), state: TaskState::Pinned }).await.expect("reopen");
     assert_eq!(task(&laptop, &id).await.panels, vec![], "a reopened task's exited agent goes");
-    focus_prints(&laptop, &id, &format!("args: --resume {}", session.0)).await;
+    focus_prints(&laptop, &id, &[], &format!("args: --resume {}", session.0)).await;
 
     let empty = TaskSetSession { task: id.clone(), session: SessionId(String::new()) };
     assert!(matches!(laptop.call(&empty).await, Err(CallError::Server(Error::InvalidArgs { .. }))));
@@ -424,7 +453,7 @@ async fn every_start_after_a_session_s_first_resumes_it() {
     laptop.call(&set).await.expect("task.set_session");
     let pointed = task(&laptop, &id).await;
     assert_eq!(pointed.panels, vec![]);
-    focus_prints(&laptop, &id, "args: --resume elsewhere").await;
+    focus_prints(&laptop, &id, &[], "args: --resume elsewhere").await;
 
     let imported = TaskCreate {
         workspace,
@@ -436,7 +465,7 @@ async fn every_start_after_a_session_s_first_resumes_it() {
         session: Some(SessionId("demo-session".into())),
     };
     let imported = laptop.call(&imported).await.expect("task.create").task;
-    focus_prints(&laptop, &imported, "args: --resume demo-session").await;
+    focus_prints(&laptop, &imported, &[], "args: --resume demo-session").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -456,14 +485,14 @@ async fn a_launched_server_finds_and_runs_agents_in_the_login_environment() {
     set_harness(&laptop, "login", vec!["octopus-test-agent".into()], Hooks::None).await;
     let id = create(&laptop, &workspace, Checkout::Root, "login").await;
 
-    laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+    laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
     assert_eq!(task(&laptop, &id).await.agent, Agent::HarnessNotInstalled { install: "true".into() });
 
     write_login_profile(
         &home,
         &format!("export PATH=\"{}:$PATH\"\nexport OCTOPUS_TEST_LOGIN=profile\n", bin.display()),
     );
-    focus_prints(&laptop, &id, "login:profile").await;
+    focus_prints(&laptop, &id, &[], "login:profile").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -479,7 +508,7 @@ async fn the_server_stops_an_agent_idle_silent_and_unshown_for_the_reclaim_time(
     let mut tasks = Vec::new();
     for harness in ["agent", "agent", "agent", "detaching"] {
         let id = create(&laptop, &workspace, Checkout::Root, harness).await;
-        laptop.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+        laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
         tasks.push(id);
     }
     let [idle, waiting, shown, detached] = <[TaskId; 4]>::try_from(tasks).expect("four tasks");
@@ -496,6 +525,6 @@ async fn the_server_stops_an_agent_idle_silent_and_unshown_for_the_reclaim_time(
     for kept in [&waiting, &shown, &detached] {
         assert!(matches!(task(&laptop, kept).await.agent, Agent::Running { .. }));
     }
-    laptop.call(&TaskFocus { task: idle.clone() }).await.expect("focus");
+    laptop.call(&TaskFocus { task: idle.clone(), args: vec![] }).await.expect("focus");
     assert_eq!(task(&laptop, &idle).await.agent, Agent::Running { status: AgentStatus::Idle });
 }

@@ -4305,11 +4305,13 @@ name = "octopus-desktop"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "block2",
  "cpal",
  "gtk",
  "objc2",
  "objc2-app-kit",
  "objc2-core-foundation",
+ "objc2-foundation",
  "octopus-client",
  "octopus-proto",
  "octopus-shell",
@@ -4320,6 +4322,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tokio",
  "ts-rs",
+ "webkit2gtk",
 ]
 
 [[package]]
@@ -4392,10 +4395,13 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "cpal",
+ "getrandom 0.3.4",
  "octopus-client",
  "octopus-proto",
+ "percent-encoding",
  "serde",
  "serde_json",
+ "shell-words",
  "tauri",
  "tauri-plugin",
  "tokio",

@@ -1,14 +1,24 @@
 import { createResource, createSignal, For, Match, Show, Switch } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
-import { aboutCopy, APPEARANCES } from "@octopus/shared/ClientMenu.tsx";
+import { aboutCopy, APPEARANCES, NEXT_START } from "@octopus/shared/ClientMenu.tsx";
 import { VERSION, ZOOMS, type ShownOffer } from "@octopus/shared/generated.ts";
 import { clientStatus, clock, expiry, grouped, inviteCode, ticking } from "@octopus/shared/SidebarControls.tsx";
-import { me, report, serverView, servers, setAppearance, ui, zoom } from "@octopus/shared/state.ts";
+import {
+  harnesses,
+  me,
+  report,
+  serverView,
+  servers,
+  setAgentFlags,
+  setAppearance,
+  ui,
+  zoom,
+} from "@octopus/shared/state.ts";
 import { host, shortKey } from "./format";
 import { feel } from "./feel";
 import { Icon } from "./Icon";
 import { go, showInSheet } from "./nav";
-import { Chev, Gap, Gl, Id, Mi, Seg, Sep, ServerDot, Why } from "./parts";
+import { Chev, Field, Flab, Gap, Gl, Id, Mi, Note, Seg, Sep, ServerDot, Why } from "./parts";
 import { Rename } from "./Rename";
 import { Sheet, SheetHead } from "./Sheet";
 import { notify } from "./Toast";
@@ -27,7 +37,31 @@ const step = (to: "in" | "out") => {
   zoom(to);
 };
 
-/** The client menu: this phone's servers, then its appearance, zoom and version. */
+/** Return saves the flags typed, and a refusal shows under the field. */
+function AgentFlagsField(props: { harness: string }) {
+  const [draft, setDraft] = createSignal(ui.prefs.agent_flags[props.harness] ?? "");
+  const [problem, setProblem] = createSignal<string | null>(null);
+  const save = () =>
+    setAgentFlags(props.harness, draft()).then(
+      () => {
+        feel("success");
+        setProblem(null);
+      },
+      (error) => {
+        feel("error");
+        setProblem(String(error));
+      },
+    );
+  return (
+    <>
+      <Flab>{props.harness}</Flab>
+      <Field mono value={draft()} input={setDraft} placeholder="none" enter={save} />
+      <Show when={problem()}>{(shown) => <Note err>{shown()}</Note>}</Show>
+    </>
+  );
+}
+
+/** The client menu: this phone's servers, then its appearance, zoom, agent flags and version. */
 export function ClientMenu() {
   const { copied, copy: about } = aboutCopy();
   return (
@@ -77,6 +111,11 @@ export function ClientMenu() {
       >
         Zoom
       </Mi>
+      <Show when={harnesses().length > 0}>
+        <Gl>agent flags</Gl>
+        <For each={harnesses()}>{(harness) => <AgentFlagsField harness={harness} />}</For>
+        <Note>{NEXT_START}</Note>
+      </Show>
       <Sep />
       <Mi slot={<Icon name="info" />} end={<Why>{copied() ? "copied" : VERSION}</Why>} tap={about}>
         About octopus

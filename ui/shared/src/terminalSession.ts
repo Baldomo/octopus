@@ -5,6 +5,7 @@ import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { backend, Channel } from "./backend";
 import { type Panel, type TaskRef, TERM_HISTORY_LINES, type TermScreen } from "./generated";
 import { lockClaim } from "./lockClaim";
+import { sgrMouse } from "./mouseReports";
 import { act, me, report, serverView } from "./state";
 import { colors, px, type Scheme, scheme, token } from "./tokens";
 
@@ -72,6 +73,7 @@ export type TerminalSession = {
   xterm: Terminal;
   mine: () => boolean;
   shown: () => boolean;
+  sgrMouse: () => boolean;
   /** Writes `keys` to the terminal while this client streams it. */
   input: (keys: string) => void;
   /** Moves the lock here at the pane's size. */
@@ -100,6 +102,7 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
     scrollback: TERM_HISTORY_LINES,
     overviewRuler: { width: px("--scrollbar-w") },
   });
+  const sgr = sgrMouse(xterm.parser);
   /** The cells that fit the element the terminal opened in, beside the overview ruler along its right edge. */
   const pane = (): Cells | undefined => {
     const host = xterm.element?.parentElement;
@@ -129,6 +132,7 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
       if (!(piece instanceof ArrayBuffer)) {
         xterm.write(new Uint8Array(), () => {
           xterm.reset();
+          sgr.reset();
           xterm.resize(piece.cols, piece.rows);
         });
         return;
@@ -225,6 +229,7 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
     xterm,
     mine,
     shown,
+    sgrMouse: sgr.on,
     input: (keys) => {
       if (attachment !== null) act(backend.termInput(attachment, keys));
     },

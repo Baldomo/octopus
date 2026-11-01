@@ -14,8 +14,11 @@ anyhow = "1.0.104"
 cpal = "0.18.2"
 octopus-client.workspace = true
 octopus-proto.workspace = true
+getrandom = "0.3.4"
+percent-encoding = "2.3.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+shell-words = "1.1.1"
 tauri = { version = "2.12.5", features = ["devtools", "unstable"] }
 tokio = { version = "1.54.1", features = ["full"] }
 ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }

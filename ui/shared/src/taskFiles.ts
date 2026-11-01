@@ -1,6 +1,7 @@
 import { createStore, produce, type SetStoreFunction } from "solid-js/store";
 import { backend } from "./backend";
 import type { Entry, EntryKind, FilesChanged, TaskRef, TaskView } from "./generated";
+import { moveTo } from "./sectionOrder";
 import { report } from "./state";
 
 type Monaco = typeof import("./monaco");
@@ -245,6 +246,10 @@ export class TaskFiles {
         state.loaded[path] = true;
       }),
     );
+  }
+
+  moveTab(path: string, to: number) {
+    this.set("tabs", (tabs) => moveTo(tabs, path, to));
   }
 
   /** A dirty buffer outlives its tab, so reopening the file brings its edits back. */

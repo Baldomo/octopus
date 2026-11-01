@@ -201,12 +201,69 @@ body {
   flex-direction: column;
 }
 .navb {
+  all: unset;
+  color: var(--faint);
+  font-size: 13px;
+  width: 22px;
+  flex: none;
+  text-align: center;
   cursor: pointer;
+}
+.navb:hover {
+  color: var(--text);
+}
+.navb:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.navb:disabled:hover {
+  color: var(--faint);
+}
+.url {
+  cursor: text;
 }
 .page {
   flex: 1;
   min-height: 0;
   display: flex;
+}
+.page-status {
+  position: absolute;
+  height: 20px;
+  margin-top: -20px;
+  display: flex;
+  pointer-events: none;
+}
+.page-status span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 8px;
+  line-height: 19px;
+  font-size: var(--fs-micro);
+  color: var(--dim);
+  background: var(--raised);
+  border: 1px solid var(--line2);
+  border-width: 1px 1px 0 0;
+  border-top-right-radius: var(--r2);
+  visibility: hidden;
+}
+.page-status.on span {
+  visibility: visible;
+}
+.empty.failed {
+  place-content: center;
+  gap: var(--s3);
+}
+.empty.failed b {
+  color: var(--text);
+  font-weight: 500;
+}
+.empty.failed code {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  user-select: text;
 }
 
 .search input,

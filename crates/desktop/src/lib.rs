@@ -1,6 +1,7 @@
 mod browser;
 mod commands;
 mod layers;
+mod menu;
 pub mod types;
 
 use std::sync::Arc;
@@ -37,16 +38,22 @@ pub fn run(launch_problem: Option<String>) -> anyhow::Result<()> {
         .invoke_handler(tauri::generate_handler![
             commands::title_bar_double_click,
             commands::browser_open,
+            commands::browser_close,
+            commands::browser_move,
             commands::browser_load,
             commands::browser_show_page,
             commands::browser_go,
-            commands::browser_close,
+            commands::browser_find,
+            commands::browser_forget,
+            commands::app_menu,
             commands::file_outside,
+            commands::haptic_alignment,
         ])
         .setup(move |app| {
             octopus_shell::start(app.handle(), client, launch_problem);
+            menu::relay(app.handle());
             let ui = Arc::clone(app.state::<Arc<UiStore>>().inner());
-            app.manage(Browsers::new(Layers::open(app, ui)?));
+            app.manage(Browsers::new(app.handle().clone(), Layers::open(app, ui)?));
             Ok(())
         })
         .run(context())

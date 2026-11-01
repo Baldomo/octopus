@@ -21,7 +21,7 @@ async fn a_client_works_on_a_tasks_files_through_its_server() {
     let workspace = workspace(&laptop, &checkout).await;
     let task = create(&laptop, &workspace, Checkout::Root, "none").await;
     let mut pushes = laptop.pushes();
-    laptop.call(&TaskFocus { task: task.clone() }).await.expect("focus");
+    laptop.call(&TaskFocus { task: task.clone(), args: vec![] }).await.expect("focus");
 
     let write = FileWrite { task: task.clone(), path: "src/main.rs".into(), content: "fn main() {}\n".into() };
     assert_eq!(laptop.call(&write).await.expect("file.write").bytes, 13);

@@ -22,12 +22,15 @@ tokio = { version = "1.54.1", features = ["full"] }
 ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSEvent", "NSResponder", "NSTrackingArea", "NSView", "NSWindow"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSEvent", "NSHapticFeedback", "NSResponder", "NSTrackingArea", "NSView", "NSWindow"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"
+webkit2gtk = "2.0.2"
 
 [build-dependencies]
 tauri-build = { version = "2.7.4", features = [] }

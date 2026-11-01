@@ -1,7 +1,7 @@
 import { For } from "solid-js";
-import { commands, hint, type Command } from "./commands";
+import { commands, hints, type Command } from "./commands";
 
-const keyed = Object.values(commands).filter((command: Command) => command.key !== null);
+const keyed = Object.values(commands).filter((command: Command) => command.keys.length > 0);
 
 export function Shortcuts() {
   return (
@@ -16,7 +16,7 @@ export function Shortcuts() {
               <tr>
                 <td>{command.label}</td>
                 <td>
-                  <kbd>{hint(command)}</kbd>
+                  <kbd>{hints(command)}</kbd>
                 </td>
               </tr>
             )}

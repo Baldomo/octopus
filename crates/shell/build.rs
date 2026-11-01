@@ -18,6 +18,7 @@ const COMMANDS: &[&str] = &[
     "auto_color",
     "task_focus",
     "task_move",
+    "task_set_parent",
     "task_rename",
     "task_archive",
     "task_create",

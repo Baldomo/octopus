@@ -255,6 +255,15 @@ op!(
     }
 );
 op!(
+    /// Nest a task under another task of its workspace, or make it a root task; it keeps its state and its subtasks.
+    TaskSetParent = "task.set_parent" -> Revised {
+        /// The task's id.
+        task: TaskId,
+        /// The parent task's id.
+        parent: Option<TaskId>,
+    }
+);
+op!(
     /// Rename a task; a worktree task's branch keeps its name.
     TaskRename = "task.rename" -> Revised {
         /// The task's id.
@@ -275,6 +284,9 @@ op!(
     TaskFocus = "task.focus" -> Revised {
         /// The task's id.
         task: TaskId,
+        /// The args an agent this focus starts runs after its harness's argv and hooks, before its start or resume
+        /// args, e.g. ["--model","opus"]; a running agent keeps the args it started with.
+        args: Vec<String>,
     }
 );
 op!(
@@ -499,14 +511,48 @@ pub struct Shown {
 }
 
 op!(
-    /// Show a page in one of a task's browser panels, on every client that renders the task.
+    /// Show a page in one of a task's browser panels on every client that renders the task, loading it again when the
+    /// panel already shows it.
     BrowserOpen = "browser.open" -> Shown {
         /// The task's id.
         task: TaskId,
-        /// The page, an http or https URL; one on localhost:<port> reaches that port on the server's machine.
+        /// The page: an http or https URL, one on localhost:<port> reaching that port on the server's machine, or file:// and an absolute path on the server's machine.
         url: String,
-        /// `new` for a new browser panel, or an existing browser panel's id.
+        /// `new` for a new browser panel, `background` for a new one no client selects or loads until it is chosen, or an existing browser panel's id.
         panel: BrowserTarget,
+    }
+);
+op!(
+    /// Record the page a client's browser panel navigated to, which no other client loads until the panel reopens.
+    BrowserReport = "browser.report" -> Revised {
+        /// The task's id.
+        task: TaskId,
+        /// The browser panel's id.
+        panel: BrowserId,
+        /// The page the browser panel shows.
+        url: String,
+        /// The page's title, empty when it has none.
+        title: String,
+    }
+);
+op!(
+    /// Close one of a task's browser panels on every client.
+    BrowserClose = "browser.close" -> Revised {
+        /// The task's id.
+        task: TaskId,
+        /// The browser panel's id.
+        panel: BrowserId,
+    }
+);
+op!(
+    /// Move one of a task's browser panels to another place among them, on every client.
+    BrowserMove = "browser.move" -> Revised {
+        /// The task's id.
+        task: TaskId,
+        /// The browser panel's id.
+        panel: BrowserId,
+        /// The index the browser panel takes among the task's browser panels, the first at 0.
+        to: u16,
     }
 );
 
@@ -534,6 +580,7 @@ pub fn commands() -> Vec<Command> {
         command::<AgentReport>(),
         command::<TaskCreate>(),
         command::<TaskMove>(),
+        command::<TaskSetParent>(),
         command::<TaskRename>(),
         command::<TaskSetSession>(),
         command::<TaskArchive>(),
@@ -552,6 +599,9 @@ pub fn commands() -> Vec<Command> {
         command::<FileDelete>(),
         command::<FileSearch>(),
         command::<BrowserOpen>(),
+        command::<BrowserReport>(),
+        command::<BrowserClose>(),
+        command::<BrowserMove>(),
         command::<PairingOffer>(),
         command::<PairingList>(),
         command::<PairingForget>(),

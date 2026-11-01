@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use ts_rs::TS;
 
-use crate::client_menu::{Appearance, Zoom, ZoomStep};
+use crate::client_menu::{AgentFlags, Appearance, Zoom, ZoomStep};
 use crate::{emit, lock};
 
 pub const UI_EVENT: &str = "ui";
@@ -102,6 +102,8 @@ pub enum Modal {
 pub struct Prefs {
     pub pinned: bool,
     pub collapsed: Vec<String>,
+    /// The sections by name in the order the user dragged them to.
+    pub section_order: Vec<String>,
     pub surface: Surface,
     pub split: Split,
     pub view: View,
@@ -111,6 +113,8 @@ pub struct Prefs {
     pub board: Option<String>,
     pub appearance: Appearance,
     pub zoom: Zoom,
+    /// The flags each harness's agents start with when this client starts them, by harness id.
+    pub agent_flags: BTreeMap<String, AgentFlags>,
 }
 
 /// A file the palette opens in Files.
@@ -165,6 +169,9 @@ pub enum UiAct {
     ToggleCollapsed {
         section: String,
     },
+    OrderSections {
+        sections: Vec<String>,
+    },
     ShowSidebar {
         shown: bool,
     },
@@ -179,6 +186,11 @@ pub enum UiAct {
     },
     Zoom {
         step: ZoomStep,
+    },
+    /// Empty flags drop the harness's entry.
+    SetAgentFlags {
+        harness: String,
+        flags: AgentFlags,
     },
     ShowModal {
         modal: Option<Modal>,
@@ -267,12 +279,15 @@ impl State {
                 Some(at) => drop(ui.prefs.collapsed.remove(at)),
                 None => ui.prefs.collapsed.push(section),
             },
+            UiAct::OrderSections { sections } => ui.prefs.section_order = sections,
             UiAct::ShowSidebar { shown } => ui.sidebar = shown,
             UiAct::ToggleSidebar => ui.sidebar = !ui.sidebar,
             UiAct::ShowClientMenu { shown } => ui.show_client_menu(shown),
             UiAct::ToggleClientMenu => ui.show_client_menu(!ui.client_menu),
             UiAct::SetAppearance { appearance } => ui.prefs.appearance = appearance,
             UiAct::Zoom { step } => ui.prefs.zoom = ui.prefs.zoom.step(step),
+            UiAct::SetAgentFlags { harness, flags } if flags.is_empty() => drop(ui.prefs.agent_flags.remove(&harness)),
+            UiAct::SetAgentFlags { harness, flags } => drop(ui.prefs.agent_flags.insert(harness, flags)),
             UiAct::ShowModal { modal } => ui.show_modal(modal),
             UiAct::Float { surface, at, modal } => drop(out.insert(surface, Out { at, modal })),
             UiAct::Sink { surface } => drop(out.remove(&surface)),
@@ -388,6 +403,11 @@ impl UiStore {
         lock(&self.state).native()
     }
 
+    /// The args this client starts an agent of `harness` with.
+    pub fn agent_args(&self, harness: &str) -> Vec<String> {
+        lock(&self.state).ui.prefs.agent_flags.get(harness).map(AgentFlags::args).unwrap_or_default()
+    }
+
     pub fn follow(&self, follower: impl Fn(&Native, &Native) -> Result<(), String> + Send + Sync + 'static) {
         assert!(self.follower.set(Box::new(follower)).is_ok(), "one follower watches the ui");
     }
@@ -462,6 +482,11 @@ mod tests {
         assert_eq!(
             (prefs.appearance, prefs.zoom, prefs.split),
             (Appearance::System, Zoom::default(), Split::default())
+        );
+        assert!(prefs.section_order.is_empty());
+        assert_eq!(
+            parse_prefs(r#"{"section_order":["willow","acme"]}"#).expect("parses").section_order,
+            ["willow", "acme"]
         );
         assert!(parse_prefs(r#"{"pinned":true,"retired":1}"#).is_err());
         assert!(parse_prefs(r#"{"split":1.5}"#).is_err());

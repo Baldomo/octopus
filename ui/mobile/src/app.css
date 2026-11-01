@@ -236,10 +236,6 @@ body {
   color: var(--surface);
 }
 
-.sec.void::before {
-  display: none;
-}
-
 .qr {
   margin: 0 var(--rail);
   height: 264px;
@@ -650,10 +646,10 @@ body {
 }
 
 /*
- * A lifted task: its ghost stands in for its row or card, its content on the row's rails over the open row's tint
- * shape (8 before its glyph slot to 8 past the right rail) on the screen's surface, and rises from it by a scale and
- * a shadow. Its rows give up their place while it heads to another state, whose group fills behind its rows, and a
- * state tab rings.
+ * A lifted task or section header: its ghost stands in for its row, card or header, its content on the row's rails
+ * over the open row's tint shape (8 before its glyph slot to 8 past the right rail) on the screen's surface, and rises
+ * from it by a scale and a shadow. A task's rows give up their place while it heads somewhere new, whose group fills
+ * behind its rows, a state tab rings, and a row it would nest under rings in its press tint.
  */
 .lifting,
 .landing {
@@ -704,6 +700,10 @@ body {
 
 .row.ghost::before {
   left: calc(var(--rail) + var(--step) * (var(--d, 0) + 1) - var(--g2));
+}
+
+.sech.ghost .car {
+  transform: rotate(-90deg);
 }
 
 .row.ghost.open::before {
@@ -808,6 +808,12 @@ body {
 
 :is(.row, .card)[data-pressed]::after {
   opacity: 1;
+  transition: none;
+}
+
+:is(.row, .card).nest::after {
+  opacity: 1;
+  box-shadow: inset 0 0 0 1.5px var(--text);
   transition: none;
 }
 

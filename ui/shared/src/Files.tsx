@@ -1,7 +1,8 @@
 import { createEffect, createMemo, For, lazy, on, Show } from "solid-js";
-import { keepInView } from "./keepInView";
 import { commands, hint, mac } from "./commands";
 import { FileTree, type Outside } from "./FileTree";
+import { FolderTabs } from "./FolderTabs";
+import type { LiftOnDrag } from "./lift";
 import { MenuHost } from "./Menu";
 import { Toast } from "./SidebarControls";
 import { filesOf, loadMonaco, nameOf, renderable, tabHints, type TaskFiles } from "./taskFiles";
@@ -11,42 +12,29 @@ type Editor = import("monaco-editor").editor.IStandaloneCodeEditor;
 type Shown = { files: TaskFiles; path: string } | undefined;
 
 /** A tab names its file, and the fewest trailing directories that tell it from another open tab of the same name. */
-function EditorTabs(props: { files: TaskFiles; visible: boolean }) {
-  let bar!: HTMLDivElement;
-  const where = createMemo(() => tabHints(props.files.state.tabs));
-  const scrollSideways = (event: WheelEvent) => {
-    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-    bar.scrollLeft += event.deltaY;
-    event.preventDefault();
-  };
+function EditorTabs(props: { files: TaskFiles; visible: boolean; drag: LiftOnDrag }) {
+  const tabs = createMemo(() => {
+    const { tabs, dirty } = props.files.state;
+    const where = tabHints(tabs);
+    return tabs.map((path) => ({
+      key: path,
+      name: nameOf(path),
+      where: where[path],
+      title: path,
+      loading: false,
+      dirty: dirty[path] === true,
+    }));
+  });
   return (
-    <div class="etabs" ref={bar} onWheel={scrollSideways}>
-      <For each={props.files.state.tabs}>
-        {(path) => {
-          const on = () => props.files.state.active === path;
-          const dirty = () => props.files.state.dirty[path] === true;
-          return (
-            <span
-              ref={keepInView(() => props.visible && on())}
-              classList={{ on: on(), mod: dirty() }}
-              title={path}
-              onClick={() => act(props.files.open(path))}
-              onAuxClick={(event) => event.button === 1 && props.files.close(path)}
-            >
-              {nameOf(path)}
-              <Show when={where()[path]}>{(hint) => <span class="where">{hint()}</span>}</Show>
-              <span
-                class="close"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  props.files.close(path);
-                }}
-              />
-            </span>
-          );
-        }}
-      </For>
-    </div>
+    <FolderTabs
+      tabs={tabs()}
+      selected={props.files.state.active}
+      visible={props.visible}
+      drag={props.drag}
+      choose={(path) => act(props.files.open(path))}
+      close={(path) => props.files.close(path)}
+      move={async (path, to) => props.files.moveTab(path, to)}
+    />
   );
 }
 
@@ -113,7 +101,7 @@ function FileHead(props: { files: TaskFiles; path: string }) {
   );
 }
 
-export function Files(props: { visible: boolean; outside?: Outside }) {
+export function Files(props: { visible: boolean; drag: LiftOnDrag; outside?: Outside }) {
   let host!: HTMLDivElement;
   let editor: Editor | undefined;
   let showing: Shown;
@@ -173,8 +161,12 @@ export function Files(props: { visible: boolean; outside?: Outside }) {
         {(taskFiles) => <FileTree files={taskFiles} task={openView()!} outside={props.outside} />}
       </Show>
       <div class="editor">
-        <Show when={files()} fallback={<div class="etabs" />}>
-          {(taskFiles) => <EditorTabs files={taskFiles()} visible={props.visible} />}
+        <Show when={files()}>
+          {(taskFiles) => (
+            <Show when={taskFiles().state.tabs.length > 0}>
+              <EditorTabs files={taskFiles()} visible={props.visible} drag={props.drag} />
+            </Show>
+          )}
         </Show>
         <Show when={files()}>
           {(taskFiles) => (

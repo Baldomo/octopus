@@ -262,6 +262,11 @@ impl Layers {
         })
     }
 
+    /// The rect of the page on screen, in the UI's CSS pixels.
+    pub fn page_bounds(&self) -> Option<Bounds> {
+        lock(&self.page).as_ref().map(|(_, bounds)| *bounds)
+    }
+
     pub fn close_page(&self, closed: &Webview) -> tauri::Result<()> {
         lock(&self.page).take_if(|(shown, _)| shown.label() == closed.label());
         closed.close()

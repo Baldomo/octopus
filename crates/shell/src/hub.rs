@@ -387,6 +387,13 @@ impl Hub {
         Ok(())
     }
 
+    pub fn harness_of(&self, at: &TaskRef) -> Result<String, String> {
+        let state = lock(&self.state);
+        let task = state.caches.get(&at.server).and_then(|cache| cache.tasks.get(&at.task));
+        task.map(|task| task.harness.clone())
+            .ok_or_else(|| format!("{} has no task {}", state.label(&at.server), at.task))
+    }
+
     pub async fn call<O: Op>(&self, server: &str, op: &O) -> Result<O::Ok, String> {
         self.connection(server)?.call(op).await.map_err(|error| self.failure(server, error))
     }

@@ -1,12 +1,15 @@
 import { createEffect, createSignal, on, type JSX } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import { report, resetSplit, ui } from "@octopus/shared/state.ts";
+import { desktop } from "./backend";
+import { holds, MIDDLE } from "./detent";
 
 /** The Task view: one surface left of a divider the pointer drags, the terminal stack right of it. */
 export function TaskSplit(props: { shown: boolean; surface: JSX.Element; terminals: JSX.Element }) {
   let split!: HTMLDivElement;
   let divider!: HTMLDivElement;
   const [held, setHeld] = createSignal(false);
+  const [centered, setCentered] = createSignal(false);
   /** The share the pointer drags to, shown until the app's state holds it. */
   const [dragged, setDragged] = createSignal<number | null>(null);
   createEffect(
@@ -17,16 +20,21 @@ export function TaskSplit(props: { shown: boolean; surface: JSX.Element; termina
     ),
   );
 
-  /** Where the surface's column starts and how wide both columns are together. */
+  /** Where the surface's column starts, both columns' width, and whether the minimums leave the middle open. */
   const columns = () => {
     const style = getComputedStyle(split);
-    const padding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-    const left = split.getBoundingClientRect().left + parseFloat(style.paddingLeft);
-    return { left, width: split.clientWidth - padding - divider.offsetWidth };
+    const px = (property: string) => parseFloat(style.getPropertyValue(property));
+    const left = split.getBoundingClientRect().left + px("padding-left");
+    const width = split.clientWidth - px("padding-left") - px("padding-right") - divider.offsetWidth;
+    return { left, width, middleOpen: width / 2 >= Math.max(px("--surface-min"), px("--terminals-min")) };
   };
-  const shareAt = (x: number) => {
-    const { left, width } = columns();
-    return Math.min(1, Math.max(0, (x - left - divider.offsetWidth / 2) / width));
+  const drag = (x: number) => {
+    const { left, width, middleOpen } = columns();
+    const share = Math.min(1, Math.max(0, (x - left - divider.offsetWidth / 2) / width));
+    const catches = middleOpen && holds((share - MIDDLE) * width, centered());
+    if (catches && !centered()) desktop.hapticAlignment().catch(report);
+    setCentered(catches);
+    setDragged(catches ? MIDDLE : share);
   };
   /** The minimums can hold the divider short of the pointer, so the drag keeps the share it shows. */
   const shown = () => {
@@ -36,7 +44,7 @@ export function TaskSplit(props: { shown: boolean; surface: JSX.Element; termina
   const release = () => {
     setHeld(false);
     if (dragged() === null) return;
-    const share = shown();
+    const share = centered() ? MIDDLE : shown();
     setDragged(share);
     backend.uiAct({ do: "set_split", split: share }).catch((error) => {
       setDragged(null);
@@ -55,12 +63,14 @@ export function TaskSplit(props: { shown: boolean; surface: JSX.Element; termina
       <div
         ref={divider}
         class="splitter"
+        classList={{ centered: centered() }}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
           divider.setPointerCapture(event.pointerId);
+          setCentered(columns().middleOpen && (dragged() ?? ui.prefs.split) === MIDDLE);
           setHeld(true);
         }}
-        onPointerMove={(event) => held() && setDragged(shareAt(event.clientX))}
+        onPointerMove={(event) => held() && drag(event.clientX)}
         onLostPointerCapture={release}
         onDblClick={resetSplit}
       />

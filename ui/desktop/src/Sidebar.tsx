@@ -4,8 +4,21 @@ import type { Column, Section } from "@octopus/shared/generated.ts";
 import { Glyph } from "@octopus/shared/Glyph.tsx";
 import { dropHint } from "@octopus/shared/drop.ts";
 import { animateList } from "@octopus/shared/flip.ts";
-import { dropTarget, isAway, isLanding, isLifted, lifting, liftsIn } from "@octopus/shared/lift.ts";
-import { liftOnDrag, type Within } from "./lift";
+import {
+  dropTarget,
+  isAway,
+  isLanding,
+  isLifted,
+  isNesting,
+  isSectionFolded,
+  isSectionLifted,
+  lift,
+  lifting,
+  liftSection,
+  liftsIn,
+  type Within,
+} from "@octopus/shared/lift.ts";
+import { liftOnDrag } from "./lift";
 import { GroupHead } from "./Group";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { commands, hint } from "@octopus/shared/commands.ts";
@@ -24,8 +37,8 @@ import {
 } from "@octopus/shared/SidebarControls.tsx";
 import {
   isOpen,
-  model,
   openTask,
+  sections,
   servers,
   serverLabel,
   serverView,
@@ -71,6 +84,7 @@ function Group(props: { section: string; column: Column }) {
                   lifting: isLifted(row.key),
                   away: isAway(row.key),
                   landing: isLanding(row.key),
+                  nest: isNesting(row.key),
                   "menu-open": isMenuOpen(id),
                 }}
                 data-key={row.key}
@@ -79,7 +93,7 @@ function Group(props: { section: string; column: Column }) {
                 onClick={() => openTask(row.key)}
                 onContextMenu={onRightClick(id, () => element, menu)}
                 onKeyDown={(event) => event.key === "F2" && startRename("task", row.key)}
-                {...liftOnDrag(row, props.section, IN_SIDEBAR)}
+                {...liftOnDrag(IN_SIDEBAR, lift(row, props.section))}
               >
                 <Glyph glyph={row.glyph} />
                 <Show
@@ -114,15 +128,21 @@ function SectionGroups(props: { section: Section }) {
   const name = () => props.section.name;
   const id = () => `section:${name()}`;
   const menu = () => <SectionMenu name={name()} />;
-  const collapsed = () => ui.prefs.collapsed.includes(name());
+  const collapsed = () => ui.prefs.collapsed.includes(name()) || isSectionFolded(name());
   return (
-    <div class="ws" classList={{ closed: collapsed() }} style={{ "--ws": swatchColor(props.section.swatch) }}>
+    <div
+      class="ws"
+      classList={{ closed: collapsed() }}
+      data-section={name()}
+      style={{ "--ws": swatchColor(props.section.swatch) }}
+    >
       <div
         ref={head}
         class="wsh"
-        classList={{ "menu-open": isMenuOpen(id()) }}
+        classList={{ "menu-open": isMenuOpen(id()), lifting: isSectionLifted(name()) }}
         onClick={() => toggleCollapsed(name())}
         onContextMenu={(event) => onRightClick(id(), () => head, menu)(event)}
+        {...liftOnDrag(IN_SIDEBAR, liftSection(name()))}
       >
         <span class="car">▼</span>
         <Show
@@ -168,6 +188,7 @@ function SectionGroups(props: { section: Section }) {
         </span>
       </div>
       <div class="wsb">
+        <div class="thread" />
         <For each={props.section.groups}>{(column) => <Group section={name()} column={column} />}</For>
         <Show when={props.section.live === 0}>
           <div class="empty-state">No live tasks.</div>
@@ -269,8 +290,8 @@ export function Sidebar(props: { floats: (aside: HTMLElement, column: HTMLElemen
             +
           </button>
         </div>
-        <div class="groups" ref={animateList(ITEMS)}>
-          <For each={model.lists.sections}>{(section) => <SectionGroups section={section} />}</For>
+        <div class="groups" ref={animateList(ITEMS, { stretch: ".thread" })}>
+          <For each={sections()}>{(section) => <SectionGroups section={section} />}</For>
           <AddWorkspace />
         </div>
         <MenuHost />

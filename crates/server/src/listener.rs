@@ -347,6 +347,7 @@ async fn open(server: &Arc<Server>, name: &str, client: &str) -> Result<Opened, 
             Ok(Opened::Mic(terminal))
         }
         Stream::Tunnel(port) => Ok(Opened::Tunnel(crate::browser::dial(port).await?)),
+        Stream::Page { root, path } => Ok(Opened::File(crate::browser::read_page(&root, &path).await?)),
     }
 }
 

@@ -1,0 +1,6 @@
+{
+  "identifier": "address",
+  "description": "The base layer takes the keyboard from a browser page for the address bar.",
+  "webviews": ["main"],
+  "permissions": ["core:webview:allow-set-webview-focus"]
+}

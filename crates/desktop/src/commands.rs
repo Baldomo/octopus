@@ -1,7 +1,7 @@
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-use octopus_proto::ops::BrowserOpen;
+use octopus_proto::ops::{BrowserClose, BrowserMove, BrowserOpen};
 use octopus_proto::types::{BrowserId, BrowserTarget};
 use octopus_shell::hub::Hub;
 use octopus_shell::task_lists::TaskRef;
@@ -10,6 +10,7 @@ use tauri::{AppHandle, State};
 use ts_rs::TS;
 
 use crate::browser::{Browsers, Go, OnScreen};
+use crate::menu::MenuGroup;
 
 type Hubbed<'a> = State<'a, Arc<Hub>>;
 type Browsing<'a> = State<'a, Browsers>;
@@ -26,7 +27,19 @@ pub async fn browser_open(
     Ok(hub.call(&at.server, &BrowserOpen { task: at.task, url, panel }).await?.panel)
 }
 
-/// Renders the panel's server `url` on this client; resolves to the port it reaches through a tunnel, if any.
+/// Removes a browser panel of the task on its server, which every client then stops rendering.
+#[tauri::command]
+pub async fn browser_close(hub: Hubbed<'_>, at: TaskRef, panel: BrowserId) -> Result<(), String> {
+    hub.call(&at.server, &BrowserClose { task: at.task, panel }).await.map(drop)
+}
+
+/// Moves a browser panel of the task on its server to index `to` among the task's panels, on every client.
+#[tauri::command]
+pub async fn browser_move(hub: Hubbed<'_>, at: TaskRef, panel: BrowserId, to: u16) -> Result<(), String> {
+    hub.call(&at.server, &BrowserMove { task: at.task, panel, to }).await.map(drop)
+}
+
+/// Loads the panel's `url` on this client unless its webview already loaded this `load` of the panel.
 #[tauri::command]
 pub async fn browser_load(
     app: AppHandle,
@@ -35,8 +48,9 @@ pub async fn browser_load(
     at: TaskRef,
     panel: BrowserId,
     url: String,
-) -> Result<Option<u16>, String> {
-    browsers.load(&app, &hub, &at, &panel, &url).await
+    load: u64,
+) -> Result<(), String> {
+    browsers.load(&app, &hub, &at, &panel, &url, load).await
 }
 
 #[tauri::command]
@@ -49,10 +63,27 @@ pub async fn browser_go(browsers: Browsing<'_>, at: TaskRef, panel: BrowserId, g
     browsers.go(&at, &panel, go)
 }
 
+#[tauri::command]
+pub async fn browser_find(
+    browsers: Browsing<'_>,
+    at: TaskRef,
+    panel: BrowserId,
+    text: String,
+    backwards: bool,
+) -> Result<(), String> {
+    browsers.find(&at, &panel, text, backwards)
+}
+
+/// Lists the UI's commands in the macOS menu bar.
+#[tauri::command]
+pub fn app_menu(app: AppHandle, groups: Vec<MenuGroup>) -> Result<(), String> {
+    crate::menu::set(&app, &groups).map_err(|error| error.to_string())
+}
+
 /// Closes the panel's webview on this client; the panel stays on its server.
 #[tauri::command]
-pub async fn browser_close(browsers: Browsing<'_>, at: TaskRef, panel: BrowserId) -> Result<(), String> {
-    browsers.close(&at, &panel).await
+pub async fn browser_forget(browsers: Browsing<'_>, at: TaskRef, panel: BrowserId) -> Result<(), String> {
+    browsers.forget(&at, &panel).await
 }
 
 /// What this machine does with an entry of a task whose server runs here.
@@ -107,4 +138,20 @@ pub fn title_bar_double_click(window: tauri::Window) -> Result<(), String> {
         _ => window.maximize(),
     };
     done.map_err(|error| error.to_string())
+}
+
+/// Taps the trackpad the way macOS marks a dragged item lining up; elsewhere does nothing.
+#[tauri::command]
+pub fn haptic_alignment() {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{
+            NSHapticFeedbackManager, NSHapticFeedbackPattern, NSHapticFeedbackPerformanceTime,
+            NSHapticFeedbackPerformer,
+        };
+        NSHapticFeedbackManager::defaultPerformer().performFeedbackPattern_performanceTime(
+            NSHapticFeedbackPattern::Alignment,
+            NSHapticFeedbackPerformanceTime::Now,
+        );
+    }
 }

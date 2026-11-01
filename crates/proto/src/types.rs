@@ -43,20 +43,31 @@ impl Arg for TaskId {
     }
 }
 
-/// The browser panel `browser.open` shows a page in: `new`, or an existing panel's id.
+impl Arg for BrowserId {
+    fn shape() -> Shape {
+        Shape::Text
+    }
+}
+
+/// The browser panel `browser.open` shows a page in: `new`, `background`, or an existing panel's id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserTarget {
     New,
+    /// A new browser panel that no client selects or loads until it is chosen.
+    Background,
     Panel(BrowserId),
 }
 
 /// How `browser.open` names a browser panel it is to add.
 pub const NEW_BROWSER_PANEL: &str = "new";
+/// How `browser.open` names a browser panel it is to add behind the selected one.
+pub const BACKGROUND_BROWSER_PANEL: &str = "background";
 
 impl Serialize for BrowserTarget {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
             Self::New => serializer.serialize_str(NEW_BROWSER_PANEL),
+            Self::Background => serializer.serialize_str(BACKGROUND_BROWSER_PANEL),
             Self::Panel(id) => id.serialize(serializer),
         }
     }
@@ -65,7 +76,11 @@ impl Serialize for BrowserTarget {
 impl<'de> Deserialize<'de> for BrowserTarget {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
-        Ok(if text == NEW_BROWSER_PANEL { Self::New } else { Self::Panel(BrowserId(text)) })
+        Ok(match text.as_str() {
+            NEW_BROWSER_PANEL => Self::New,
+            BACKGROUND_BROWSER_PANEL => Self::Background,
+            _ => Self::Panel(BrowserId(text)),
+        })
     }
 }
 
@@ -292,12 +307,14 @@ impl Panel {
     }
 }
 
-/// A page a browser panel may show: every client loads it in a webview, so only http and https.
+/// A page a browser panel may show: a web page, or a file at an absolute path on the server's machine.
 pub fn web_page(url: &str) -> Result<url::Url, String> {
     let parsed = url::Url::parse(url).map_err(|error| format!("{url}: {error}"))?;
     match parsed.scheme() {
         "http" | "https" => Ok(parsed),
-        scheme => Err(format!("a browser panel shows http and https pages, not {scheme}:")),
+        "file" if parsed.host().is_none() => Ok(parsed),
+        "file" => Err(format!("{url}: a file page names a path on the server's machine, with no host")),
+        scheme => Err(format!("a browser panel shows http, https and file pages, not {scheme}:")),
     }
 }
 
@@ -306,7 +323,12 @@ pub fn web_page(url: &str) -> Result<url::Url, String> {
 #[serde(deny_unknown_fields)]
 pub struct BrowserPanel {
     pub panel: BrowserId,
+    /// The page the panel last showed on any client.
     pub url: String,
+    /// That page's title, empty until a client reports one.
+    pub title: String,
+    /// How many times `browser.open` has shown a page in the panel; each client loads `url` whenever it moves.
+    pub load: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -391,6 +413,12 @@ pub enum Stream {
     },
     /// A TCP connection to a port on the server's machine.
     Tunnel(u16),
+    /// The bytes of a file of a browser panel's file page: `path`, relative to the page's `root` directory, an
+    /// absolute path on the server's machine, and never leading out of it.
+    Page {
+        root: String,
+        path: String,
+    },
     /// The lock holder's microphone, as `MIC_FORMAT`, into the terminal's virtual microphone.
     Mic(PtyId),
 }
@@ -418,6 +446,7 @@ impl Stream {
             Self::File { task, path } => format!("file:{task}/{path}"),
             Self::Upload { task, bytes, path } => format!("upload:{task}/{bytes}/{path}"),
             Self::Tunnel(port) => format!("tunnel:{port}"),
+            Self::Page { root, path } => format!("page:{root}\0{path}"),
             Self::Mic(pty) => format!("mic:{pty}"),
         }
     }
@@ -439,6 +468,10 @@ impl Stream {
                 })
             }
             ("tunnel", port) => Some(Self::Tunnel(port.parse().ok()?)),
+            ("page", rest) => {
+                let (root, path) = rest.split_once('\0')?;
+                Some(Self::Page { root: root.to_string(), path: path.to_string() })
+            }
             ("mic", pty) => Some(Self::Mic(PtyId(pty.to_string()))),
             _ => None,
         }

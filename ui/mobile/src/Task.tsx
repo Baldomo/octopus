@@ -4,6 +4,7 @@ import { backend } from "@octopus/shared/backend.ts";
 import { AGENT_PANEL, type Panel, type PtyId, type TaskRef, type TaskView } from "@octopus/shared/generated.ts";
 import { ago, clock, ticking } from "@octopus/shared/SidebarControls.tsx";
 import { act, me, model, report, scale, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
+import { clickReport, type ScreenCell, wheelReport } from "@octopus/shared/mouseReports.ts";
 import { cellSize, type Size, terminalSession } from "@octopus/shared/terminalSession.ts";
 import { colors, scheme } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
@@ -14,11 +15,11 @@ import { onPainted } from "./motion";
 import { back, micDenied, openSheet } from "./nav";
 import { Circle, Gap, Glyph, Id, Para, sectionColor, ServerDot, Slot } from "./parts";
 import { phone } from "./phone";
-import type { Point } from "./press";
+import { repeats, type Point } from "./press";
 import { type Reach, reachOf } from "./reach";
 import { type Scroll, scroller } from "./scroll";
 import { TERMINAL_FONT } from "./symbols";
-import { termSelection } from "./termSelect";
+import { type Cell, charAt, termSelection, wrappedLine } from "./termSelect";
 import { slidingThumb } from "./thumb";
 import { notify } from "./Toast";
 import { COMMIT_PX, owns, type Gesture } from "./touch";
@@ -40,6 +41,10 @@ const FONT_PX = 13;
 const ROW_PX = 20;
 /** How near a line boundary, in lines, the terminal counts as on it, so float error never rests it a line off. */
 const ON_LINE = 1e-6;
+/** A drag on a program's own scroll starts this far from either end of its endless axis, further than a throw goes. */
+const ENDLESS_PX = 1e6;
+/** A program's own scroll that sent a row this recently is still moving, so a touch on it stops it rather than taps. */
+const TURNING_MS = 100;
 
 /** A letter or one of `@[\]^_` as its control character; anything else as itself. */
 const control = (char: string) =>
@@ -191,16 +196,25 @@ function PhoneTerm(props: {
    * until it has once been focused, so it opens drawn focused, then blurred.
    */
   const drawFocused = (focused: boolean) => xterm.textarea?.dispatchEvent(new FocusEvent(focused ? "focus" : "blur"));
-  /** A tap on the cursor's line moves the cursor to the tapped cell, or to the end of the line's text past it. */
-  const moveCursorTo = (point: Point) => {
+  const tracksMouse = () => xterm.modes.mouseTrackingMode !== "none";
+  const onScreen = (cell: Cell): ScreenCell => ({ col: cell.col, row: cell.row - xterm.buffer.active.viewportY });
+  /**
+   * A tap places the cursor: a program tracking the mouse hears a left click at the tapped cell, and on the normal
+   * screen a tap on the cursor's line steps the cursor there by ← or →, stopping at the end of the line's text.
+   */
+  const placeCursor = (point: Point) => {
+    const tapped = selection.cellAt(point, false);
     const buffer = xterm.buffer.active;
-    const cell = selection.cellAt(point);
-    if (cell?.row !== buffer.baseY + buffer.cursorY) return;
-    const line = buffer.getLine(cell.row);
-    let textEnd = line?.length ?? 0;
-    while (textEnd > 0 && !line?.getCell(textEnd - 1)?.getChars()) textEnd--;
-    const col = Math.min(cell.col, Math.max(buffer.cursorX, textEnd));
-    if (col !== buffer.cursorX) write(arrows(col - buffer.cursorX, "D", "C"));
+    if (tapped === null) return;
+    if (tracksMouse()) return write(clickReport(onScreen(tapped), session.sgrMouse()));
+    if (buffer.type !== "normal") return;
+    const cursorCell = { col: buffer.cursorX, row: buffer.baseY + buffer.cursorY };
+    const line = wrappedLine(xterm, cursorCell.row);
+    if (!line.some((char) => char.cell.row === tapped.row)) return;
+    const cursor = charAt(line, cursorCell);
+    const textEnd = line.findLastIndex((char) => char.text !== " ") + 1;
+    const steps = Math.min(charAt(line, tapped), Math.max(cursor, textEnd)) - cursor;
+    if (steps !== 0) write(arrows(steps, "D", "C"));
   };
 
   /**
@@ -231,9 +245,46 @@ function PhoneTerm(props: {
     rest: (at) => at,
     apply: (x) => setPan({ x, y: pan().y }),
   });
+  /**
+   * A program on the alternate screen or tracking the mouse scrolls itself: it hears a wheel turn at the touch's cell
+   * while it tracks the mouse, else ↑ or ↓, for each row a drag or its throw travels.
+   */
+  const scrollsItself = () => mine() && (tracksMouse() || xterm.buffer.active.type === "alternate");
+  let turned = ENDLESS_PX;
+  let lastTurnAt = -Infinity;
+  let turnedAt: ScreenCell = { col: 0, row: 0 };
+  const turns = scroller({
+    at: () => turned,
+    end: () => 2 * ENDLESS_PX,
+    rest: (at) => at,
+    apply: (at) => {
+      const rows = Math.floor(at / cell()) - Math.floor(turned / cell());
+      turned = at;
+      if (rows === 0 || !scrollsItself()) return;
+      lastTurnAt = performance.now();
+      const way = rows < 0 ? -1 : 1;
+      session.input(
+        tracksMouse() ? wheelReport(way, turnedAt, session.sgrMouse()).repeat(Math.abs(rows)) : arrows(rows, "A", "B"),
+      );
+    },
+  });
+  const turn = (from: Point, at: Point) => {
+    const landed = selection.cellAt(from, true);
+    if (landed === null) return null;
+    turnedAt = onScreen(landed);
+    turned = ENDLESS_PX;
+    const y = turns.grab();
+    scrolling = true;
+    return {
+      move: (to: Point) => y.drag(at.y - to.y),
+      end: (velocity: Point | null) => y.release(-(velocity?.y ?? 0)),
+    };
+  };
   /** Dragging scrolls the terminal, and pans a cropped one across too. */
-  const drag: Gesture = ({ axis, at }) => {
-    if (!measured() || (axis === "x" && !cropped())) return null;
+  const drag: Gesture = ({ axis, from, at }) => {
+    if (!measured()) return null;
+    if (scrollsItself()) return axis === "y" ? turn(from, at) : null;
+    if (axis === "x" && !cropped()) return null;
     const x = cropped() ? across.grab() : null;
     const y = down.grab();
     scrolling = true;
@@ -250,6 +301,8 @@ function PhoneTerm(props: {
   };
   let from: Point | null = null;
   let scrolling = false;
+  /** A touch that stops a program's own scroll only stops it, so lifting it clicks nothing. */
+  let stoppedTurning = false;
   /** A touch the terminal's drag didn't scroll stopped any coast where it stood, so lifting it settles on a line. */
   const settle = () => {
     if (scrolling) return;
@@ -348,13 +401,15 @@ function PhoneTerm(props: {
           const touch = event.touches[0];
           from = touch === undefined ? null : { x: touch.clientX, y: touch.clientY };
           scrolling = false;
+          stoppedTurning = performance.now() - lastTurnAt < TURNING_MS;
           down.stop();
           across.stop();
+          turns.stop();
         }}
         onTouchCancel={settle}
         onTouchEnd={(event) => {
           settle();
-          if (event.defaultPrevented || selection.onControls(event)) return;
+          if (event.defaultPrevented || stoppedTurning || selection.onControls(event)) return;
           const touch = event.changedTouches[0];
           if (!from || !touch || Math.hypot(touch.clientX - from.x, touch.clientY - from.y) >= COMMIT_PX) return;
           const point = { x: touch.clientX, y: touch.clientY };
@@ -363,7 +418,7 @@ function PhoneTerm(props: {
           // The click a tap synthesizes would land on the pane and take the focus back from the keyboard.
           event.preventDefault();
           if (tapped) return;
-          moveCursorTo(point);
+          placeCursor(point);
           sink.focus();
         }}
       >
@@ -434,7 +489,7 @@ function PhoneTerm(props: {
                     </button>
                     <For each={ARROWS}>
                       {([label, code]) => (
-                        <button class="key" onClick={() => send(arrow(code))}>
+                        <button class="key" ref={repeats(() => write(arrow(code)))}>
                           {label}
                         </button>
                       )}

@@ -1,3 +1,4 @@
+import { onCleanup } from "solid-js";
 import type { Lift, Point } from "@octopus/shared/lift.ts";
 import { feel } from "./feel";
 import { COMMIT_PX, keepTouch } from "./touch";
@@ -5,6 +6,10 @@ import { COMMIT_PX, keepTouch } from "./touch";
 export type { Point };
 
 export const LONG_PRESS_MS = 450;
+const REPEAT_DELAY_MS = 400;
+const REPEAT_MS = 1000 / 12;
+const FAST_AFTER_MS = 1000;
+const FAST_REPEAT_MS = 1000 / 30;
 
 /** Every press under a finger, which a gesture that takes the finger over ends. */
 const presses = new Set<() => void>();
@@ -91,5 +96,68 @@ export function pressed(tap: () => void, hold: () => void, lift?: (element: HTML
       element.addEventListener("click", tap);
       element.addEventListener("contextmenu", (event) => event.preventDefault());
     },
+  };
+}
+
+/**
+ * A key that writes on touch-down and, held, repeats with a light tick each time, faster once held a while, until the
+ * finger lifts or slides off it or the key goes. A click with no touch, as assistive technology sends, writes once.
+ */
+export function repeats(write: () => void) {
+  return (element: HTMLElement) => {
+    let finger: number | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stop = () => {
+      clearTimeout(timer);
+      finger = null;
+      element.removeAttribute("data-pressed");
+    };
+    const ours = (touches: TouchList) => [...touches].find((touch) => touch.identifier === finger);
+    element.addEventListener(
+      "touchstart",
+      (event) => {
+        const touch = event.changedTouches[0];
+        if (event.touches.length > 1 || touch === undefined) return;
+        stop();
+        keepTouch();
+        finger = touch.identifier;
+        element.setAttribute("data-pressed", "");
+        feel("tap");
+        write();
+        const held = performance.now();
+        const again = (after: number) =>
+          (timer = setTimeout(() => {
+            feel("select");
+            write();
+            again(performance.now() - held < FAST_AFTER_MS ? REPEAT_MS : FAST_REPEAT_MS);
+          }, after));
+        again(REPEAT_DELAY_MS);
+      },
+      { passive: true },
+    );
+    element.addEventListener(
+      "touchmove",
+      (event) => {
+        const touch = ours(event.touches);
+        if (touch === undefined) return;
+        const box = element.getBoundingClientRect();
+        const on =
+          touch.clientX >= box.left &&
+          touch.clientX <= box.right &&
+          touch.clientY >= box.top &&
+          touch.clientY <= box.bottom;
+        if (!on) stop();
+      },
+      { passive: true },
+    );
+    for (const lift of ["touchend", "touchcancel"] as const)
+      element.addEventListener(lift, (event) => {
+        if (ours(event.changedTouches) !== undefined) stop();
+      });
+    element.addEventListener("click", () => {
+      feel("tap");
+      write();
+    });
+    onCleanup(stop);
   };
 }

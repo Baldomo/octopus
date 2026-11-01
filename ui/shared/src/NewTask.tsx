@@ -3,7 +3,6 @@ import { backend } from "./backend";
 import { Actions, Field, Segments, TextField } from "./Dialog";
 import { CHECKOUTS, TASK_STATES, type Checkout, type TaskState, type WorkspaceRef } from "./generated";
 import {
-  model,
   newTaskSection,
   openTask,
   openView,
@@ -12,6 +11,7 @@ import {
   serverView,
   setNewTaskSection,
   showModal,
+  workspaces,
 } from "./state";
 
 const PARENTS = ["none", "open task"] as const;
@@ -20,7 +20,6 @@ const workspaceKey = (workspace: WorkspaceRef) => `${workspace.server}/${workspa
 /** The new-task form: every op field is on screen, prefilled from the open task where it has one. */
 export function NewTask() {
   const current = openView();
-  const workspaces = () => model.lists.workspaces;
   const section = newTaskSection();
   setNewTaskSection(null);
   const initial =

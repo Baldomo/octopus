@@ -8,7 +8,7 @@ import { notify } from "./Toast";
 import { COMMIT_PX, keepTouch } from "./touch";
 
 /** A buffer cell; `row` counts from the first line of the scrollback. */
-type Cell = { col: number; row: number };
+export type Cell = { col: number; row: number };
 /** Both ends inclusive, `from` first. */
 type Span = { from: Cell; to: Cell };
 type Size = { width: number; height: number };
@@ -26,12 +26,26 @@ const before = (a: Cell, b: Cell) => a.row < b.row || (a.row === b.row && a.col 
 const ordered = (a: Cell, b: Cell): Span => (before(b, a) ? { from: b, to: a } : { from: a, to: b });
 const count = (text: string, char: string) => text.split(char).length - 1;
 
-function wrappedLine(xterm: Terminal, row: number): Char[] {
+/**
+ * Whether `row` continues the line above it: xterm marks it wrapped, or the row above runs text to the right edge, as a
+ * shell that erases the row it wrapped onto leaves it, which zsh does.
+ */
+function continues(xterm: Terminal, row: number): boolean {
+  const buffer = xterm.buffer.active;
+  const edge =
+    buffer
+      .getLine(row - 1)
+      ?.getCell(xterm.cols - 1)
+      ?.getChars() ?? "";
+  return buffer.getLine(row)?.isWrapped === true || edge.trim() !== "";
+}
+
+export function wrappedLine(xterm: Terminal, row: number): Char[] {
   const buffer = xterm.buffer.active;
   let first = row;
-  while (first > 0 && buffer.getLine(first)?.isWrapped) first--;
+  while (first > 0 && continues(xterm, first)) first--;
   let last = row;
-  while (buffer.getLine(last + 1)?.isWrapped) last++;
+  while (last + 1 < buffer.length && continues(xterm, last + 1)) last++;
   const chars: Char[] = [];
   for (let at = first; at <= last; at++) {
     const line = buffer.getLine(at);
@@ -44,7 +58,7 @@ function wrappedLine(xterm: Terminal, row: number): Char[] {
   return chars;
 }
 
-const charAt = (chars: Char[], cell: Cell) => chars.findLastIndex((char) => !before(cell, char.cell));
+export const charAt = (chars: Char[], cell: Cell) => chars.findLastIndex((char) => !before(cell, char.cell));
 const lastCell = (char: Char): Cell => ({ col: char.cell.col + char.width - 1, row: char.cell.row });
 
 /** The word covering `cell`, or the one character when it is a separator. */
@@ -310,8 +324,7 @@ export function termSelection(props: {
     Handles,
     /** Whether a touch landed on a handle or on Copy, which the terminal's own tap leaves alone. */
     onControls,
-    /** The cell under a point on the drawn screen, or null off it. */
-    cellAt: (point: Point) => cellAt(point, false),
+    cellAt,
     /** Clears a selection, or opens the URL under the tap; reports whether it did either. */
     tap: (point: Point) => {
       if (xterm.hasSelection()) {

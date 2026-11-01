@@ -1,14 +1,22 @@
 import { onCleanup } from "solid-js";
 import { curve, play, reach, reduced, SNAPPY } from "./motion";
-type Spot = { x: number; y: number; width: number; height: number; element: HTMLElement; ws: string };
+import { moves, shownAt, slideFrom, type Box } from "./slide";
+type Spot = Box & { element: HTMLElement; ws: string };
 type Mover = { spot: Spot; dx: number; dy: number };
 
-/** Rows a drop waits for in the group or column of a state, each told where it arrived before its list measures. */
-const arrivals = new Map<string, { state: string; arrive: (element: HTMLElement) => void }>();
+/** Rows a drop waits for where it put them, each told where it arrived before its list measures. */
+const arrivals = new Map<
+  string,
+  { arrived: (element: HTMLElement) => boolean; arrive: (element: HTMLElement) => void }
+>();
 
-/** Waits for the row keyed `key` to show in `state`'s group or column; the returned function stops waiting. */
-export function awaitArrival(key: string, state: string, arrive: (element: HTMLElement) => void) {
-  arrivals.set(key, { state, arrive });
+/** Waits for the row keyed `key` to show where `arrived` holds; the returned function stops waiting. */
+export function awaitArrival(
+  key: string,
+  arrived: (element: HTMLElement) => boolean,
+  arrive: (element: HTMLElement) => void,
+) {
+  arrivals.set(key, { arrived, arrive });
   return () => arrivals.get(key)?.arrive === arrive && arrivals.delete(key);
 }
 
@@ -43,12 +51,20 @@ function clearance(spot: Spot, movers: Mover[]) {
 }
 
 /**
- * A list whose items, `selector` within it, move to where a change puts them, fade in where one adds them once the
+ * A list whose items, `selector` within it, move to where a change puts them, fade in from `enterFrom` where one adds them once the
  * items sliding off that place have cleared it, and fade out where one removes them, each keyed by its `data-key` or
- * else by itself. It follows every change to its children before the change paints. An item held `.landing` is left
- * for its drop to place, and an item that lays out nowhere is left out. Under reduced motion items only fade.
+ * else by itself. Items `stretch` matches are items too that stretch to their new size as they move, every edge on the
+ * same curve as the items beside them. It follows every change to its children before the change paints. An item held
+ * `.landing` is left for its drop to place, and an item that lays out nowhere is left out. Under reduced motion items
+ * only fade.
  */
-export function animateList(selector: string) {
+export function animateList(
+  selector: string,
+  { enterFrom = "above", stretch }: { enterFrom?: "above" | "below"; stretch?: string } = {},
+) {
+  const enterOffset = enterFrom === "above" ? -6 : 6;
+  const all = stretch === undefined ? selector : `${selector}, ${stretch}`;
+  const stretches = (element: HTMLElement) => stretch !== undefined && element.matches(stretch);
   return (root: HTMLElement) => {
     root.classList.add("flips");
     let spots = new Map<unknown, Spot>();
@@ -56,7 +72,7 @@ export function animateList(selector: string) {
     const moving = new WeakMap<Element, Animation>();
     const keyOf = (element: HTMLElement) => element.dataset.key ?? element;
     const items = () =>
-      [...root.querySelectorAll<HTMLElement>(selector)].filter(
+      [...root.querySelectorAll<HTMLElement>(all)].filter(
         (element) => !element.classList.contains(GHOST) && element.getClientRects().length > 0,
       );
     /** Where an item lays out within the list, untouched by its own animation or the list's scroll. */
@@ -69,26 +85,28 @@ export function animateList(selector: string) {
       return { x, y };
     };
 
-    /** Slides an item from `dx`, `dy` off its place, on from wherever a slide still running has it. */
-    const move = (element: HTMLElement, dx: number, dy: number) => {
-      if (reduced() || (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5)) return null;
+    /** Slides an item laid out at `from` onto its place `to`, on from wherever a slide still running shows it. */
+    const move = (element: HTMLElement, from: Box, to: Box) => {
+      const stretching = stretches(element);
+      if (reduced() || !moves(from, to, stretching)) return null;
       const running = moving.get(element);
       if (running?.playState === "running") {
-        const now = new DOMMatrix(getComputedStyle(element).transform);
-        [dx, dy] = [dx + now.m41, dy + now.m42];
+        from = shownAt(from, new DOMMatrix(getComputedStyle(element).transform));
         running.cancel();
       }
-      moving.set(
-        element,
-        element.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }], curve(SNAPPY)),
-      );
-      return { dx, dy };
+      const { a, d, e, f } = slideFrom(from, to, stretching);
+      const keyframes = [
+        { transform: `matrix(${a}, 0, 0, ${d}, ${e}, ${f})`, transformOrigin: "0 0" },
+        { transform: "none", transformOrigin: "0 0" },
+      ];
+      moving.set(element, element.animate(keyframes, curve(SNAPPY)));
+      return { dx: e, dy: f };
     };
     const enter = (element: HTMLElement, after: number) =>
       play(
         element,
         [
-          { opacity: 0, transform: "translateY(-6px)" },
+          { opacity: 0, transform: `translateY(${enterOffset}px)` },
           { opacity: 1, transform: "none" },
         ],
         SNAPPY,
@@ -119,7 +137,7 @@ export function animateList(selector: string) {
       }
       for (const [key, arrival] of arrivals) {
         const element = root.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`);
-        if (element === null || element.closest<HTMLElement>("[data-state]")?.dataset.state !== arrival.state) continue;
+        if (element === null || !arrival.arrived(element)) continue;
         arrivals.delete(key);
         arrival.arrive(element);
       }
@@ -136,7 +154,7 @@ export function animateList(selector: string) {
           const from = spots.get(key);
           if (from === undefined) entering.push(spot);
           else {
-            const moved = move(spot.element, from.x - spot.x, from.y - spot.y);
+            const moved = move(spot.element, from, spot);
             if (moved) movers.push({ spot, ...moved });
           }
         }

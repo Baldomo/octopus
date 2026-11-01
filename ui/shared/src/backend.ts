@@ -57,6 +57,7 @@ export const backend = {
   sectionColor: (section: string, swatch: Swatch | null) => invoke<void>(octopus("section_color"), { section, swatch }),
   taskFocus: (at: TaskRef) => invoke<void>(octopus("task_focus"), { at }),
   taskMove: (at: TaskRef, state: TaskState) => invoke<void>(octopus("task_move"), { at, state }),
+  taskSetParent: (at: TaskRef, parent: TaskRef | null) => invoke<void>(octopus("task_set_parent"), { at, parent }),
   taskRename: (at: TaskRef, title: string) => invoke<void>(octopus("task_rename"), { at, title }),
   taskArchive: (at: TaskRef) => invoke<void>(octopus("task_archive"), { at }),
   /** Resolves to the created task's key. */

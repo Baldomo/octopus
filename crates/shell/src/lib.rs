@@ -4,13 +4,14 @@ pub mod client_menu;
 mod commands;
 pub mod hub;
 pub mod microphone;
+pub mod pages;
 pub mod task_lists;
 mod task_view;
 mod terminal;
 pub mod types;
 pub mod ui;
 
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use octopus_client::Identity;
@@ -64,6 +65,7 @@ pub fn commands<R: Runtime>() -> tauri::plugin::Builder<R> {
         commands::auto_color,
         commands::task_focus,
         commands::task_move,
+        commands::task_set_parent,
         commands::task_rename,
         commands::task_archive,
         commands::task_create,
@@ -87,13 +89,14 @@ pub fn commands<R: Runtime>() -> tauri::plugin::Builder<R> {
     ])
 }
 
-/// The core's commands and the terminals they attach, timing launch from the call.
+/// The core's commands, the terminals they attach and the file pages it serves, timing launch from the call.
 pub fn plugin() -> TauriPlugin<Wry> {
     let launched = Instant::now();
-    commands()
+    pages::protocol(commands())
         .setup(move |app, _| {
             app.manage(Launched(launched));
             app.manage(Terminals::default());
+            app.manage(Arc::new(pages::Pages::default()));
             Ok(())
         })
         .build()

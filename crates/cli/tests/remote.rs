@@ -8,9 +8,12 @@ use octopus_client::servers::{self, Address};
 use octopus_client::tunnel::Tunnel;
 use octopus_client::{CallError, Connection, Identity};
 use octopus_proto::device::DeviceKey;
-use octopus_proto::ops::{BrowserOpen, HarnessSet, PairingForget, PairingList, PairingOffer, TaskFocus, TermSend};
+use octopus_proto::ops::{
+    BrowserClose, BrowserMove, BrowserOpen, BrowserReport, HarnessSet, PairingForget, PairingList, PairingOffer,
+    TaskFocus, TaskGet, TermSend,
+};
 use octopus_proto::pairing::Invite;
-use octopus_proto::types::{BrowserId, BrowserPanel, BrowserTarget, Checkout, Hooks, Stream, TaskId};
+use octopus_proto::types::{BrowserId, BrowserPanel, BrowserTarget, Checkout, Hooks, Stream, Task, TaskId};
 use octopus_proto::{Error, Event};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -92,7 +95,7 @@ async fn a_task_runs_over_iroh_and_a_stalled_file_transfer_never_blocks_its_term
     };
     laptop.call(&harness).await.expect("harness.set");
     let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
-    laptop.call(&TaskFocus { task: id.clone() }).await.expect("task.focus");
+    laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("task.focus");
     let agent = Stream::Pty(task(&laptop, &id).await.panels[0].id.clone());
 
     let large = vec![b'x'; 8 << 20];
@@ -127,7 +130,15 @@ async fn a_browser_panel_is_task_state_and_its_localhost_page_tunnels_to_the_ser
     let settings = "http://localhost:5173/settings";
     let again = laptop.call(&open(&id, settings, BrowserTarget::Panel(shown.panel.clone()))).await.expect("again");
     assert_eq!(again.panel, shown.panel);
-    let expected = vec![BrowserPanel { panel: shown.panel, url: settings.into() }];
+    let reported =
+        BrowserReport { task: id.clone(), panel: shown.panel.clone(), url: settings.into(), title: "S".into() };
+    let titled = laptop.call(&reported).await.expect("browser.report");
+    assert_eq!(
+        laptop.call(&reported).await.expect("the same report").rev,
+        titled.rev,
+        "an idle report revises nothing"
+    );
+    let expected = vec![BrowserPanel { panel: shown.panel, url: settings.into(), title: "S".into(), load: 2 }];
     let pushed = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if let Event::TaskUpdated { task } = pushes.recv().await.expect("push").event
@@ -138,14 +149,58 @@ async fn a_browser_panel_is_task_state_and_its_localhost_page_tunnels_to_the_ser
         }
     });
     assert!(pushed.await.is_ok(), "desk never saw the browser panel");
-    for (url, panel) in
-        [("javascript:alert(1)", BrowserTarget::New), (settings, BrowserTarget::Panel(BrowserId::random()))]
-    {
+    for (url, panel) in [
+        ("javascript:alert(1)", BrowserTarget::New),
+        ("file://mac-mini/etc/hosts", BrowserTarget::New),
+        (settings, BrowserTarget::Panel(BrowserId::random())),
+    ] {
         match laptop.call(&open(&id, url, panel)).await {
             Err(CallError::Server(Error::InvalidArgs { .. } | Error::NotFound { .. })) => {}
             other => panic!("{url} must be refused, got {other:?}"),
         }
     }
+
+    let site = dir.path().join("site");
+    std::fs::create_dir_all(site.join("css")).expect("make the site");
+    std::fs::write(site.join("css/style.css"), "h1{}").expect("write the style");
+    std::fs::write(dir.path().join("secret"), "key").expect("write a secret beside the site");
+    std::os::unix::fs::symlink(dir.path().join("secret"), site.join("leak")).expect("link out of the site");
+    let file = laptop.call(&open(&id, &format!("file://{}/index.html", site.display()), BrowserTarget::New)).await;
+    let read = |path: &str| {
+        let stream = Stream::Page { root: site.display().to_string(), path: path.into() };
+        let laptop = Arc::clone(&laptop);
+        async move {
+            let mut bytes = Vec::new();
+            laptop.open_data_stream(&stream).await?.read_to_end(&mut bytes).await.expect("read the file");
+            Ok::<_, CallError>(bytes)
+        }
+    };
+    assert_eq!(read("css/style.css").await.expect("a file of the page's root"), b"h1{}");
+    let secret = dir.path().join("secret").display().to_string();
+    for outside in ["../secret", "css/../../secret", "leak", secret.as_str()] {
+        let refused = read(outside).await;
+        assert!(matches!(refused, Err(CallError::Server(Error::InvalidArgs { .. }))), "{outside}: {refused:?}");
+    }
+    let missing = read("css").await;
+    assert!(matches!(missing, Err(CallError::Server(Error::NotFound { .. }))), "a directory is no page");
+    let file = file.expect("a file page").panel;
+    let order = |task: Task| task.browsers.into_iter().map(|panel| panel.panel).collect::<Vec<_>>();
+    let moved = laptop.call(&BrowserMove { task: id.clone(), panel: file.clone(), to: 0 }).await.expect("browser.move");
+    let task = laptop.call(&TaskGet { task: id.clone() }).await.expect("task.get");
+    assert_eq!(order(task), [file.clone(), expected[0].panel.clone()], "a moved browser panel takes its index");
+    let still = laptop.call(&BrowserMove { task: id.clone(), panel: file.clone(), to: 0 }).await.expect("idle move");
+    assert_eq!(still.rev, moved.rev, "a move to the index the panel holds revises nothing");
+    let past = laptop.call(&BrowserMove { task: id.clone(), panel: file.clone(), to: 2 }).await;
+    assert!(matches!(past, Err(CallError::Server(Error::InvalidArgs { .. }))), "{past:?}");
+    let behind = laptop.call(&open(&id, settings, BrowserTarget::Background)).await.expect("a background panel");
+    let task = laptop.call(&TaskGet { task: id.clone() }).await.expect("task.get");
+    let last = task.browsers.last().expect("the background panel");
+    assert_eq!((&last.panel, last.load), (&behind.panel, 0), "a background panel joins the end, never shown");
+    laptop.call(&BrowserClose { task: id.clone(), panel: behind.panel }).await.expect("close the background panel");
+    let closed = BrowserClose { task: id.clone(), panel: file };
+    laptop.call(&closed).await.expect("browser.close");
+    let task = laptop.call(&TaskGet { task: id.clone() }).await.expect("task.get");
+    assert_eq!(task.browsers, expected, "a closed browser panel is gone");
 
     let dev_server = TcpListener::bind("127.0.0.1:0").await.expect("bind the dev server");
     let port = dev_server.local_addr().expect("its port").port();

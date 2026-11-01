@@ -1,4 +1,5 @@
-//! The client menu's prefs: the appearance the window shows and the zoom it scales its UI by.
+//! The client menu's prefs: the appearance the window shows, the zoom it scales its UI by, and the flags its agents
+//! start with.
 
 use serde::{Deserialize, Serialize};
 use tauri::Theme;
@@ -71,9 +72,46 @@ impl Zoom {
     }
 }
 
+/// A harness's agent flags as the user typed them, shell words that split into the args each focus sends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(try_from = "String")]
+pub struct AgentFlags(String);
+
+impl TryFrom<String> for AgentFlags {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, String> {
+        match shell_words::split(&text) {
+            Ok(_) => Ok(Self(text.trim().to_string())),
+            Err(_) => Err(format!("the quoting of {text} does not close")),
+        }
+    }
+}
+
+impl AgentFlags {
+    pub fn args(&self) -> Vec<String> {
+        shell_words::split(&self.0).expect("agent flags hold only text that splits")
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_flags_split_as_shell_words_and_refuse_quoting_that_does_not_close() {
+        let flags = |text: &str| serde_json::from_value::<AgentFlags>(serde_json::json!(text));
+        let typed = flags(" --allow-dangerously-skip-permissions --append-system-prompt 'be brief' ").expect("splits");
+        assert_eq!(typed.args(), ["--allow-dangerously-skip-permissions", "--append-system-prompt", "be brief"]);
+        let saved = serde_json::to_value(&typed).expect("serializes");
+        assert_eq!(saved, "--allow-dangerously-skip-permissions --append-system-prompt 'be brief'");
+        assert!(flags("--model 'opus").is_err());
+        assert!(flags("  ").expect("splits").is_empty());
+    }
 
     #[test]
     fn a_zoom_outside_the_steps_is_refused() {

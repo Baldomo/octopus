@@ -3,14 +3,14 @@
 use octopus_proto::ops::{Entry, EntryKind, Match, Offer, PairedClient};
 use octopus_proto::term::HISTORY_LINES;
 use octopus_proto::types::{
-    AGENT_PANEL, Agent, AgentStatus, BrowserId, BrowserPanel, Checkout, Hue, NEW_BROWSER_PANEL, Panel, PtyId,
-    SessionId, Swatch, Task, TaskId, TaskState, Tone, WorkspaceId,
+    AGENT_PANEL, Agent, AgentStatus, BACKGROUND_BROWSER_PANEL, BrowserId, BrowserPanel, Checkout, Hue,
+    NEW_BROWSER_PANEL, Panel, PtyId, SessionId, Swatch, Task, TaskId, TaskState, Tone, WorkspaceId,
 };
 use serde::Serialize;
 use serde_json::json;
 use ts_rs::Config;
 
-use crate::client_menu::{Appearance, ZOOMS, Zoom, ZoomStep};
+use crate::client_menu::{AgentFlags, Appearance, ZOOMS, Zoom, ZoomStep};
 use crate::commands::{Boot, NewTask, ShownOffer};
 use crate::hub::{FILES_CHANGED_EVENT, FilesChanged, MODEL_EVENT, Model, SERVERS_EVENT, ServerView};
 use crate::microphone::MICROPHONE_DENIED_EVENT;
@@ -80,6 +80,7 @@ pub fn render() -> String {
         Appearance,
         Zoom,
         ZoomStep,
+        AgentFlags,
         Prefs,
         Reveal,
         Ui,
@@ -99,6 +100,7 @@ pub fn render() -> String {
         constant("ZOOMS", &ZOOMS),
         constant("AGENT_PANEL", &AGENT_PANEL),
         constant("NEW_BROWSER_PANEL", &NEW_BROWSER_PANEL),
+        constant("BACKGROUND_BROWSER_PANEL", &BACKGROUND_BROWSER_PANEL),
         constant("TERM_HISTORY_LINES", &HISTORY_LINES),
         constant("VERSION", &env!("CARGO_PKG_VERSION")),
         constant(

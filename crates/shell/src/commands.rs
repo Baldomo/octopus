@@ -6,7 +6,7 @@ use octopus_proto::Error;
 use octopus_proto::ops::{
     Entry, EntryKind, FileCopy, FileCreate, FileDelete, FileList, FileMove, FileSearch, FileWrite, Match, Offer,
     PairedClient, PairingForget, PairingList, PairingOffer, TaskArchive, TaskCreate, TaskFocus, TaskMove, TaskRename,
-    TermClaim, TermClose, TermOpen, TermResize, TermTakeLock, WorkspaceAdd, WorkspaceRemove,
+    TaskSetParent, TermClaim, TermClose, TermOpen, TermResize, TermTakeLock, WorkspaceAdd, WorkspaceRemove,
 };
 use octopus_proto::pairing::Invite;
 use octopus_proto::types::{Checkout, Color, PtyId, SessionId, Stream, Swatch, TaskId, TaskState, WorkspaceId};
@@ -144,13 +144,26 @@ pub async fn task_archive(hub: Hubbed<'_>, at: TaskRef) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn task_focus(hub: Hubbed<'_>, at: TaskRef) -> Result<(), String> {
-    hub.call(&at.server, &TaskFocus { task: at.task }).await.map(drop)
+pub async fn task_focus(hub: Hubbed<'_>, ui: Uis<'_>, at: TaskRef) -> Result<(), String> {
+    let args = ui.agent_args(&hub.harness_of(&at)?);
+    hub.call(&at.server, &TaskFocus { task: at.task, args }).await.map(drop)
 }
 
 #[tauri::command]
 pub async fn task_move(hub: Hubbed<'_>, at: TaskRef, state: TaskState) -> Result<(), String> {
     hub.call(&at.server, &TaskMove { task: at.task, state }).await.map(drop)
+}
+
+/// A task nests only under a task of its own server.
+#[tauri::command]
+pub async fn task_set_parent(hub: Hubbed<'_>, at: TaskRef, parent: Option<TaskRef>) -> Result<(), String> {
+    let parent = match parent {
+        Some(parent) if parent.server != at.server => {
+            return Err(format!("{} is on {}, and {} on {}", parent.task, parent.server, at.task, at.server));
+        }
+        parent => parent.map(|parent| parent.task),
+    };
+    hub.call(&at.server, &TaskSetParent { task: at.task, parent }).await.map(drop)
 }
 
 /// Every field of `task.create`, plus the server that creates it.

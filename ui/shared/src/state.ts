@@ -15,12 +15,19 @@ import type {
   View,
   ZoomStep,
 } from "./generated";
+import { inSectionOrder } from "./sectionOrder";
 
 export const [model, setModel] = createStore<Model>({
   version: -1,
   lists: { sections: [], workspaces: [] },
   tasks: {},
 });
+
+/** The order a section being dragged shows the sections in, which stands over the saved one until it lands. */
+export const [arranged, arrange] = createSignal<string[] | null>(null);
+const sectionOrder = () => arranged() ?? ui.prefs.section_order;
+export const sections = () => inSectionOrder(model.lists.sections, sectionOrder());
+export const workspaces = () => inSectionOrder(model.lists.workspaces, sectionOrder());
 
 export const [servers, setServers] = createSignal<ServerView[]>([]);
 export const [me, setMe] = createSignal("");
@@ -31,6 +38,7 @@ const [ui, setUi] = createStore<Ui>({
   prefs: {
     pinned: false,
     collapsed: [],
+    section_order: [],
     surface: "files",
     split: 0.5,
     view: "task",
@@ -38,6 +46,7 @@ const [ui, setUi] = createStore<Ui>({
     board: null,
     appearance: "system",
     zoom: 100,
+    agent_flags: {},
   },
   recent: [],
   sidebar: false,
@@ -66,12 +75,22 @@ export const showSurface = (surface: Surface) => uiAct({ do: "show_surface", sur
 export const resetSplit = () => uiAct({ do: "reset_split" });
 export const togglePin = () => uiAct({ do: "toggle_pin" });
 export const toggleCollapsed = (section: string) => uiAct({ do: "toggle_collapsed", section });
+export const orderSections = (names: string[]) => uiAct({ do: "order_sections", sections: names });
 export const showSidebar = (shown: boolean) => uiAct({ do: "show_sidebar", shown });
 export const toggleSidebar = () => uiAct({ do: "toggle_sidebar" });
 export const showClientMenu = (shown: boolean) => uiAct({ do: "show_client_menu", shown });
 export const toggleClientMenu = () => uiAct({ do: "toggle_client_menu" });
 export const setAppearance = (appearance: Appearance) => uiAct({ do: "set_appearance", appearance });
 export const zoom = (step: ZoomStep) => uiAct({ do: "zoom", step });
+/** Rejects flags whose quoting does not close. */
+export const setAgentFlags = (harness: string, flags: string) =>
+  backend.uiAct({ do: "set_agent_flags", harness, flags });
+
+/** Every harness a listed task names or this client keeps flags for. */
+export const harnesses = () =>
+  [
+    ...new Set([...Object.values(model.tasks).map((view) => view.task.harness), ...Object.keys(ui.prefs.agent_flags)]),
+  ].sort();
 export const showModal = (modal: Modal | null) => uiAct({ do: "show_modal", modal });
 export const reveal = (task: string, path: string) => uiAct({ do: "reveal", task, path });
 

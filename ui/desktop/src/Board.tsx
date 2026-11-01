@@ -3,8 +3,17 @@ import type { Column } from "@octopus/shared/generated.ts";
 import { Glyph, statusWord } from "@octopus/shared/Glyph.tsx";
 import { dropHint } from "@octopus/shared/drop.ts";
 import { animateList } from "@octopus/shared/flip.ts";
-import { dropTarget, isAway, isLanding, isLifted, liftsIn } from "@octopus/shared/lift.ts";
-import { liftOnDrag, type Within } from "./lift";
+import {
+  dropTarget,
+  isAway,
+  isLanding,
+  isLifted,
+  isNesting,
+  lift,
+  liftsIn,
+  type Within,
+} from "@octopus/shared/lift.ts";
+import { liftOnDrag } from "./lift";
 import { GroupHead } from "./Group";
 import { isMenuOpen, MenuHost, menuTrigger, onRightClick } from "@octopus/shared/Menu.tsx";
 import { backend } from "@octopus/shared/backend.ts";
@@ -42,6 +51,7 @@ function BoardColumn(props: { section: string; column: Column }) {
                   lifting: isLifted(row.key),
                   away: isAway(row.key),
                   landing: isLanding(row.key),
+                  nest: isNesting(row.key),
                   "menu-open": isMenuOpen(id),
                 }}
                 data-key={row.key}
@@ -50,7 +60,7 @@ function BoardColumn(props: { section: string; column: Column }) {
                 onClick={() => openTask(row.key)}
                 onKeyDown={(event) => event.key === "F2" && startRename("task", row.key)}
                 onContextMenu={onRightClick(id, () => card, menu)}
-                {...liftOnDrag(row, props.section, ON_BOARD)}
+                {...liftOnDrag(ON_BOARD, lift(row, props.section))}
               >
                 <div class="tt">
                   <Glyph glyph={row.glyph} />

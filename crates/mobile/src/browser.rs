@@ -1,12 +1,13 @@
 //! The phone's Browser screen shows one browser panel's page in a frame of its webview. A page on a loopback host
 //! reaches that port on the server's machine through a tunnel from the same port on the phone, held while the screen
-//! shows the page.
+//! shows the page, and a file page loads through `octopus_shell::pages`.
 
 use std::sync::Arc;
 
 use octopus_client::tunnel::{Tunnel, listen_on_localhost, loopback_port};
 use octopus_proto::types::web_page;
 use octopus_shell::hub::Hub;
+use octopus_shell::pages::Pages;
 use serde::Serialize;
 use tauri::State;
 
@@ -26,10 +27,12 @@ pub struct Page {
 pub async fn phone_browse(
     hub: State<'_, Arc<Hub>>,
     shown: State<'_, Shown>,
+    pages: State<'_, Arc<Pages>>,
     server: String,
     url: String,
 ) -> Result<Page, String> {
     let page = web_page(&url)?;
+    let loaded = pages.loaded_from(&server, &page)?.to_string();
     let port = loopback_port(&page).filter(|_| hub.is_another_machine(&server));
     let mut held = shown.0.lock().await;
     let kept = matches!((&*held, port), (Some((at, to, _)), Some(port)) if *at == port && *to == server);
@@ -41,7 +44,7 @@ pub async fn phone_browse(
             held.replace((port, server, Tunnel::new(port, listeners, Arc::new(move || hub.connection(&dialed)))));
         }
     }
-    Ok(Page { url: page.to_string(), tunneled: port.is_some() })
+    Ok(Page { url: loaded, tunneled: port.is_some() })
 }
 
 /// Lets go of the shown page's tunnel once the Browser screen closes.

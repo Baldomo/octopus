@@ -5,22 +5,26 @@ import { back } from "./nav";
 import { Circle, Id, sectionColor } from "./parts";
 import { phone } from "./phone";
 
-/** The task's browser panel under its URL: the host in text, the path dim, "tunnel" while it reaches the server. */
+/** The task's newest browser panel under its URL: the host in text, the path dim, "tunnel" while it reaches the server. */
 export function Browser(props: { taskKey: string }) {
   const view = () => model.tasks[props.taskKey];
-  const panel = () => view()?.task.browsers[0];
+  const panel = () => view()?.task.browsers.at(-1);
+  /** Each `load` of the panel, and each reload, loads its page again; another client's navigation leaves it. */
+  const [loads, reload] = createSignal(0);
   const [page] = createResource(
     () => {
-      const shown = view();
-      const url = panel()?.url;
-      return shown && url ? { server: shown.at.server, url } : false;
+      const opened = panel();
+      return opened === undefined ? false : `${opened.panel} ${opened.load} ${loads()}`;
     },
-    ({ server, url }) => phone.browse(server, url).catch((error) => report(error).then(() => undefined)),
+    () => {
+      const shown = view()!;
+      return phone.browse(shown.at.server, panel()!.url).catch((error) => report(error).then(() => undefined));
+    },
   );
   onCleanup(() => phone.unbrowse().catch(report));
-  const [loads, reload] = createSignal(0);
   const parts = () => {
-    const url = new URL(page()?.url ?? panel()?.url ?? "about:blank");
+    const url = new URL(panel()?.url ?? "about:blank");
+    if (url.protocol === "file:") return { host: decodeURIComponent(url.pathname), path: "" };
     return { host: url.host, path: `${url.pathname}${url.search}`.replace(/^\/$/, "") };
   };
   return (
@@ -53,11 +57,7 @@ export function Browser(props: { taskKey: string }) {
           </div>
         </div>
         <Show when={page()} keyed>
-          {(shown) => (
-            <Show when={loads() + 1} keyed>
-              <iframe class="web fill" src={shown.url} title="Browser" />
-            </Show>
-          )}
+          {(shown) => <iframe class="web fill" src={shown.url} title="Browser" />}
         </Show>
       </Show>
     </>

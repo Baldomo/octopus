@@ -19,12 +19,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use octopus_proto::device::{DeviceKey, PublicKey};
 use octopus_proto::ops::{
-    AgentReport, BrowserOpen, Clients, Done, Entries, FileCopy, FileCreate, FileDelete, FileList, FileMove, FileSearch,
-    FileWrite, HarnessSet, Matches, Offer, Opened, Paired, PairedClient, PairingForget, PairingList, PairingOffer,
-    PairingPair, Revised, SessionHello, SessionPing, SessionSync, Shown, Snapshot, TaskArchive, TaskCreate,
-    TaskCreated, TaskFocus, TaskGet, TaskMove, TaskRename, TaskSetSession, TermClaim, TermClose, TermOpen, TermResize,
-    TermSend, TermTakeLock, Welcome, WorkspaceAdd, WorkspaceCreated, WorkspaceList, WorkspaceRemove, WorkspaceRename,
-    WorkspaceSetColor, Workspaces, Written,
+    AgentReport, BrowserClose, BrowserMove, BrowserOpen, BrowserReport, Clients, Done, Entries, FileCopy, FileCreate,
+    FileDelete, FileList, FileMove, FileSearch, FileWrite, HarnessSet, Matches, Offer, Opened, Paired, PairedClient,
+    PairingForget, PairingList, PairingOffer, PairingPair, Revised, SessionHello, SessionPing, SessionSync, Shown,
+    Snapshot, TaskArchive, TaskCreate, TaskCreated, TaskFocus, TaskGet, TaskMove, TaskRename, TaskSetParent,
+    TaskSetSession, TermClaim, TermClose, TermOpen, TermResize, TermSend, TermTakeLock, Welcome, WorkspaceAdd,
+    WorkspaceCreated, WorkspaceList, WorkspaceRemove, WorkspaceRename, WorkspaceSetColor, Workspaces, Written,
 };
 use octopus_proto::pairing::{Invite, Side};
 use octopus_proto::remote::{self, Endpoint, RelayUrl};
@@ -151,6 +151,10 @@ fn directory(root: &str) -> Result<String, Error> {
 }
 
 impl State {
+    fn browsers_of(&self, task: &TaskId) -> &[BrowserPanel] {
+        self.browsers.get(task).map(Vec::as_slice).unwrap_or_default()
+    }
+
     /// Ends the task's agent terminal and drops its scrollback.
     fn forget_agent(&mut self, task: &TaskId) {
         if let Some(AgentSlot::Spawned { terminal, .. }) = self.agents.remove(task)
@@ -271,7 +275,7 @@ impl State {
             rev: row.rev,
             agent,
             panels: self.panels(&row.id),
-            browsers: self.browsers.get(&row.id).cloned().unwrap_or_default(),
+            browsers: self.browsers_of(&row.id).to_vec(),
         }
     }
 }
@@ -438,6 +442,7 @@ impl Server {
             AgentReport::NAME => call::<AgentReport>(args, |op| self.agent_report(op)),
             TaskCreate::NAME => call::<TaskCreate>(args, |op| self.task_create(op)),
             TaskMove::NAME => call::<TaskMove>(args, |op| self.task_move(op)),
+            TaskSetParent::NAME => call::<TaskSetParent>(args, |op| self.task_set_parent(op)),
             TaskRename::NAME => call::<TaskRename>(args, |op| self.task_rename(op)),
             TaskSetSession::NAME => call::<TaskSetSession>(args, |op| self.task_set_session(op)),
             TaskArchive::NAME => call::<TaskArchive>(args, |op| self.task_archive(op)),
@@ -471,6 +476,9 @@ impl Server {
                 files::delete(&self.checkout_dir(&op.task)?, &op.path, op.trash).map(|()| Done {})
             }),
             BrowserOpen::NAME => call::<BrowserOpen>(args, |op| self.browser_open(op)),
+            BrowserReport::NAME => call::<BrowserReport>(args, |op| self.browser_report(op)),
+            BrowserClose::NAME => call::<BrowserClose>(args, |op| self.browser_close(op)),
+            BrowserMove::NAME => call::<BrowserMove>(args, |op| self.browser_move(op)),
             FileSearch::NAME => call::<FileSearch>(args, |op| {
                 Ok(Matches { matches: files::search_literal(&self.checkout_dir(&op.task)?, &op.pattern) })
             }),
@@ -675,6 +683,28 @@ impl Server {
         Ok(Revised { rev })
     }
 
+    fn task_set_parent(&self, op: TaskSetParent) -> Result<Revised, Error> {
+        let mut state = lock(&self.state);
+        let mut row = state.store.task(&op.task)?;
+        if let Some(parent) = &op.parent {
+            let mut above = state.store.task(parent)?;
+            if above.workspace != row.workspace {
+                return Err(Error::conflict(format!("{parent} is in another workspace than {}", row.id)));
+            }
+            loop {
+                if above.id == row.id {
+                    return Err(Error::conflict(format!("{} cannot nest under itself or its own subtask", row.id)));
+                }
+                let Some(next) = &above.parent else { break };
+                above = state.store.task(next)?;
+            }
+        }
+        row.parent = op.parent;
+        let rev = state.store.save_task(&mut row)?;
+        self.publish_task(&state, &row);
+        Ok(Revised { rev })
+    }
+
     fn task_rename(&self, op: TaskRename) -> Result<Revised, Error> {
         nonempty("a task title", &op.title)?;
         let mut state = lock(&self.state);
@@ -735,7 +765,7 @@ impl Server {
         }
         state.forget_agent(&row.id);
         let slot = match started {
-            Some((harness, env)) => self.start_agent(&mut state, &mut row, harness, env)?,
+            Some((harness, env)) => self.start_agent(&mut state, &mut row, harness, op.args, env)?,
             None => AgentSlot::HarnessUnknown,
         };
         let rev = state.store.save_task(&mut row)?;
@@ -750,6 +780,7 @@ impl Server {
         state: &mut State,
         row: &mut TaskRow,
         harness: Harness,
+        focus_args: Vec<String>,
         env: Vec<(String, String)>,
     ) -> Result<AgentSlot, Error> {
         let directory = PathBuf::from(&row.directory);
@@ -765,6 +796,7 @@ impl Server {
         let argv = std::iter::once(program.to_string_lossy().into_owned())
             .chain(args.iter().cloned())
             .chain(harness::args(harness.hooks, &self.octopus))
+            .chain(focus_args)
             .chain(session_args.iter().map(|arg| arg.replace(SESSION, session)))
             .collect();
         let panel = PanelRow { id: PtyId::random(), task: row.id.clone(), name: AGENT_PANEL.to_string() };
@@ -871,16 +903,54 @@ impl Server {
         web_page(&op.url).map_err(Error::invalid)?;
         let mut state = lock(&self.state);
         state.store.task(&op.task)?;
-        let panels = state.browsers.get(&op.task).map(Vec::as_slice).unwrap_or_default();
-        let page = BrowserPanel { panel: browser::panel(panels, op.panel)?, url: op.url };
-        let row = state.store.show_page(&op.task, &page)?;
-        let panels = state.browsers.entry(op.task).or_default();
-        match panels.iter_mut().find(|known| known.panel == page.panel) {
-            Some(known) => known.url = page.url.clone(),
-            None => panels.push(page.clone()),
+        let opened = browser::opened(state.browsers_of(&op.task), op.panel, op.url)?;
+        let panel = opened.panel.clone();
+        let rev = self.save_browser(&mut state, &op.task, opened)?;
+        Ok(Shown { panel, rev })
+    }
+
+    fn browser_report(&self, op: BrowserReport) -> Result<Revised, Error> {
+        web_page(&op.url).map_err(Error::invalid)?;
+        let mut state = lock(&self.state);
+        let known = browser::find(state.browsers_of(&op.task), &op.panel)?;
+        if known.url == op.url && known.title == op.title {
+            return Ok(Revised { rev: state.store.task(&op.task)?.rev });
         }
+        let reported = BrowserPanel { panel: op.panel, url: op.url, title: op.title, load: known.load };
+        Ok(Revised { rev: self.save_browser(&mut state, &op.task, reported)? })
+    }
+
+    fn browser_close(&self, op: BrowserClose) -> Result<Revised, Error> {
+        let mut state = lock(&self.state);
+        browser::find(state.browsers_of(&op.task), &op.panel)?;
+        let row = state.store.close_browser(&op.task, &op.panel)?;
+        state.browsers.entry(op.task).or_default().retain(|known| known.panel != op.panel);
         self.publish_task(&state, &row);
-        Ok(Shown { panel: page.panel, rev: row.rev })
+        Ok(Revised { rev: row.rev })
+    }
+
+    fn browser_move(&self, op: BrowserMove) -> Result<Revised, Error> {
+        let mut state = lock(&self.state);
+        let panels = state.browsers_of(&op.task);
+        let order = browser::moved(panels, &op.panel, op.to)?;
+        if order == panels {
+            return Ok(Revised { rev: state.store.task(&op.task)?.rev });
+        }
+        let row = state.store.order_browsers(&op.task, &order)?;
+        state.browsers.insert(op.task, order);
+        self.publish_task(&state, &row);
+        Ok(Revised { rev: row.rev })
+    }
+
+    fn save_browser(&self, state: &mut State, task: &TaskId, saved: BrowserPanel) -> Result<u64, Error> {
+        let row = state.store.save_browser(task, &saved)?;
+        let panels = state.browsers.entry(task.clone()).or_default();
+        match panels.iter_mut().find(|known| known.panel == saved.panel) {
+            Some(known) => *known = saved,
+            None => panels.push(saved),
+        }
+        self.publish_task(state, &row);
+        Ok(row.rev)
     }
 
     fn checkout_dir(&self, task: &TaskId) -> Result<PathBuf, Error> {

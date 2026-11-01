@@ -80,7 +80,7 @@ impl Listening {
         };
         holder.call(&harness).await.expect("harness.set");
         let id = create(&holder, &workspace, Checkout::Root, "rec").await;
-        holder.call(&TaskFocus { task: id.clone() }).await.expect("focus");
+        holder.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
         let pty = task(&holder, &id).await.panels[0].id.clone();
         let live = holder.open_data_stream(&Stream::Pty(pty.clone())).await.expect("attach");
         let go = TermSend { task: id.clone(), panel: "agent".into(), text: "go".into(), enter: true, take_lock: true };

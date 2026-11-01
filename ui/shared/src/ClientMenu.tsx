@@ -4,7 +4,7 @@ import { commands, hint } from "./commands";
 import { closePopover, dismissible, Head, Item, Sep } from "./Menu";
 import { ServerMenu } from "./SidebarControls";
 import { VERSION } from "./generated";
-import { me, report, servers, setAppearance, showClientMenu, ui, zoom } from "./state";
+import { harnesses, me, report, servers, setAgentFlags, setAppearance, showClientMenu, ui, zoom } from "./state";
 
 export const APPEARANCES: [Appearance, string][] = [
   ["system", "System"],
@@ -31,6 +31,30 @@ function ServerRow(props: { server: ServerView; open: () => void }) {
       <span class="name">{props.server.label}</span>
       <span class="rtt">{props.server.reachable ? `${props.server.rtt_ms ?? "–"} ms` : "unreachable"}</span>
     </button>
+  );
+}
+
+export const NEXT_START = "Applies on each agent's next start.";
+
+/** Enter saves the flags typed, and leaving the field puts the saved ones back. */
+function AgentFlagsField(props: { harness: string }) {
+  const saved = () => ui.prefs.agent_flags[props.harness] ?? "";
+  return (
+    <label class="field">
+      <span>{props.harness}</span>
+      <input
+        class="mono"
+        spellcheck={false}
+        placeholder="none"
+        value={saved()}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter") return;
+          const input = event.currentTarget;
+          setAgentFlags(props.harness, input.value).then(() => input.blur(), report);
+        }}
+        onBlur={(event) => (event.currentTarget.value = saved())}
+      />
+    </label>
   );
 }
 
@@ -94,6 +118,14 @@ export function ClientMenu(props: { floats: (element: HTMLElement) => void; show
                 </button>
               </span>
             </div>
+            <Show when={harnesses().length > 0}>
+              <Sep />
+              <div class="mh label">
+                <span>Agent flags</span>
+              </div>
+              <For each={harnesses()}>{(harness) => <AgentFlagsField harness={harness} />}</For>
+              <div class="mh label">{NEXT_START}</div>
+            </Show>
             <Sep />
             <Item kbd={hint(commands.shortcuts)} run={commands.shortcuts.run}>
               Keyboard shortcuts

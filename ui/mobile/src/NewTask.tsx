@@ -1,7 +1,7 @@
 import { createSignal, For, Show } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import { CHECKOUTS, TASK_STATES, type Checkout, type TaskState, type WorkspaceRef } from "@octopus/shared/generated.ts";
-import { model, openView, report, serverLabel, serverView } from "@octopus/shared/state.ts";
+import { model, openView, report, serverLabel, serverView, workspaces } from "@octopus/shared/state.ts";
 import { keepInView } from "@octopus/shared/keepInView.ts";
 import { feel } from "./feel";
 import { Icon } from "./Icon";
@@ -17,7 +17,6 @@ const workspaceKey = (workspace: WorkspaceRef) => `${workspace.server}/${workspa
  */
 export function NewTask(props: { section: string | null }) {
   const current = openView();
-  const workspaces = () => model.lists.workspaces;
   const initial = workspaces().find((workspace) =>
     props.section === null
       ? workspace.server === current?.at.server && workspace.name === current.section

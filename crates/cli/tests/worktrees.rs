@@ -6,11 +6,11 @@ use std::process::Command;
 use common::{connect, create, start, task, workspace};
 use octopus_client::CallError;
 use octopus_proto::ops::{
-    SessionSync, TaskArchive, TaskCreate, TaskMove, TaskRename, WorkspaceAdd, WorkspaceList, WorkspaceRemove,
-    WorkspaceRename, WorkspaceSetColor,
+    SessionSync, TaskArchive, TaskCreate, TaskMove, TaskRename, TaskSetParent, WorkspaceAdd, WorkspaceList,
+    WorkspaceRemove, WorkspaceRename, WorkspaceSetColor,
 };
-use octopus_proto::types::{Checkout, Color, Hue, Swatch, TaskState, Tone};
-use octopus_proto::{Error, Op, Outcome};
+use octopus_proto::types::{Checkout, Color, Hue, Swatch, TaskId, TaskState, Tone, WorkspaceId};
+use octopus_proto::{Error, Event, Op, Outcome};
 use octopus_server::WORKTREE_LIFETIME_MS;
 use serde_json::json;
 
@@ -137,4 +137,54 @@ async fn only_an_ended_task_archives_and_a_move_unarchives_it() {
     assert!(task(&laptop, &id).await.archived_at.is_some());
     laptop.call(&TaskMove { task: id.clone(), state: TaskState::Cancelled }).await.expect("cancel");
     assert_eq!(task(&laptop, &id).await.archived_at, None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_task_nests_under_another_task_of_its_workspace_outside_its_own_subtree() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
+    let laptop = connect(&running, "laptop").await;
+    let desk = connect(&running, "desk").await;
+    let octopus = workspace(&laptop, dir.path()).await;
+    let elsewhere_root = dir.path().join("dotfiles");
+    std::fs::create_dir(&elsewhere_root).expect("mkdir dotfiles");
+    let dotfiles =
+        WorkspaceAdd { name: "dotfiles".into(), root: elsewhere_root.to_string_lossy().into(), color: Color::Auto };
+    let dotfiles = laptop.call(&dotfiles).await.expect("workspace.add").workspace;
+    let make = async |workspace: &WorkspaceId, parent: Option<&TaskId>, state| {
+        let create = TaskCreate {
+            workspace: workspace.clone(),
+            title: "t".into(),
+            parent: parent.cloned(),
+            state,
+            checkout: Checkout::Root,
+            harness: "none".into(),
+            session: None,
+        };
+        laptop.call(&create).await.expect("task.create").task
+    };
+    let root = make(&octopus, None, TaskState::Pinned).await;
+    let child = make(&octopus, Some(&root), TaskState::Temporary).await;
+    let grandchild = make(&octopus, Some(&child), TaskState::Pinned).await;
+    let other = make(&octopus, None, TaskState::Completed).await;
+    let elsewhere = make(&dotfiles, None, TaskState::Pinned).await;
+    let set = |task: &TaskId, parent: Option<&TaskId>| TaskSetParent { task: task.clone(), parent: parent.cloned() };
+
+    for (task, parent) in [(&root, &root), (&root, &grandchild), (&child, &elsewhere)] {
+        assert!(matches!(refused(laptop.call(&set(task, Some(parent))).await), Error::Conflict { .. }));
+    }
+    let missing = TaskId("tsk_missing".into());
+    assert!(matches!(refused(laptop.call(&set(&root, Some(&missing))).await), Error::NotFound { .. }));
+    assert!(matches!(refused(laptop.call(&set(&missing, None)).await), Error::NotFound { .. }));
+
+    let mut pushes = desk.pushes();
+    let rev = laptop.call(&set(&child, Some(&other))).await.expect("task.set_parent").rev;
+    let moved = task(&laptop, &child).await;
+    assert_eq!((moved.parent.as_ref(), moved.state, moved.rev), (Some(&other), TaskState::Temporary, rev));
+    assert_eq!(task(&laptop, &grandchild).await.parent.as_ref(), Some(&child));
+    let push = pushes.recv().await.expect("push");
+    assert!(matches!(&push.event, Event::TaskUpdated { task } if task.id == child && push.rev == rev), "{push:?}");
+
+    laptop.call(&set(&child, None)).await.expect("task.set_parent");
+    assert_eq!(task(&laptop, &child).await.parent, None);
 }

@@ -54,7 +54,7 @@ mod tests {
 
     #[test]
     fn an_undeclared_field_is_rejected() {
-        let error = parse_args::<ops::TaskFocus>(&json!({"task": "tsk_1", "force": true})).unwrap_err();
+        let error = parse_args::<ops::TaskFocus>(&json!({"task": "tsk_1", "args": [], "force": true})).unwrap_err();
         assert_eq!(error, Error::UnknownField { fields: vec!["force".into()] });
     }
 

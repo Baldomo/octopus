@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS browsers (
     task TEXT NOT NULL REFERENCES tasks(id),
     panel TEXT NOT NULL,
     url TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    load INTEGER NOT NULL DEFAULT 1,
+    place INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (task, panel)
 );
 CREATE TABLE IF NOT EXISTS device (id INTEGER PRIMARY KEY CHECK (id = 0), pkcs8 BLOB NOT NULL);
@@ -55,6 +58,9 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("harnesses", "start", "TEXT NOT NULL DEFAULT '[]'"),
     ("harnesses", "resume", "TEXT NOT NULL DEFAULT '[]'"),
     ("workspaces", "color", "TEXT NOT NULL DEFAULT 'auto'"),
+    ("browsers", "title", "TEXT NOT NULL DEFAULT ''"),
+    ("browsers", "load", "INTEGER NOT NULL DEFAULT 1"),
+    ("browsers", "place", "INTEGER NOT NULL DEFAULT 0"),
 ];
 
 /// Columns a store from an earlier build holds and this build drops on its first open.
@@ -108,6 +114,16 @@ fn bump_rev(tx: &Transaction) -> Result<u64, Error> {
     tx.query_row("UPDATE meta SET value = value + 1 WHERE key = 'rev' RETURNING value", [], |row| row.get::<_, i64>(0))
         .map(i64::cast_unsigned)
         .map_err(Error::internal)
+}
+
+/// Moves the task to a new rev and commits.
+fn revise_task(tx: Transaction, task: &TaskId) -> Result<TaskRow, Error> {
+    let rev = bump_rev(&tx)?;
+    let row = tx
+        .query_row("UPDATE tasks SET rev = ?2 WHERE id = ?1 RETURNING *", params![task.0, rev.cast_signed()], task_row)
+        .map_err(Error::internal)?;
+    tx.commit().map_err(Error::internal)?;
+    Ok(row)
 }
 
 fn wire_column<T: DeserializeOwned>(row: &Row, column: &str) -> rusqlite::Result<T> {
@@ -531,7 +547,7 @@ impl Store {
         let tx = self.db.transaction().map_err(Error::internal)?;
         row.rev = bump_rev(&tx)?;
         tx.execute(
-            "UPDATE tasks SET title = ?2, state = ?3, session = ?4, ended_at = ?5, archived_at = ?6, rev = ?7
+            "UPDATE tasks SET title = ?2, state = ?3, session = ?4, ended_at = ?5, archived_at = ?6, rev = ?7, parent = ?8
              WHERE id = ?1",
             params![
                 row.id.0,
@@ -540,7 +556,8 @@ impl Store {
                 row.session.as_ref().map(|session| &session.0),
                 row.ended_at,
                 row.archived_at,
-                row.rev.cast_signed()
+                row.rev.cast_signed(),
+                row.parent.as_ref().map(|parent| &parent.0)
             ],
         )
         .map_err(Error::internal)?;
@@ -565,13 +582,21 @@ impl Store {
         Ok(row)
     }
 
-    /// Every task's browser panels, each task's in the order they opened.
+    /// Every task's browser panels, each task's in its order.
     pub fn browsers(&self) -> Result<HashMap<TaskId, Vec<BrowserPanel>>, Error> {
-        let mut statement =
-            self.db.prepare("SELECT task, panel, url FROM browsers ORDER BY rowid").map_err(Error::internal)?;
+        let mut statement = self
+            .db
+            .prepare("SELECT task, panel, url, title, load FROM browsers ORDER BY place, rowid")
+            .map_err(Error::internal)?;
         let rows = statement
             .query_map([], |row| {
-                Ok((TaskId(row.get(0)?), BrowserPanel { panel: BrowserId(row.get(1)?), url: row.get(2)? }))
+                let panel = BrowserPanel {
+                    panel: BrowserId(row.get(1)?),
+                    url: row.get(2)?,
+                    title: row.get(3)?,
+                    load: row.get::<_, i64>(4)?.cast_unsigned(),
+                };
+                Ok((TaskId(row.get(0)?), panel))
             })
             .map_err(Error::internal)?;
         let mut browsers: HashMap<TaskId, Vec<BrowserPanel>> = HashMap::new();
@@ -582,25 +607,38 @@ impl Store {
         Ok(browsers)
     }
 
-    /// Points the task's browser panel at `url`, adding the panel if it is new, and moves the task to a new rev.
-    pub fn show_page(&mut self, task: &TaskId, page: &BrowserPanel) -> Result<TaskRow, Error> {
+    /// Saves the task's browser panel, adding a new one after the task's others, and moves the task to a new rev.
+    pub fn save_browser(&mut self, task: &TaskId, browser: &BrowserPanel) -> Result<TaskRow, Error> {
         let tx = self.db.transaction().map_err(Error::internal)?;
         tx.execute(
-            "INSERT INTO browsers (task, panel, url) VALUES (?1, ?2, ?3)
-             ON CONFLICT(task, panel) DO UPDATE SET url = excluded.url",
-            params![task.0, page.panel.0, page.url],
+            "INSERT INTO browsers (task, panel, url, title, load, place)
+             VALUES (?1, ?2, ?3, ?4, ?5, (SELECT COALESCE(MAX(place) + 1, 0) FROM browsers WHERE task = ?1))
+             ON CONFLICT(task, panel) DO UPDATE SET url = excluded.url, title = excluded.title, load = excluded.load",
+            params![task.0, browser.panel.0, browser.url, browser.title, browser.load.cast_signed()],
         )
         .map_err(Error::internal)?;
-        let rev = bump_rev(&tx)?;
-        let row = tx
-            .query_row(
-                "UPDATE tasks SET rev = ?2 WHERE id = ?1 RETURNING *",
-                params![task.0, rev.cast_signed()],
-                task_row,
+        revise_task(tx, task)
+    }
+
+    /// Puts the task's browser panels in the order of `panels`, and moves the task to a new rev.
+    pub fn order_browsers(&mut self, task: &TaskId, panels: &[BrowserPanel]) -> Result<TaskRow, Error> {
+        let tx = self.db.transaction().map_err(Error::internal)?;
+        for (place, browser) in (0_i64..).zip(panels) {
+            tx.execute(
+                "UPDATE browsers SET place = ?3 WHERE task = ?1 AND panel = ?2",
+                params![task.0, browser.panel.0, place],
             )
             .map_err(Error::internal)?;
-        tx.commit().map_err(Error::internal)?;
-        Ok(row)
+        }
+        revise_task(tx, task)
+    }
+
+    /// Removes the task's browser panel and moves the task to a new rev.
+    pub fn close_browser(&mut self, task: &TaskId, panel: &BrowserId) -> Result<TaskRow, Error> {
+        let tx = self.db.transaction().map_err(Error::internal)?;
+        tx.execute("DELETE FROM browsers WHERE task = ?1 AND panel = ?2", params![task.0, panel.0])
+            .map_err(Error::internal)?;
+        revise_task(tx, task)
     }
 
     /// An agent panel replaces the task's previous one; a shell panel joins the end of the task's list.
@@ -682,6 +720,38 @@ mod tests {
         );
         let agent = PanelRow { id: PtyId("pty_1".into()), task: TaskId("tsk_1".into()), name: AGENT_PANEL.into() };
         assert_eq!(store.reattach(&HashSet::from([agent.id.clone()])).expect("reattach"), [agent]);
+    }
+
+    #[test]
+    fn a_task_keeps_its_browser_panels_in_the_order_they_moved_to_and_a_new_one_joins_the_end() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("store.db");
+        let mut store = Store::open(&path).expect("a fresh store");
+        let (workspace, _) = store.add_workspace("w", "/w", Color::Auto).expect("a workspace");
+        store
+            .db
+            .execute(
+                "INSERT INTO tasks (id, workspace, title, state, checkout, harness, directory, rev)
+                 VALUES ('tsk_1', ?1, 't', 'pinned', 'root', 'h', '/w', 1)",
+                [workspace.id.0],
+            )
+            .expect("a task");
+        let task = TaskId("tsk_1".into());
+        let panel = |id: &str| BrowserPanel {
+            panel: BrowserId(id.into()),
+            url: format!("http://localhost/{id}"),
+            title: String::new(),
+            load: 1,
+        };
+        for id in ["a", "b", "c"] {
+            store.save_browser(&task, &panel(id)).expect("save");
+        }
+        store.order_browsers(&task, &[panel("c"), panel("a"), panel("b")]).expect("order");
+        store.save_browser(&task, &panel("a")).expect("save again");
+        store.save_browser(&task, &panel("d")).expect("save a new one");
+        drop(store);
+        let browsers = Store::open(&path).expect("reopen").browsers().expect("browsers");
+        assert_eq!(browsers[&task], [panel("c"), panel("a"), panel("b"), panel("d")]);
     }
 
     #[test]

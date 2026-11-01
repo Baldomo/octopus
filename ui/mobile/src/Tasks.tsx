@@ -1,12 +1,25 @@
 import { For, Show } from "solid-js";
 import type { Column, Row, Section } from "@octopus/shared/generated.ts";
-import { isOpen, model, report, scale, servers, toggleCollapsed, ui } from "@octopus/shared/state.ts";
+import { isOpen, report, scale, sections, servers, toggleCollapsed, ui } from "@octopus/shared/state.ts";
 import { backend } from "@octopus/shared/backend.ts";
 import { dropHint } from "@octopus/shared/drop.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { Icon } from "./Icon";
 import { animateList } from "@octopus/shared/flip.ts";
-import { dropTarget, isAway, isLanding, isLifted, lift, liftsIn, type Point } from "@octopus/shared/lift.ts";
+import {
+  dropTarget,
+  isAway,
+  isLanding,
+  isLifted,
+  isNesting,
+  isSectionFolded,
+  isSectionLifted,
+  lift,
+  liftSection,
+  liftsIn,
+  type Point,
+  type Start,
+} from "@octopus/shared/lift.ts";
 import { feel } from "./feel";
 import { go, openSheet, openTask } from "./nav";
 import { Circle, Glyph, Id, ServerDot, Slot } from "./parts";
@@ -17,20 +30,13 @@ const ITEMS = ".sech, .gl, .row, .empty, .addws";
 
 export const refreshServers = () => backend.serversRefresh().catch(report);
 
-/** Lifts a top-level task's row on Tasks or its card on a board, its ghost on the screen's content. */
-export const liftOnPhone = (row: Row, section: string) => (element: HTMLElement, from: Point) => {
+/** Lifts a row through `start` with its ghost on the screen's content, over the list of Tasks or a board's cards. */
+export const liftOnPhone = (start: Start) => (element: HTMLElement, from: Point) => {
   const stage = element.closest<HTMLElement>(".content");
   const list = element.closest<HTMLElement>(".list, .cards");
-  if (row.depth > 0 || stage === null || list === null) return null;
-  return lift(row, section, element, from, {
-    stage,
-    list,
-    free: list.classList.contains("cards"),
-    throws: true,
-    covered: () => false,
-    zoom: scale(ui.prefs),
-    feel,
-  });
+  if (stage === null || list === null) return null;
+  const free = list.classList.contains("cards");
+  return start(element, from, { stage, list, free, throws: true, covered: () => false, zoom: scale(ui.prefs), feel });
 };
 
 function TaskRow(props: { row: Row; section: string; group: Column }) {
@@ -43,12 +49,13 @@ function TaskRow(props: { row: Row; section: string; group: Column }) {
         lifting: isLifted(props.row.key),
         away: isAway(props.row.key),
         landing: isLanding(props.row.key),
+        nest: isNesting(props.row.key),
       }}
       style={{ "--d": props.row.depth }}
       {...pressed(
         () => openTask(props.row.key, props.row.at),
         () => openSheet({ is: "task", key: props.row.key, open: null }),
-        liftOnPhone(props.row, props.section),
+        liftOnPhone(lift(props.row, props.section)),
       )}
     >
       <Slot>
@@ -85,21 +92,24 @@ function Group(props: { section: string; group: Column }) {
 }
 
 function SectionRows(props: { section: Section }) {
-  const closed = () => ui.prefs.collapsed.includes(props.section.name);
+  const closed = () => ui.prefs.collapsed.includes(props.section.name) || isSectionFolded(props.section.name);
   const groups = () => props.section.groups.filter((group) => group.rows.length > 0 || liftsIn(props.section.name));
   const empty = () => !closed() && groups().length === 0;
   return (
     <div
       class="sec"
-      classList={{ closed: closed(), void: empty() }}
+      classList={{ closed: closed() }}
+      data-section={props.section.name}
       style={{ "--ws": swatchColor(props.section.swatch) }}
     >
       <div
         class="sech"
+        classList={{ lifting: isSectionLifted(props.section.name) }}
         data-key={`section/${props.section.name}`}
         {...pressed(
           () => {},
           () => openSheet({ is: "section", name: props.section.name }),
+          liftOnPhone(liftSection(props.section.name)),
         )}
       >
         <span
@@ -136,6 +146,9 @@ function SectionRows(props: { section: Section }) {
         </span>
       </div>
       <Show when={!closed()}>
+        <Show when={groups().length > 0}>
+          <div class="thread" />
+        </Show>
         <For each={groups()}>{(group) => <Group section={props.section.name} group={group} />}</For>
         <Show when={empty()}>
           <div class="empty" data-key={`${props.section.name}/none`}>
@@ -177,11 +190,11 @@ export function Tasks() {
       <div
         class="list"
         ref={(list) => {
-          animateList(ITEMS)(list);
+          animateList(ITEMS, { stretch: ".thread" })(list);
           pullToRefresh(refreshServers)(list);
         }}
       >
-        <For each={model.lists.sections}>{(section) => <SectionRows section={section} />}</For>
+        <For each={sections()}>{(section) => <SectionRows section={section} />}</For>
         <div class="addws" role="button" onClick={() => openSheet({ is: "addws" })}>
           <Slot>
             <Icon name="plus" />

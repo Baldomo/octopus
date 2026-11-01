@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import { Board } from "./Board";
-import { desktop } from "./backend";
+import { desktop, desktopEvents } from "./backend";
 import { Browser, forgetBrowsersExcept, openLink } from "./Browser";
 import { ClientMenu } from "@octopus/shared/ClientMenu.tsx";
 import { Files } from "@octopus/shared/Files.tsx";
@@ -12,14 +12,16 @@ import { PairServer } from "@octopus/shared/PairServer.tsx";
 import { Palette } from "@octopus/shared/Palette.tsx";
 import { Shortcuts } from "@octopus/shared/Shortcuts.tsx";
 import { Sidebar } from "./Sidebar";
-import { holdsKeyboard, Toast, toasting } from "@octopus/shared/SidebarControls.tsx";
-import { act, model, openView, serverView, showModal, showSidebar, ui } from "@octopus/shared/state.ts";
+import { holdsKeyboard, Toast, toast, toasting } from "@octopus/shared/SidebarControls.tsx";
+import { act, model, openView, report, serverView, showModal, showSidebar, ui } from "@octopus/shared/state.ts";
 import { floatSurface, floatTop, sinkSurface } from "./layer";
+import { liftOnDrag } from "./lift";
 import { StatusBar } from "./StatusBar";
 import { TaskSplit } from "./TaskSplit";
 import { TerminalStacks } from "@octopus/shared/Terminals.tsx";
 import { TitleBar } from "./TitleBar";
 import type { Bounds, Modal as ModalName } from "@octopus/shared/generated.ts";
+import type { Hovered } from "./generated";
 
 /** This webview's own size, unrounded, which grows only once the app has placed it and its renderer has taken the new size. */
 const viewport = visualViewport!;
@@ -101,15 +103,8 @@ function floating(surface: { name: string; modal: () => boolean; out: () => bool
 
 /** The base layer: docked UI takes the window's layout space, and each browser page sits in the rect it leaves. */
 export function Docked() {
-  createEffect(
-    on(
-      () => [...ui.recent],
-      (keys) => {
-        forgetFilesExcept(keys);
-        forgetBrowsersExcept(keys);
-      },
-    ),
-  );
+  createEffect(on(() => [...ui.recent], forgetFilesExcept));
+  createEffect(() => forgetBrowsersExcept([...ui.recent]));
   /** The open task is focused whenever it is in the Task view with its server reachable, so a restart refocuses it. */
   const shownInTaskView = createMemo(() => {
     const shown = ui.prefs.view === "task" ? openView() : undefined;
@@ -140,7 +135,7 @@ export function Docked() {
         shown={ui.prefs.view === "task"}
         surface={
           <div class="pane">
-            <div class="tabs">
+            <div class="tabs switch">
               <button class="tab" classList={{ on: ui.prefs.surface === "files" }} onClick={commands.files.run}>
                 Files<kbd>{hint(commands.files)}</kbd>
               </button>
@@ -152,6 +147,7 @@ export function Docked() {
               <div class="surface" style={{ display: ui.prefs.surface === "files" ? "" : "none" }}>
                 <Files
                   visible={ui.prefs.view === "task" && ui.prefs.surface === "files"}
+                  drag={liftOnDrag}
                   outside={(task, path, how) => desktop.fileOutside(task.at, path, how)}
                 />
               </div>
@@ -176,6 +172,29 @@ export function Docked() {
 function FloatingToast() {
   const toast = floating({ name: "toast", modal: () => false, out: toasting });
   return <Toast ref={(element) => toast.ref(element, null)} />;
+}
+
+/** The link under the pointer shows at the page's bottom-left corner, over the page, at most half its width. */
+function PageStatus() {
+  const [hovered, setHovered] = createSignal<Hovered | null>(null);
+  const status = floating({ name: "page_status", modal: () => false, out: () => hovered() !== null });
+  const unlisten = desktopEvents.browserHovered(setHovered);
+  onCleanup(() => unlisten.then((stop) => stop(), report));
+  const page = () => hovered()?.page;
+  return (
+    <div
+      ref={(element) => status.ref(element, null)}
+      class="page-status"
+      classList={{ on: status.shown() }}
+      style={{
+        left: `${page()?.x ?? 0}px`,
+        top: `${(page()?.y ?? 0) + (page()?.height ?? 0)}px`,
+        width: `${(page()?.width ?? 0) / 2}px`,
+      }}
+    >
+      <span>{hovered()?.link}</span>
+    </div>
+  );
 }
 
 function FloatingClientMenu() {
@@ -214,8 +233,20 @@ function Modal(props: { modal: ModalName }) {
  */
 export function Floating() {
   const sidebar = floating({ name: "sidebar", modal: holdsKeyboard, out: () => ui.sidebar });
+  const unlisten = desktopEvents.browserDownloaded(({ path, success }) => {
+    const [folder, name] = [path.slice(0, path.lastIndexOf("/")), path.slice(path.lastIndexOf("/") + 1)];
+    if (success)
+      toast(
+        <>
+          Downloaded {name} to {folder}
+        </>,
+      );
+    else report(`The download of ${name} failed`);
+  });
+  onCleanup(() => unlisten.then((stop) => stop(), report));
   return (
     <div class="float-layer" style={{ width: `${ui.viewport.width}px`, height: `${ui.viewport.height}px` }}>
+      <PageStatus />
       <Sidebar floats={sidebar.ref} shown={sidebar.shown()} />
       <Show when={!ui.sidebar}>
         <FloatingToast />

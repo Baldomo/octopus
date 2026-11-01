@@ -30,7 +30,19 @@ export type Panel = { id: PtyId, name: string, running: boolean, lock_holder: st
  */
 listening: boolean, };
 
-export type BrowserPanel = { panel: BrowserId, url: string, };
+export type BrowserPanel = { panel: BrowserId, 
+/**
+ * The page the panel last showed on any client.
+ */
+url: string, 
+/**
+ * That page's title, empty until a client reports one.
+ */
+title: string, 
+/**
+ * How many times `browser.open` has shown a page in the panel; each client loads `url` whenever it moves.
+ */
+load: number, };
 
 export type Task = { id: TaskId, workspace: WorkspaceId, parent: TaskId | null, title: string, state: TaskState, checkout: Checkout, harness: string, session: SessionId | null, directory: string, branch: string | null, ended_at: number | null, archived_at: number | null, rev: number, agent: Agent, panels: Array<Panel>, browsers: Array<BrowserPanel>, };
 
@@ -156,7 +168,13 @@ export type Zoom = number;
 
 export type ZoomStep = "in" | "out" | "reset";
 
-export type Prefs = { pinned: boolean, collapsed: Array<string>, surface: Surface, split: Split, view: View, 
+export type AgentFlags = string;
+
+export type Prefs = { pinned: boolean, collapsed: Array<string>, 
+/**
+ * The sections by name in the order the user dragged them to.
+ */
+section_order: Array<string>, surface: Surface, split: Split, view: View, 
 /**
  * The open task's key.
  */
@@ -164,7 +182,11 @@ open: string | null,
 /**
  * The section the Tasks board shows.
  */
-board: string | null, appearance: Appearance, zoom: Zoom, };
+board: string | null, appearance: Appearance, zoom: Zoom, 
+/**
+ * The flags each harness's agents start with when this client starts them, by harness id.
+ */
+agent_flags: { [key in string]: AgentFlags }, };
 
 export type Reveal = { 
 /**
@@ -194,7 +216,7 @@ viewport: Viewport,
  */
 float_input: Array<Bounds>, };
 
-export type UiAct = { "do": "open_task", key: string, } | { "do": "show_view", view: View, } | { "do": "show_board", section: string, } | { "do": "show_surface", surface: Surface, } | { "do": "set_split", split: Split, } | { "do": "reset_split" } | { "do": "toggle_pin" } | { "do": "toggle_collapsed", section: string, } | { "do": "show_sidebar", shown: boolean, } | { "do": "toggle_sidebar" } | { "do": "show_client_menu", shown: boolean, } | { "do": "toggle_client_menu" } | { "do": "set_appearance", appearance: Appearance, } | { "do": "zoom", step: ZoomStep, } | { "do": "show_modal", modal: Modal | null, } | { "do": "float", surface: string, at: Floated, modal: boolean, } | { "do": "sink", surface: string, } | { "do": "reveal", task: string, path: string, } | { "do": "report", problem: string, };
+export type UiAct = { "do": "open_task", key: string, } | { "do": "show_view", view: View, } | { "do": "show_board", section: string, } | { "do": "show_surface", surface: Surface, } | { "do": "set_split", split: Split, } | { "do": "reset_split" } | { "do": "toggle_pin" } | { "do": "toggle_collapsed", section: string, } | { "do": "order_sections", sections: Array<string>, } | { "do": "show_sidebar", shown: boolean, } | { "do": "toggle_sidebar" } | { "do": "show_client_menu", shown: boolean, } | { "do": "toggle_client_menu" } | { "do": "set_appearance", appearance: Appearance, } | { "do": "zoom", step: ZoomStep, } | { "do": "set_agent_flags", harness: string, flags: AgentFlags, } | { "do": "show_modal", modal: Modal | null, } | { "do": "float", surface: string, at: Floated, modal: boolean, } | { "do": "sink", surface: string, } | { "do": "reveal", task: string, path: string, } | { "do": "report", problem: string, };
 
 export type Viewport = { width: number, height: number, };
 
@@ -229,6 +251,8 @@ export const ZOOMS = [80,90,100,110,125,150] as const;
 export const AGENT_PANEL = "agent" as const;
 
 export const NEW_BROWSER_PANEL = "new" as const;
+
+export const BACKGROUND_BROWSER_PANEL = "background" as const;
 
 export const TERM_HISTORY_LINES = 10000 as const;
 

@@ -1,13 +1,10 @@
-import type { Bounds, Row } from "@octopus/shared/generated.ts";
-import { lift, type Lift, type Point } from "@octopus/shared/lift.ts";
+import type { Bounds } from "@octopus/shared/generated.ts";
+import type { Lift, LiftOnDrag, Point } from "@octopus/shared/lift.ts";
 import { ui } from "@octopus/shared/state.ts";
 import { layer } from "./layer";
 
-/** Pointer travel that turns a press on a task into a lift, so a press that stays put is a click. */
+/** Pointer travel that turns a press into a lift, so a press that stays put is a click. */
 const LIFT_PX = 4;
-
-/** The ancestors of a task's row that it lifts within: the ghost's still `stage` and the scrolling `list`. */
-export type Within = { stage: string; list: string; free: boolean };
 
 /** A point where the float layer takes the pointer shows the float layer's UI, whatever the base layer has beneath it. */
 const covered =
@@ -19,19 +16,19 @@ const covered =
     : () => false;
 
 /**
- * Pressing a top-level task and moving the pointer lifts it, and letting go drops it where the pointer is. Escape,
- * or the pointer or the window lost mid-drag, flies it home. The desktop zooms natively, so the layout's pixels are
- * the screen's.
+ * Pressing an element and moving the pointer lifts it through `start` within its `within` ancestors, and letting go
+ * drops it where the pointer is. Escape, or the pointer or the window lost mid-drag, flies it home. A press in a text
+ * field stays the field's. The desktop zooms natively, so the layout's pixels are the screen's.
  */
-export const liftOnDrag = (row: Row, section: string, within: Within) => ({
-  onPointerDown: (down: PointerEvent & { currentTarget: HTMLElement }) => {
-    if (down.button !== 0 || row.depth > 0) return;
+export const liftOnDrag: LiftOnDrag = (within, start) => ({
+  onPointerDown: (down) => {
+    if (down.button !== 0 || (down.target instanceof Element && down.target.closest("input"))) return;
     const element = down.currentTarget;
     const stage = element.closest<HTMLElement>(within.stage);
     const list = element.closest<HTMLElement>(within.list);
     if (stage === null || list === null) return;
-    const from = { x: down.clientX, y: down.clientY };
     const surface = { stage, list, free: within.free, throws: false, covered, zoom: 1, feel: () => {} };
+    const from = { x: down.clientX, y: down.clientY };
     let lifted: Lift | null = null;
     let cancelled = false;
     const press = new AbortController();
@@ -41,7 +38,7 @@ export const liftOnDrag = (row: Row, section: string, within: Within) => ({
       (event) => {
         const to = { x: event.clientX, y: event.clientY };
         if (cancelled || (lifted === null && Math.hypot(to.x - from.x, to.y - from.y) < LIFT_PX)) return;
-        lifted ??= lift(row, section, element, from, surface);
+        lifted ??= start(element, from, surface);
         lifted.move(to);
       },
       listen,

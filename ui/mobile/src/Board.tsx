@@ -6,7 +6,7 @@ import { keepInView } from "@octopus/shared/keepInView.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
 import { animateList } from "@octopus/shared/flip.ts";
-import { dropTarget, isAway, isLanding, isLifted } from "@octopus/shared/lift.ts";
+import { dropTarget, isAway, isLanding, isLifted, isNesting, lift } from "@octopus/shared/lift.ts";
 import { animate, FADE, give, play, PROJECT_S, reduced, type Running } from "@octopus/shared/motion.ts";
 import { PUSH } from "./motion";
 import { back, openSheet, openTask, screen } from "./nav";
@@ -30,13 +30,14 @@ function Card(props: { row: Row; section: string; column: Column }) {
         lifting: isLifted(props.row.key),
         away: isAway(props.row.key),
         landing: isLanding(props.row.key),
+        nest: isNesting(props.row.key),
       }}
       data-key={props.row.key}
       style={{ "--d": props.row.depth }}
       {...pressed(
         () => openTask(props.row.key, props.row.at),
         () => openSheet({ is: "task", key: props.row.key, open: null }),
-        liftOnPhone(props.row, props.section),
+        liftOnPhone(lift(props.row, props.section)),
       )}
     >
       <Slot>
