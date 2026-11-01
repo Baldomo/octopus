@@ -6,7 +6,7 @@ import inter from "@fontsource-variable/inter/files/inter-latin-wght-normal.woff
 import { loadFonts } from "@octopus/shared/fonts.ts";
 import { applyBoot, applyModel, applyUi, report, setServers } from "@octopus/shared/state.ts";
 import { applyFilesChanged } from "@octopus/shared/taskFiles.ts";
-import { setWindowShown } from "@octopus/shared/terminalSession.ts";
+import { setWindowShown, windowFocused } from "@octopus/shared/terminalSession.ts";
 import { bindKeys } from "./keys";
 import { layer } from "./layer";
 import { Docked, Floating } from "./layers";
@@ -21,6 +21,7 @@ async function start() {
     events.ui(applyUi),
     events.filesChanged(applyFilesChanged),
     events.windowShown(setWindowShown),
+    events.windowFocused(windowFocused),
   ]);
   applyBoot(await backend.boot());
   render(() => (layer === "float" ? <Floating /> : <Docked />), document.body);

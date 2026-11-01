@@ -53,7 +53,7 @@ function targetOf(task: TaskView): Target {
 const openPage = (task: TaskView, url: string) =>
   desktop.browserOpen(task.at, targetOf(task), url).then((panel) => setSelected(task.key, panel), report);
 
-/** A terminal's link opens in the task's browser panel, the left half switching to Browser, or in the system's browser. */
+/** A terminal's link opens in the task's browser panel, the left side switching to Browser, or in the system's browser. */
 export const openLink: OpenLink = (task, url, target) => {
   if (target === "system") act(desktop.openOutside(url));
   else {

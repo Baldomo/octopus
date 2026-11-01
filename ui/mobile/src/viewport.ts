@@ -14,7 +14,7 @@ const readInsets = () =>
     }
   }, report);
 
-/** What sits at the foot of the screen: a task's key bar or lock bar, and a sheet. */
+/** What sits at the foot of the screen: a task's foot, the unreachable row and the dock, and a sheet. */
 const FEET = ".app.shown .foot, .sheet";
 
 /** Where an element's bottom sits in the layout, in its own points, wherever a move in flight draws it. */

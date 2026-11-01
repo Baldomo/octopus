@@ -4,6 +4,7 @@ import "@xterm/xterm/css/xterm.css";
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { backend, Channel } from "./backend";
 import { type Panel, type TaskRef, TERM_SIZE_OSC } from "./generated";
+import { lockClaim } from "./lockClaim";
 import { act, me, report, serverView } from "./state";
 import { colors, px, type Scheme, scheme, token } from "./tokens";
 
@@ -40,9 +41,19 @@ const SCROLLBACK_LINES = 10_000;
 const REATTACH_MS = 500;
 /** A refusal waits this long for the lock's move that caused it to reach the model before it counts as a problem. */
 const LOCK_SETTLES_MS = 500;
+/**
+ * A pane that holds its size this long has settled. A drag or a rotation resizes the PTY once it settles, since every
+ * resize the server takes is published.
+ */
+const PANE_SETTLES_MS = 150;
 
 /** Whether the app shows anything: a hidden window, or a phone app in the background, shows no terminal. */
 export const [windowShown, setWindowShown] = createSignal(true);
+const [windowFocuses, setWindowFocuses] = createSignal(0);
+export const windowFocused = () => setWindowFocuses((count) => count + 1);
+
+export const readOnlyLabel = (panel: Panel) =>
+  panel.lock_holder === null ? "read-only · lock free" : `read-only · held by ${panel.lock_holder}`;
 
 type Cells = { cols: number; rows: number };
 export type Size = { width: number; height: number };
@@ -78,10 +89,11 @@ export type TerminalSession = {
 
 /**
  * A terminal keeps its screen while it stays mounted, and holds a data stream only while it is `shown`, the app shows
- * it, and its server is reachable; the server reads that stream as this client showing the terminal. A shown terminal
- * with a free lock is claimed at the pane's size. The holder sizes the PTY to its pane. The output carries the PTY's
- * size wherever it changes, and every client draws the terminal at the size it reads there, so each byte lands on the
- * screen it was written for.
+ * it, and its server is reachable; the server reads that stream as this client showing the terminal. A look claims a
+ * free lock at the pane's size: the terminal starting to show while its server is reachable, or the window coming into
+ * focus while it shows. A stream reopening for the client that held the lock when the last one ended claims too. The holder sizes the PTY to its pane.
+ * The output carries the PTY's size wherever it changes, and every client draws the terminal at the size it reads
+ * there, so each byte lands on the screen it was written for.
  */
 export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown: () => boolean }): TerminalSession {
   const mine = createMemo(() => props.panel().lock_holder === me());
@@ -113,6 +125,7 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
   let attachment: number | null = null;
   /** Whether the server has this client's stream open, so a claim always reaches it showing the terminal. */
   const [attached, setAttached] = createSignal(false);
+  const claim = lockClaim();
   let generation = 0;
   /** Counts streams that ended under a running PTY, each of which calls for a fresh attachment. */
   const [drops, setDrops] = createSignal(0);
@@ -128,6 +141,7 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
       if (bytes.byteLength === 0) {
         ended = true;
         attachment = null;
+        claim.ended(mine());
         setAttached(false);
         if (props.panel().running) setTimeout(() => setDrops((count) => count + 1), REATTACH_MS);
         return;
@@ -142,12 +156,14 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
     if (current === generation && !ended) {
       attachment = opened;
       setAttached(true);
+      if (claim.opened()) claimUnlessTaken();
     } else if (current !== generation) act(backend.termDetach(opened));
   };
   const detach = () => {
     generation++;
     if (attachment !== null) act(backend.termDetach(attachment));
     attachment = null;
+    claim.ended(mine());
     setAttached(false);
   };
   /**
@@ -156,21 +172,33 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
    */
   const unlessOutrun = (sent: Promise<void>, stillMine: () => boolean) =>
     sent.catch((error) => setTimeout(() => stillMine() && report(error), LOCK_SETTLES_MS));
-  /** A drag or a rotation resizes once per frame, since every resize the server takes is published. */
-  let fitting = 0;
+  let fitting: ReturnType<typeof setTimeout> | undefined;
   const fit = () => {
-    cancelAnimationFrame(fitting);
-    fitting = requestAnimationFrame(() => {
+    clearTimeout(fitting);
+    fitting = setTimeout(() => {
       const size = pane();
       const { id, cols, rows } = props.panel();
       if (!mine() || !size || (size.cols === cols && size.rows === rows)) return;
       unlessOutrun(backend.termResize(props.at, id, size.cols, size.rows), mine);
-    });
+    }, PANE_SETTLES_MS);
   };
   const atPaneSize = (send: (size: Cells) => Promise<void>, what: string, stillMine: () => boolean) => {
     const size = pane();
     if (size) unlessOutrun(send(size), stillMine);
     else report(`the terminal's pane has no size to ${what} the terminal at yet`);
+  };
+  const takenByOther = () => {
+    const holder = props.panel().lock_holder;
+    return holder !== null && holder !== me();
+  };
+  const claimUnlessTaken = () => {
+    const { id, running } = props.panel();
+    if (takenByOther() || !running) return;
+    atPaneSize(
+      (size) => backend.termClaim(props.at, id, size.cols, size.rows),
+      "claim",
+      () => !takenByOther(),
+    );
   };
 
   const streaming = createMemo(() => shown() && windowShown() && serverView(props.at.server)?.reachable === true);
@@ -185,14 +213,10 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
     xterm.options.theme = terminalTheme(scheme());
   });
   createEffect(
-    on([attached, () => props.panel().lock_holder === null && props.panel().running], ([showing, free]) => {
-      if (showing && free) {
-        atPaneSize(
-          (size) => backend.termClaim(props.at, props.panel().id, size.cols, size.rows),
-          "claim",
-          () => props.panel().lock_holder === null,
-        );
-      }
+    on([() => shown() && windowShown(), windowFocuses], ([looking]) => {
+      if (!looking) return;
+      if (attached()) claimUnlessTaken();
+      else if (streaming()) claim.looked();
     }),
   );
   createEffect(
@@ -201,7 +225,7 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
     }),
   );
   onCleanup(() => {
-    cancelAnimationFrame(fitting);
+    clearTimeout(fitting);
     detach();
     xterm.dispose();
   });

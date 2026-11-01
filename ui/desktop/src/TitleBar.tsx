@@ -1,5 +1,4 @@
 import { For, Show } from "solid-js";
-import { backend } from "@octopus/shared/backend.ts";
 import { commands, hint, mac } from "@octopus/shared/commands.ts";
 import { act, me, openView, serverLabel, serverView, toggleClientMenu, ui } from "@octopus/shared/state.ts";
 import { Gear } from "@octopus/shared/Gear.tsx";
@@ -45,12 +44,7 @@ export function TitleBar() {
               <span class="dot" classList={{ off: !serverView(open().at.server)?.reachable }} />
               <span class="name">{serverLabel(open().at.server)}</span>
             </span>
-            <span
-              class="pill"
-              classList={{ ended: !open().live }}
-              title={`move to ${open().next}`}
-              onClick={() => act(backend.taskMove(open().at, open().next))}
-            >
+            <span class="pill" classList={{ ended: !open().live }}>
               {open().task.state}
             </span>
           </>

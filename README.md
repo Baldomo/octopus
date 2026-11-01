@@ -21,7 +21,7 @@ A task manager for coding agents, written in Rust. It runs on macOS and Linux, w
 | typecheck | `cargo check --workspace` |
 | check formatting | `cargo fmt --all --check` |
 | lint | `cargo clippy --workspace --all-targets -- -D warnings` |
-| run all tests | `cargo nextest run --workspace` |
+| run all tests | `cargo nextest run --workspace && npm --prefix ui test` |
 | install the phone app's tooling (once) | `cargo install tauri-cli --version '^2' --locked && rustup target add aarch64-apple-ios-sim aarch64-linux-android` |
 | run the phone app on the Android emulator (after building the UI, with `JAVA_HOME`, `ANDROID_HOME` and `NDK_HOME` set) | `(cd crates/mobile && cargo tauri android build --debug --target aarch64 --apk) && adb install -r crates/mobile/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk && adb shell am start -n com.noi.octopus/.MainActivity` |
 | run the phone app on the iOS Simulator (after building the UI) | `(cd crates/mobile && cargo tauri ios build --debug --target aarch64-sim) && xcrun simctl install booted ~/Library/Developer/Xcode/DerivedData/octopus-mobile-*/Build/Products/debug-iphonesimulator/octopus.app && xcrun simctl launch booted com.noi.octopus` |

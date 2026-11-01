@@ -32,6 +32,7 @@ const [ui, setUi] = createStore<Ui>({
     pinned: false,
     collapsed: [],
     surface: "files",
+    split: 0.5,
     view: "task",
     open: null,
     board: null,
@@ -62,6 +63,7 @@ export const openTask = (key: string) => uiAct({ do: "open_task", key });
 export const showView = (view: View) => uiAct({ do: "show_view", view });
 export const showBoard = (section: string) => uiAct({ do: "show_board", section });
 export const showSurface = (surface: Surface) => uiAct({ do: "show_surface", surface });
+export const resetSplit = () => uiAct({ do: "reset_split" });
 export const togglePin = () => uiAct({ do: "toggle_pin" });
 export const toggleCollapsed = (section: string) => uiAct({ do: "toggle_collapsed", section });
 export const showSidebar = (shown: boolean) => uiAct({ do: "show_sidebar", shown });

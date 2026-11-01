@@ -7,7 +7,7 @@ import { keepInView } from "./keepInView";
 import { commands, hint, mac } from "./commands";
 import { act, model, serverLabel, ui } from "./state";
 import { type LinkTarget, openLinks, type OpenUrl } from "./terminalLinks";
-import { terminalSession, windowShown } from "./terminalSession";
+import { readOnlyLabel, terminalSession, windowShown } from "./terminalSession";
 
 /** Shift+Enter sends ESC CR, which agents read as a newline; on macOS ⌥←/⌥→ move by word as in Terminal.app. */
 const CHORD_INPUT: Record<string, string> = {
@@ -72,11 +72,7 @@ function Term(props: { at: TaskRef; panel: Panel; visible: boolean; resumable: b
       </div>
       <Show when={props.panel.running && !mine()}>
         <div class="readonly">
-          <span>
-            {props.panel.lock_holder === null
-              ? "read-only · lock free"
-              : `read-only · held by ${props.panel.lock_holder}`}
-          </span>
+          <span>{readOnlyLabel(props.panel)}</span>
           <span class="spacer" />
           <button class="btn live" onClick={session.take}>
             Take over
@@ -221,7 +217,7 @@ function Stack(props: { key: string; openLink: OpenLink }) {
   );
 }
 
-/** The right half: one stack per recently opened task, the open one shown. */
+/** The right side: one stack per recently opened task, the open one shown. */
 export function TerminalStacks(props: { openLink: OpenLink }) {
   return (
     <>

@@ -1,4 +1,5 @@
 import { createEffect, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
+import { Portal } from "solid-js/web";
 import { backend } from "@octopus/shared/backend.ts";
 import { AGENT_PANEL, type Panel, type PtyId, type TaskRef, type TaskView } from "@octopus/shared/generated.ts";
 import { ago, clock, ticking } from "@octopus/shared/SidebarControls.tsx";
@@ -13,6 +14,7 @@ import { back, micDenied, openSheet } from "./nav";
 import { Circle, Gap, Glyph, Id, Para, sectionColor, ServerDot, Slot } from "./parts";
 import { phone } from "./phone";
 import type { Point } from "./press";
+import { type Reach, reachOf } from "./reach";
 import { type Scroll, scroller } from "./scroll";
 import { TERMINAL_FONT } from "./symbols";
 import { termSelection } from "./termSelect";
@@ -37,8 +39,6 @@ const FONT_PX = 13;
 const ROW_PX = 20;
 /** How near a line boundary, in lines, the terminal counts as on it, so float error never rests it a line off. */
 const ON_LINE = 1e-6;
-/** How long the server keeps a dropped holder's lock, which the phone counts down while it reconnects. */
-const LOCK_KEPT_MS = 10_000;
 
 /** A letter or one of `@[\]^_` as its control character; anything else as itself. */
 const control = (char: string) =>
@@ -57,17 +57,6 @@ function observeSize(element: HTMLElement, set: (size: Size) => void) {
   onCleanup(() => observer.disconnect());
 }
 
-/** What the phone knows of the task's server: reachable, reconnecting while the lock it held is kept, or gone. */
-type Reach = { is: "reachable" } | { is: "reconnecting"; left: number } | { is: "unreachable"; since: number };
-
-function reachOf(at: TaskRef, panel: Panel | undefined, now: number): Reach {
-  const server = serverView(at.server);
-  if (server === undefined || server.reachable) return { is: "reachable" };
-  const left = LOCK_KEPT_MS - (now - server.since);
-  if (panel?.lock_holder === me() && left > 0) return { is: "reconnecting", left };
-  return { is: "unreachable", since: server.since };
-}
-
 /**
  * One terminal panel. The holder types into it through the keyboard and the key bar and sizes it to the pane; everyone
  * else sees it at the holder's size, cropped to the pane at its last line, panned by dragging.
@@ -79,6 +68,9 @@ function PhoneTerm(props: {
   reach: Reach;
   ended: boolean;
   resumable: boolean;
+  tail: HTMLElement | undefined;
+  typed: boolean;
+  typing: (typing: boolean) => void;
 }) {
   let host!: HTMLDivElement;
   let pane!: HTMLDivElement;
@@ -122,7 +114,6 @@ function PhoneTerm(props: {
   const latch = () => {
     feel("select");
     setCtrl(!ctrl());
-    if (ctrl()) sink.focus();
   };
   const toggleKeyboard = () => {
     feel("tap");
@@ -133,6 +124,12 @@ function PhoneTerm(props: {
     feel("tap");
     write(keys);
   };
+  createEffect(() => {
+    if (!props.visible || !mine() || !live() || props.ended || props.resumable) sink.blur();
+  });
+  onCleanup(() => {
+    if (document.activeElement === sink) props.typing(false);
+  });
   /** Losing the lock to another client while showing it is worth a warning; taking it over, a success. */
   createEffect(
     on(
@@ -330,11 +327,11 @@ function PhoneTerm(props: {
     const down = Math.min(seen.height / whole.height, 1);
     return {
       x: across < 1 && {
-        left: `calc(var(--rail) + ${(pan().x / whole.width) * seen.width}px / var(--zoom, 1))`,
+        left: `calc(var(--g1) + ${(pan().x / whole.width) * seen.width}px / var(--zoom, 1))`,
         width: `calc(${across * seen.width}px / var(--zoom, 1))`,
       },
       y: down < 1 && {
-        top: `calc(var(--g2) + ${(pan().y / whole.height) * seen.height}px / var(--zoom, 1))`,
+        top: `calc(var(--g1) + ${(pan().y / whole.height) * seen.height}px / var(--zoom, 1))`,
         height: `calc(${down * seen.height}px / var(--zoom, 1))`,
       },
     };
@@ -391,8 +388,13 @@ function PhoneTerm(props: {
         onFocus={() => {
           resetSink();
           drawFocused(true);
+          props.typing(true);
         }}
-        onBlur={() => drawFocused(false)}
+        onBlur={() => {
+          drawFocused(false);
+          setCtrl(false);
+          props.typing(false);
+        }}
         onInput={sinkInput}
         onCompositionStart={() => (composing = true)}
         onCompositionEnd={() => {
@@ -405,103 +407,75 @@ function PhoneTerm(props: {
           write("\r");
         }}
       />
-      <div class="foot" ref={animateList(":scope > *")}>
-        <Show when={!props.ended}>
-          <Switch>
-            <Match when={props.reach.is === "unreachable" && props.reach}>
-              {(gone) => (
-                <div class="lockbar">
-                  <Slot>
-                    <Icon name="warn" />
-                  </Slot>
-                  <span class="name">
-                    {serverLabel(props.at.server)} unreachable since {clock(gone().since, "h23")}
-                  </span>
-                  <Id>retrying</Id>
-                </div>
-              )}
-            </Match>
-            <Match when={props.reach.is === "reconnecting" && props.reach}>
-              {(kept) => (
-                <div class="lockbar">
-                  <Slot>
-                    <ServerDot server={undefined} reconnecting />
-                  </Slot>
-                  <span class="name">reconnecting</span>
-                  <Id>lock kept {Math.ceil(kept().left / 1000)} s</Id>
-                </div>
-              )}
-            </Match>
-            <Match when={props.resumable}>
-              <div class="lockbar">
-                <span class="name">The agent has ended</span>
-                <button class="btn" onClick={() => act(backend.taskFocus(props.at))}>
-                  Resume
-                </button>
-              </div>
-            </Match>
-            <Match when={mine()}>
-              <div class="keys" onPointerDown={(event) => event.preventDefault()}>
-                <button class="key" onClick={() => send(ESC)}>
-                  esc
-                </button>
-                <button class="key" onClick={() => send("\t")}>
-                  tab
-                </button>
-                <button class="key" classList={{ on: ctrl() }} onClick={latch}>
-                  ctrl
-                </button>
-                <For each={ARROWS}>
-                  {([label, code]) => (
-                    <button class="key" onClick={() => send(arrow(code))}>
-                      {label}
+      <Show when={props.visible && props.tail}>
+        {(tail) => (
+          <Portal mount={tail()}>
+            <Show when={!props.ended && props.reach.is !== "unreachable"}>
+              <Switch>
+                <Match when={props.reach.is === "reconnecting" && props.reach}>
+                  {(kept) => <Id>lock kept {Math.ceil(kept().left / 1000)} s</Id>}
+                </Match>
+                <Match when={props.resumable}>
+                  <button class="btn" onClick={() => act(backend.taskFocus(props.at))}>
+                    Resume
+                  </button>
+                </Match>
+                <Match when={mine()}>
+                  <Show when={props.typed}>
+                    <button class="key" onClick={() => send(ESC)}>
+                      esc
                     </button>
-                  )}
-                </For>
-                <button class="key" aria-label="Keyboard" onClick={toggleKeyboard}>
-                  <Icon name="kbd" />
-                </button>
-              </div>
-            </Match>
-            <Match when={props.panel.running && props.panel.lock_holder !== null}>
-              <div class="lockbar">
-                <span class="name">read-only · held by {props.panel.lock_holder}</span>
-                <button class="btn" onClick={session.take}>
-                  Take over
-                </button>
-              </div>
-            </Match>
-          </Switch>
-        </Show>
-      </div>
+                    <button class="key" onClick={() => send("\t")}>
+                      tab
+                    </button>
+                    <button class="key" classList={{ on: ctrl() }} onClick={latch}>
+                      ctrl
+                    </button>
+                    <For each={ARROWS}>
+                      {([label, code]) => (
+                        <button class="key" onClick={() => send(arrow(code))}>
+                          {label}
+                        </button>
+                      )}
+                    </For>
+                  </Show>
+                  <button class="key" aria-label="Keyboard" onClick={toggleKeyboard}>
+                    <Icon name="kbd" />
+                  </button>
+                </Match>
+                <Match when={props.panel.running}>
+                  <Id>{props.panel.lock_holder ?? "lock free"}</Id>
+                  <button class="btn" onClick={session.take}>
+                    Take over
+                  </button>
+                </Match>
+              </Switch>
+            </Show>
+          </Portal>
+        )}
+      </Show>
     </div>
   );
 }
 
-/** The selected terminal's holder and size, after a coral microphone while it hears this phone, or a red "denied". */
-function LockLabel(props: { panel: Panel }) {
-  const mine = () => props.panel.lock_holder === me();
-  const hearing = () => mine() && props.panel.listening;
+/** A coral microphone while the selected terminal hears this phone, or a red crossed-out one while the OS denies it. */
+function Mic(props: { panel: Panel }) {
+  const hearing = () => props.panel.running && props.panel.lock_holder === me() && props.panel.listening;
   return (
-    <span class="lock">
-      <Show when={props.panel.running}>
-        <Show when={hearing() && micDenied()}>
-          <span class="id denied" role="button" onClick={() => phone.settings().catch(notify)}>
-            <Icon name="micoff" />
-            denied
+    <Show when={hearing()}>
+      <Show
+        when={micDenied()}
+        fallback={
+          <span class="mic">
+            <Icon name="mic" big />
           </span>
-          ·{" "}
-        </Show>
-        <Show when={hearing() && !micDenied()}>
-          <span class="id live">
-            <Icon name="mic" />
-          </span>
-        </Show>
-        <Show when={props.panel.lock_holder !== null}>
-          <span class="name">{props.panel.lock_holder}</span>· {props.panel.cols}×{props.panel.rows}
-        </Show>
+        }
+      >
+        <button class="mic denied" aria-label="Microphone settings" onClick={() => phone.settings().catch(notify)}>
+          <Icon name="micoff" big />
+        </button>
       </Show>
-    </span>
+    </Show>
   );
 }
 
@@ -568,111 +542,44 @@ function TaskScreen(props: { open: TaskView }) {
   const live = () => reach().is === "reachable";
   const server = () => serverView(props.open.at.server);
   const ended = () => !props.open.live;
+  const gone = () => {
+    const reached = reach();
+    return reached.is === "unreachable" && !ended() ? reached : null;
+  };
+  const [typing, setTyping] = createSignal(false);
+  const [tail, setTail] = createSignal<HTMLElement>();
   return (
     <>
-      <div class="bar">
+      <div class="bar slim">
         <Circle icon="back" label="Tasks" tap={back} />
         <div class="ttl" style={{ "--ws": sectionColor(props.open.section) }}>
           <span class="crumb">
             <i />
-            <For each={props.open.crumbs.slice(0, -1)}>
-              {(crumb, nth) => (
-                <>
-                  <Show when={nth() > 0}>
-                    <span class="sep">/</span>
-                  </Show>
-                  {crumb}
-                </>
-              )}
-            </For>
+            <span class="name">
+              <For each={props.open.crumbs.slice(0, -1)}>
+                {(crumb, nth) => (
+                  <>
+                    <Show when={nth() > 0}>
+                      <span class="sep">/</span>
+                    </Show>
+                    {crumb}
+                  </>
+                )}
+              </For>
+            </span>
+            <span class="srv">
+              <ServerDot server={server()} reconnecting={reach().is === "reconnecting"} />
+              {serverLabel(props.open.at.server)}
+            </span>
           </span>
           <b class="name">{props.open.task.title}</b>
         </div>
-        <Circle icon="more" label="Task menu" tap={() => openSheet({ is: "task", key: props.open.key, open: true })} />
-      </div>
-      <div class="chips">
-        <span
-          class="chip"
-          classList={{ state: props.open.live }}
-          role="button"
-          onClick={() => {
-            if (!props.open.live) return openSheet({ is: "reopen", key: props.open.key });
-            feel("select");
-            act(backend.taskMove(props.open.at, props.open.next));
-          }}
-        >
-          {props.open.task.state}
-        </span>
-        <span class="chip">
-          <ServerDot server={server()} reconnecting={reach().is === "reconnecting"} />
-          {serverLabel(props.open.at.server)}
-          <Id>
-            {
-              { reachable: `${server()?.rtt_ms ?? "–"} ms`, reconnecting: "reconnecting", unreachable: "unreachable" }[
-                reach().is
-              ]
-            }
-          </Id>
-        </span>
-        <Show when={props.open.task.branch}>
-          {(branch) => (
-            <span class="chip">
-              <Icon name="branch" />
-              <span class="mono">{branch()}</span>
-            </span>
-          )}
-        </Show>
-        <span class="chip">{props.open.task.harness}</span>
-      </div>
-      <div class="tabs">
-        <div
-          class="tabrow"
-          ref={(row) => {
-            slidingThumb(row);
-            animateList(".tab")(row);
-          }}
-        >
-          <span class="tab" data-key="agent" classList={{ on: agentOn() }} role="button" onClick={() => choose(null)}>
-            <Glyph status={props.open.glyph} />
-            {props.open.task.harness}
-          </span>
-          <For each={shells()}>
-            {(panel) => (
-              <span
-                class="tab"
-                data-key={panel.id}
-                classList={{ on: selected()?.id === panel.id }}
-                role="button"
-                onClick={() => choose(panel.id)}
-              >
-                {panel.name}
-                <span
-                  class="x"
-                  role="button"
-                  aria-label={`Close ${panel.name}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    if (live()) act(backend.termClose(props.open.at, panel.id));
-                  }}
-                >
-                  <Icon name="x" />
-                </span>
-              </span>
-            )}
-          </For>
-          <Show when={!ended()}>
-            <span
-              class="tab plus"
-              data-key="plus"
-              role="button"
-              aria-label="New shell"
-              onClick={() => live() && act(backend.termOpen(props.open.at, ".").then(setChosen))}
-            >
-              <Icon name="plus" />
-            </span>
-          </Show>
-        </div>
-        <Show when={reach().is !== "unreachable" && selected()}>{(panel) => <LockLabel panel={panel()} />}</Show>
+        <Show when={reach().is !== "unreachable" && selected()}>{(panel) => <Mic panel={panel()} />}</Show>
+        <Circle
+          icon="more"
+          label="Task menu"
+          tap={() => openSheet({ is: "task", key: props.open.key, open: { panel: selected()?.id ?? null } })}
+        />
       </div>
       <Show when={agentOn() && agent() === undefined}>
         <Show when={missing()} fallback={<div class="fill" />}>
@@ -690,25 +597,86 @@ function TaskScreen(props: { open: TaskView }) {
                 reach={reach()}
                 ended={ended()}
                 resumable={!ended() && panel().name === AGENT_PANEL && !panel().running}
+                tail={tail()}
+                typed={typing()}
+                typing={setTyping}
               />
             )}
           </Show>
         )}
       </For>
-      <Show when={ended()}>
-        <div class="lockbar">
-          <Slot>
-            <Glyph status={props.open.glyph} />
-          </Slot>
-          <span class="name">
-            {props.open.task.state}
-            <Show when={props.open.task.ended_at}>{(at) => ` ${ago(at(), now())}`}</Show>
+      <div class="foot" ref={animateList(":scope > *")}>
+        <Show when={gone()}>
+          {(down) => (
+            <div class="lockbar">
+              <Slot>
+                <Icon name="warn" />
+              </Slot>
+              <span class="name">
+                {serverLabel(props.open.at.server)} unreachable since {clock(down().since, "h23")}
+              </span>
+              <Id>retrying</Id>
+            </div>
+          )}
+        </Show>
+        <div class="dock" classList={{ typing: typing() }}>
+          <div
+            class="tabrow"
+            ref={(row) => {
+              slidingThumb(row);
+              animateList(".tab")(row);
+            }}
+          >
+            <span class="tab" data-key="agent" classList={{ on: agentOn() }} role="button" onClick={() => choose(null)}>
+              <Glyph status={props.open.glyph} />
+              {props.open.task.harness}
+            </span>
+            <For each={shells()}>
+              {(panel) => (
+                <span
+                  class="tab"
+                  data-key={panel.id}
+                  classList={{ on: selected()?.id === panel.id }}
+                  role="button"
+                  onClick={() => choose(panel.id)}
+                >
+                  {panel.name}
+                  <span
+                    class="x"
+                    role="button"
+                    aria-label={`Close ${panel.name}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (live()) act(backend.termClose(props.open.at, panel.id));
+                    }}
+                  >
+                    <Icon name="x" />
+                  </span>
+                </span>
+              )}
+            </For>
+            <Show when={!ended()}>
+              <span
+                class="tab plus"
+                data-key="plus"
+                role="button"
+                aria-label="New shell"
+                onClick={() => live() && act(backend.termOpen(props.open.at, ".").then(setChosen))}
+              >
+                <Icon name="plus" />
+              </span>
+            </Show>
+          </div>
+          <span class="tail" ref={setTail} on:pointerdown={(event) => event.preventDefault()}>
+            <Show when={ended()}>
+              <Show when={props.open.task.ended_at}>{(at) => <Id>{ago(at(), now())}</Id>}</Show>
+              <button class="btn quiet" onClick={() => openSheet({ is: "reopen", key: props.open.key })}>
+                Reopen…
+              </button>
+            </Show>
           </span>
-          <button class="btn quiet" onClick={() => openSheet({ is: "reopen", key: props.open.key })}>
-            Reopen…
-          </button>
         </div>
-      </Show>
+      </div>
     </>
   );
 }

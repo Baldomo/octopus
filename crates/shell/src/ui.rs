@@ -18,6 +18,8 @@ use crate::{emit, lock};
 pub const UI_EVENT: &str = "ui";
 /// Whether the window shows anything, which the app tells the UI on every change.
 pub const SHOWN_EVENT: &str = "window-shown";
+/// The window came into focus.
+pub const FOCUSED_EVENT: &str = "window-focused";
 
 const PREFS_FILE: &str = "app.json";
 /// How many opened tasks stay mounted, so switching among them skips the mount.
@@ -65,6 +67,27 @@ pub enum Surface {
     Browser,
 }
 
+/// The Files or Browser surface's share of the Task view's width, from 0 to 1.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(try_from = "f64")]
+pub struct Split(f64);
+
+impl TryFrom<f64> for Split {
+    type Error = String;
+
+    fn try_from(share: f64) -> Result<Self, String> {
+        (0.0..=1.0).contains(&share).then_some(Self(share)).ok_or_else(|| format!("split {share} is outside 0 to 1"))
+    }
+}
+
+const EVEN: Split = Split(0.5);
+
+impl Default for Split {
+    fn default() -> Self {
+        EVEN
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Modal {
@@ -80,6 +103,7 @@ pub struct Prefs {
     pub pinned: bool,
     pub collapsed: Vec<String>,
     pub surface: Surface,
+    pub split: Split,
     pub view: View,
     /// The open task's key.
     pub open: Option<String>,
@@ -133,6 +157,10 @@ pub enum UiAct {
     ShowSurface {
         surface: Surface,
     },
+    SetSplit {
+        split: Split,
+    },
+    ResetSplit,
     TogglePin,
     ToggleCollapsed {
         section: String,
@@ -232,6 +260,8 @@ impl State {
                 ui.prefs.view = View::Tasks;
             }
             UiAct::ShowSurface { surface } => ui.show_surface(surface),
+            UiAct::SetSplit { split } => ui.prefs.split = split,
+            UiAct::ResetSplit => ui.prefs.split = EVEN,
             UiAct::TogglePin => ui.prefs.pinned = !ui.prefs.pinned,
             UiAct::ToggleCollapsed { section } => match ui.prefs.collapsed.iter().position(|name| *name == section) {
                 Some(at) => drop(ui.prefs.collapsed.remove(at)),
@@ -429,8 +459,12 @@ mod tests {
         let saved = r#"{"pinned":true,"collapsed":["octopus"],"surface":"files","view":"task","open":"local/tsk_1","board":null}"#;
         let prefs = parse_prefs(saved).expect("parses");
         assert_eq!((prefs.pinned, prefs.open.as_deref()), (true, Some("local/tsk_1")));
-        assert_eq!((prefs.appearance, prefs.zoom), (Appearance::System, Zoom::default()));
+        assert_eq!(
+            (prefs.appearance, prefs.zoom, prefs.split),
+            (Appearance::System, Zoom::default(), Split::default())
+        );
         assert!(parse_prefs(r#"{"pinned":true,"retired":1}"#).is_err());
+        assert!(parse_prefs(r#"{"split":1.5}"#).is_err());
     }
 
     #[test]

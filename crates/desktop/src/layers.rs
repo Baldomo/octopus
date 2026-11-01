@@ -25,7 +25,7 @@ use tauri::{
 
 use octopus_shell::client_menu::{Appearance, Zoom};
 use octopus_shell::lock;
-use octopus_shell::ui::{Bounds, Floated, Native, SHOWN_EVENT, UiStore, Viewport};
+use octopus_shell::ui::{Bounds, FOCUSED_EVENT, Floated, Native, SHOWN_EVENT, UiStore, Viewport};
 
 /// The label of the window and of its base webview, as `tauri.conf.json` declares them.
 pub const BASE: &str = "main";
@@ -178,6 +178,10 @@ impl Layers {
                 WindowEvent::Resized(_) => watcher.resize().map_err(|error| ("lay out", error)),
                 WindowEvent::ScaleFactorChanged { .. } => {
                     watcher.resize().and_then(|()| watcher.replace()).map_err(|error| ("lay out", error))
+                }
+                WindowEvent::Focused(true) => {
+                    octopus_shell::emit(watcher.window.app_handle(), FOCUSED_EVENT, ());
+                    Ok(())
                 }
                 WindowEvent::ThemeChanged(theme) => {
                     paint(&watcher.window, &watcher.base, *theme).map_err(|error| ("paint", error))

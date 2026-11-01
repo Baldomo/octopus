@@ -16,6 +16,7 @@ import { holdsKeyboard, Toast, toasting } from "@octopus/shared/SidebarControls.
 import { act, model, openView, serverView, showModal, showSidebar, ui } from "@octopus/shared/state.ts";
 import { floatSurface, floatTop, sinkSurface } from "./layer";
 import { StatusBar } from "./StatusBar";
+import { TaskSplit } from "./TaskSplit";
 import { TerminalStacks } from "@octopus/shared/Terminals.tsx";
 import { TitleBar } from "./TitleBar";
 import type { Bounds, Modal as ModalName } from "@octopus/shared/generated.ts";
@@ -135,30 +136,33 @@ export function Docked() {
   return (
     <div class="app">
       <TitleBar />
-      <div class="halves" style={{ display: ui.prefs.view === "task" ? "" : "none" }}>
-        <div class="pane">
-          <div class="tabs">
-            <button class="tab" classList={{ on: ui.prefs.surface === "files" }} onClick={commands.files.run}>
-              Files<kbd>{hint(commands.files)}</kbd>
-            </button>
-            <button class="tab" classList={{ on: ui.prefs.surface === "browser" }} onClick={commands.browser.run}>
-              Browser<kbd>{hint(commands.browser)}</kbd>
-            </button>
+      <TaskSplit
+        shown={ui.prefs.view === "task"}
+        surface={
+          <div class="pane">
+            <div class="tabs">
+              <button class="tab" classList={{ on: ui.prefs.surface === "files" }} onClick={commands.files.run}>
+                Files<kbd>{hint(commands.files)}</kbd>
+              </button>
+              <button class="tab" classList={{ on: ui.prefs.surface === "browser" }} onClick={commands.browser.run}>
+                Browser<kbd>{hint(commands.browser)}</kbd>
+              </button>
+            </div>
+            <Show when={openView()} fallback={<div class="empty">No task is open.</div>}>
+              <div class="surface" style={{ display: ui.prefs.surface === "files" ? "" : "none" }}>
+                <Files
+                  visible={ui.prefs.view === "task" && ui.prefs.surface === "files"}
+                  outside={(task, path, how) => desktop.fileOutside(task.at, path, how)}
+                />
+              </div>
+              <div class="surface" style={{ display: ui.prefs.surface === "browser" ? "" : "none" }}>
+                <Browser visible={ui.prefs.view === "task" && ui.prefs.surface === "browser"} />
+              </div>
+            </Show>
           </div>
-          <Show when={openView()} fallback={<div class="empty">No task is open.</div>}>
-            <div class="surface" style={{ display: ui.prefs.surface === "files" ? "" : "none" }}>
-              <Files
-                visible={ui.prefs.view === "task" && ui.prefs.surface === "files"}
-                outside={(task, path, how) => desktop.fileOutside(task.at, path, how)}
-              />
-            </div>
-            <div class="surface" style={{ display: ui.prefs.surface === "browser" ? "" : "none" }}>
-              <Browser visible={ui.prefs.view === "task" && ui.prefs.surface === "browser"} />
-            </div>
-          </Show>
-        </div>
-        <TerminalStacks openLink={openLink} />
-      </div>
+        }
+        terminals={<TerminalStacks openLink={openLink} />}
+      />
       <div class="tasks-view" style={{ display: ui.prefs.view === "tasks" ? "" : "none" }}>
         <Board />
       </div>

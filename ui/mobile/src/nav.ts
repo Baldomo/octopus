@@ -1,6 +1,6 @@
 import { createEffect, createRoot, createSignal } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
-import type { TaskRef } from "@octopus/shared/generated.ts";
+import type { PtyId, TaskRef } from "@octopus/shared/generated.ts";
 import { act, openTask as markOpened, report } from "@octopus/shared/state.ts";
 import { phone } from "./phone";
 
@@ -20,7 +20,7 @@ export type Sheet =
   | { is: "client" }
   | { is: "server"; name: string }
   | { is: "pair"; invite: string }
-  | { is: "task"; key: string; open: boolean }
+  | { is: "task"; key: string; open: { panel: PtyId | null } | null }
   | { is: "reopen"; key: string }
   | { is: "section"; name: string }
   | { is: "addws" }

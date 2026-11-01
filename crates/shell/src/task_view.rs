@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use octopus_client::cache::Cache;
-use octopus_proto::types::{Task, TaskState};
+use octopus_proto::types::Task;
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -14,20 +14,9 @@ pub struct TaskView {
     pub section: String,
     /// The workspace, then each ancestor root first, then the task.
     pub crumbs: Vec<String>,
-    /// Where a click on the state pill moves the task.
-    pub next: TaskState,
     pub live: bool,
     pub glyph: Glyph,
     pub task: Task,
-}
-
-pub fn next_state(state: TaskState) -> TaskState {
-    match state {
-        TaskState::Pinned => TaskState::Temporary,
-        TaskState::Temporary => TaskState::Completed,
-        TaskState::Completed => TaskState::Cancelled,
-        TaskState::Cancelled => TaskState::Pinned,
-    }
 }
 
 fn crumbs(cache: &Cache, task: &Task) -> Vec<String> {
@@ -53,7 +42,6 @@ pub fn task_views(caches: &BTreeMap<String, Cache>) -> BTreeMap<String, TaskView
                     key: at.key(),
                     section: section_of(cache, task).to_string(),
                     crumbs: crumbs(cache, task),
-                    next: next_state(task.state),
                     live: task.state.is_live(),
                     glyph: Glyph::of(task),
                     task: task.clone(),
@@ -69,19 +57,7 @@ pub fn task_views(caches: &BTreeMap<String, Cache>) -> BTreeMap<String, TaskView
 mod tests {
     use super::*;
     use crate::task_lists::tests::{cache, task};
-
-    #[test]
-    fn the_state_pill_cycles_through_every_state() {
-        let mut state = TaskState::Pinned;
-        let cycle: Vec<TaskState> = TaskState::ALL
-            .iter()
-            .map(|_| {
-                state = next_state(state);
-                state
-            })
-            .collect();
-        assert_eq!(cycle, [TaskState::Temporary, TaskState::Completed, TaskState::Cancelled, TaskState::Pinned]);
-    }
+    use octopus_proto::types::TaskState;
 
     #[test]
     fn crumbs_run_from_the_workspace_through_each_ancestor_to_the_task() {

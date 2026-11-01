@@ -261,8 +261,8 @@ export function termSelection(props: {
     }, report);
 
   const placed = (point: Point) => ({
-    left: `calc(var(--rail) + ${point.x}px)`,
-    top: `calc(var(--g2) + ${point.y}px)`,
+    left: `calc(var(--g1) + ${point.x}px)`,
+    top: `calc(var(--g1) + ${point.y}px)`,
   });
   const [menuSize, setMenuSize] = createSignal<Size | null>(null);
   const measureMenu = (menu: HTMLElement) => {

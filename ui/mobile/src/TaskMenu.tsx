@@ -1,17 +1,66 @@
 import { createSignal, For, Show } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
-import { LIVE_STATES, TASK_STATES } from "@octopus/shared/generated.ts";
-import { act, model, report, serverLabel } from "@octopus/shared/state.ts";
+import { LIVE_STATES, type PtyId, TASK_STATES, type TaskView } from "@octopus/shared/generated.ts";
+import { ticking } from "@octopus/shared/SidebarControls.tsx";
+import { act, model, report, serverLabel, serverView } from "@octopus/shared/state.ts";
 import { feel } from "./feel";
 import { Icon } from "./Icon";
 import { back, go } from "./nav";
-import { Chev, Gap, Mi, Para, Sep, Why } from "./parts";
+import { Chev, Gap, Id, Mi, Para, Sep, ServerDot, Why } from "./parts";
 import { Rename } from "./Rename";
 import { Sheet, SheetHead } from "./Sheet";
+import { reachOf } from "./reach";
 import { notify } from "./Toast";
 
-/** A task's menu: the open task's leads with its Files and Browser, then rename, its state, its id and archive. */
-export function TaskMenu(props: { taskKey: string; open: boolean }) {
+function Facts(props: { view: TaskView; panel: PtyId | null }) {
+  const now = ticking();
+  const panel = () => props.view.task.panels.find((each) => each.id === props.panel);
+  const held = () => {
+    const shown = panel();
+    return shown?.running && shown.lock_holder !== null ? shown : null;
+  };
+  const reach = () => reachOf(props.view.at, panel(), now());
+  const server = () => serverView(props.view.at.server);
+  return (
+    <div class="chips wrap">
+      <span class="chip" classList={{ state: props.view.live }}>
+        {props.view.task.state}
+      </span>
+      <span class="chip">
+        <ServerDot server={server()} reconnecting={reach().is === "reconnecting"} />
+        {serverLabel(props.view.at.server)}
+        <Id>
+          {
+            { reachable: `${server()?.rtt_ms ?? "–"} ms`, reconnecting: "reconnecting", unreachable: "unreachable" }[
+              reach().is
+            ]
+          }
+        </Id>
+      </span>
+      <Show when={props.view.task.branch}>
+        {(branch) => (
+          <span class="chip">
+            <Icon name="branch" />
+            <span class="mono">{branch()}</span>
+          </span>
+        )}
+      </Show>
+      <span class="chip">{props.view.task.harness}</span>
+      <Show when={held()}>
+        {(shown) => (
+          <span class="chip">
+            <span class="mono">
+              {shown().lock_holder} · {shown().cols}×{shown().rows}
+            </span>
+          </span>
+        )}
+      </Show>
+    </div>
+  );
+}
+
+/** A task's menu: the open task's leads with its facts, Files and Browser, then rename, its state, its id and archive. */
+export function TaskMenu(props: { taskKey: string; open: { panel: PtyId | null } | null }) {
   const view = () => model.tasks[props.taskKey];
   const [renaming, setRenaming] = createSignal(false);
   const copyId = (id: string) => navigator.clipboard.writeText(id).then(() => notify("Copied the task id"), report);
@@ -20,15 +69,23 @@ export function TaskMenu(props: { taskKey: string; open: boolean }) {
       <Show when={view()}>
         {(view) => (
           <>
-            <SheetHead title={view().task.title} facts={[`${view().task.id} · ${serverLabel(view().at.server)}`]} />
+            <SheetHead
+              title={view().task.title}
+              facts={[props.open ? view().task.id : `${view().task.id} · ${serverLabel(view().at.server)}`]}
+            />
             <Show when={props.open}>
-              <Mi slot={<Icon name="folder" />} end={<Chev />} tap={() => go({ at: "files", key: props.taskKey })}>
-                Files
-              </Mi>
-              <Mi slot={<Icon name="globe" />} end={<Chev />} tap={() => go({ at: "browser", key: props.taskKey })}>
-                Browser
-              </Mi>
-              <Sep />
+              {(open) => (
+                <>
+                  <Facts view={view()} panel={open().panel} />
+                  <Mi slot={<Icon name="folder" />} end={<Chev />} tap={() => go({ at: "files", key: props.taskKey })}>
+                    Files
+                  </Mi>
+                  <Mi slot={<Icon name="globe" />} end={<Chev />} tap={() => go({ at: "browser", key: props.taskKey })}>
+                    Browser
+                  </Mi>
+                  <Sep />
+                </>
+              )}
             </Show>
             <Show
               when={renaming()}

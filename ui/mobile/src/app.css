@@ -350,7 +350,7 @@ body {
   direction: rtl;
 }
 
-/* the Task screen: the selected terminal fills the pane between the tab bar and its foot */
+/* the Task screen: the selected terminal fills the pane between the header and the foot */
 .tterm {
   position: relative;
   display: flex;
@@ -436,19 +436,8 @@ body {
   flex-direction: column;
 }
 
-.tabs .x {
+.tab .x {
   display: grid;
-}
-
-.chips {
-  overflow-x: auto;
-}
-
-/* a long holder name gives way before the tabs do */
-.tabs .lock {
-  flex-shrink: 1;
-  min-width: 0;
-  max-width: 55%;
 }
 
 .content > .cards,
@@ -891,10 +880,6 @@ body {
 
 .pull.on {
   animation: spin 700ms linear infinite;
-}
-
-.foot {
-  position: relative;
 }
 
 .car {

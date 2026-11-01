@@ -30,7 +30,7 @@ function TaskRow(props: { row: Row; section: string; group: Column }) {
       style={{ "--d": props.row.depth }}
       {...pressed(
         () => openTask(props.row.key, props.row.at),
-        () => openSheet({ is: "task", key: props.row.key, open: false }),
+        () => openSheet({ is: "task", key: props.row.key, open: null }),
         (element, from) => lift(props.row, props.section, element, from),
       )}
     >

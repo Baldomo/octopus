@@ -104,11 +104,7 @@ export type TaskView = { key: string, at: TaskRef, section: string,
 /**
  * The workspace, then each ancestor root first, then the task.
  */
-crumbs: Array<string>, 
-/**
- * Where a click on the state pill moves the task.
- */
-next: TaskState, live: boolean, glyph: Glyph, task: Task, };
+crumbs: Array<string>, live: boolean, glyph: Glyph, task: Task, };
 
 export type ServerView = { name: string, 
 /**
@@ -148,6 +144,8 @@ export type View = "task" | "tasks";
 
 export type Surface = "files" | "browser";
 
+export type Split = number;
+
 export type Modal = "palette" | "new_task" | "pair_server" | "shortcuts";
 
 export type Appearance = "system" | "light" | "dark";
@@ -156,7 +154,7 @@ export type Zoom = number;
 
 export type ZoomStep = "in" | "out" | "reset";
 
-export type Prefs = { pinned: boolean, collapsed: Array<string>, surface: Surface, view: View, 
+export type Prefs = { pinned: boolean, collapsed: Array<string>, surface: Surface, split: Split, view: View, 
 /**
  * The open task's key.
  */
@@ -194,7 +192,7 @@ viewport: Viewport,
  */
 float_input: Array<Bounds>, };
 
-export type UiAct = { "do": "open_task", key: string, } | { "do": "show_view", view: View, } | { "do": "show_board", section: string, } | { "do": "show_surface", surface: Surface, } | { "do": "toggle_pin" } | { "do": "toggle_collapsed", section: string, } | { "do": "show_sidebar", shown: boolean, } | { "do": "toggle_sidebar" } | { "do": "show_client_menu", shown: boolean, } | { "do": "toggle_client_menu" } | { "do": "set_appearance", appearance: Appearance, } | { "do": "zoom", step: ZoomStep, } | { "do": "show_modal", modal: Modal | null, } | { "do": "float", surface: string, at: Floated, modal: boolean, } | { "do": "sink", surface: string, } | { "do": "reveal", task: string, path: string, } | { "do": "report", problem: string, };
+export type UiAct = { "do": "open_task", key: string, } | { "do": "show_view", view: View, } | { "do": "show_board", section: string, } | { "do": "show_surface", surface: Surface, } | { "do": "set_split", split: Split, } | { "do": "reset_split" } | { "do": "toggle_pin" } | { "do": "toggle_collapsed", section: string, } | { "do": "show_sidebar", shown: boolean, } | { "do": "toggle_sidebar" } | { "do": "show_client_menu", shown: boolean, } | { "do": "toggle_client_menu" } | { "do": "set_appearance", appearance: Appearance, } | { "do": "zoom", step: ZoomStep, } | { "do": "show_modal", modal: Modal | null, } | { "do": "float", surface: string, at: Floated, modal: boolean, } | { "do": "sink", surface: string, } | { "do": "reveal", task: string, path: string, } | { "do": "report", problem: string, };
 
 export type Viewport = { width: number, height: number, };
 
@@ -234,4 +232,4 @@ export const TERM_SIZE_OSC = 6286 as const;
 
 export const VERSION = "0.0.0" as const;
 
-export const EVENTS = {"filesChanged":"files_changed","microphoneDenied":"microphone_denied","model":"model","servers":"servers","ui":"ui","windowShown":"window-shown"} as const;
+export const EVENTS = {"filesChanged":"files_changed","microphoneDenied":"microphone_denied","model":"model","servers":"servers","ui":"ui","windowFocused":"window-focused","windowShown":"window-shown"} as const;
