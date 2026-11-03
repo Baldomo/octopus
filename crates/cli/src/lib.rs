@@ -18,9 +18,7 @@ const USAGE: u8 = 2;
 async fn connect(server: &str) -> anyhow::Result<Connection> {
     let config = Config::user()?;
     let servers = Servers::load(&config)?;
-    let connection = Connection::connect(&servers.get(server)?.address, &Identity::load(&config)?).await?;
-    Servers::refresh(&config, server, connection.server_addresses())?;
-    Ok(connection)
+    Connection::connect(&servers.get(server)?.address, &Identity::load(&config)?).await
 }
 
 /// A server error prints as its JSON wire shape so scripts can match its code.

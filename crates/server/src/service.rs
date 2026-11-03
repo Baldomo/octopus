@@ -24,6 +24,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
 
+use crate::client::Client;
 use crate::pty::{Activity, Attachment, INITIAL_SIZE, Pty};
 use crate::{lock, now, report};
 
@@ -339,12 +340,36 @@ pub struct Terminal {
 /// when the server took the terminal.
 #[derive(Clone)]
 pub struct Screen {
-    pub holder: Option<String>,
+    pub holder: Option<Client>,
     pub cols: u16,
     pub rows: u16,
-    viewers: HashMap<String, usize>,
-    shows: HashMap<String, u64>,
+    viewers: HashMap<Client, usize>,
+    shows: HashMap<Client, u64>,
     unshown_at: i64,
+}
+
+/// Why a client may not act through a terminal's lock: another client holds it, no client does, or the act failed.
+#[derive(Debug)]
+pub enum Refusal {
+    HeldBy(Client),
+    Free,
+    Failed(Error),
+}
+
+impl From<Error> for Refusal {
+    fn from(error: Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl Screen {
+    fn check_holder(&self, client: &Client) -> Result<(), Refusal> {
+        match &self.holder {
+            Some(holder) if holder == client => Ok(()),
+            Some(holder) => Err(Refusal::HeldBy(holder.clone())),
+            None => Err(Refusal::Free),
+        }
+    }
 }
 
 impl Terminal {
@@ -385,35 +410,31 @@ impl Terminal {
         lock(&self.screen).clone()
     }
 
-    fn holder(&self) -> Option<String> {
-        lock(&self.screen).holder.clone()
-    }
-
     /// Gives `client` a free lock sized to `cols`×`rows`, or resizes the one it holds; reports whether the screen
     /// changed.
-    pub fn claim(&self, client: &str, cols: u16, rows: u16) -> Result<bool, Error> {
+    pub fn claim(&self, client: &Client, cols: u16, rows: u16) -> Result<bool, Refusal> {
         let mut screen = lock(&self.screen);
-        if let Some(other) = screen.holder.as_deref().filter(|holder| *holder != client) {
-            return Err(Error::PtyLocked { holder: other.to_string() });
+        if let Some(other) = screen.holder.as_ref().filter(|holder| *holder != client) {
+            return Err(Refusal::HeldBy(other.clone()));
         }
         let resized = self.set_size(&mut screen, cols, rows)?;
         let moved = screen.holder.is_none();
-        screen.holder = Some(client.to_string());
+        screen.holder = Some(client.clone());
         Ok(resized || moved)
     }
 
-    pub fn show(&self, client: &str) {
+    pub fn show(&self, client: &Client) {
         let mut screen = lock(&self.screen);
-        *screen.viewers.entry(client.to_string()).or_default() += 1;
-        *screen.shows.entry(client.to_string()).or_default() += 1;
+        *screen.viewers.entry(client.clone()).or_default() += 1;
+        *screen.shows.entry(client.clone()).or_default() += 1;
     }
 
     /// How many times `client` has shown the terminal: a grace checks it is still the count it started at.
-    pub fn shows(&self, client: &str) -> u64 {
+    pub fn shows(&self, client: &Client) -> u64 {
         lock(&self.screen).shows.get(client).copied().unwrap_or(0)
     }
 
-    pub fn unshow(&self, client: &str) {
+    pub fn unshow(&self, client: &Client) {
         let mut screen = lock(&self.screen);
         if let Some(count) = screen.viewers.get_mut(client) {
             *count -= 1;
@@ -432,21 +453,21 @@ impl Terminal {
         screen.viewers.is_empty().then_some(screen.unshown_at)
     }
 
-    pub fn holds(&self, client: &str) -> bool {
-        lock(&self.screen).holder.as_deref() == Some(client)
+    pub fn holds(&self, client: &Client) -> bool {
+        lock(&self.screen).holder.as_ref() == Some(client)
     }
 
     /// Whether `client` holds the lock and shows the terminal nowhere.
-    pub fn held_unshown(&self, client: &str) -> bool {
+    pub fn held_unshown(&self, client: &Client) -> bool {
         let screen = lock(&self.screen);
-        screen.holder.as_deref() == Some(client) && !screen.viewers.contains_key(client)
+        screen.holder.as_ref() == Some(client) && !screen.viewers.contains_key(client)
     }
 
     /// Frees the lock when `client` holds it, shows the terminal nowhere, and has not shown it again since `shows`
     /// was read; reports whether it did.
-    pub fn free_if_unshown(&self, client: &str, shows: u64) -> bool {
+    pub fn free_if_unshown(&self, client: &Client, shows: u64) -> bool {
         let mut screen = lock(&self.screen);
-        let unshown = screen.holder.as_deref() == Some(client)
+        let unshown = screen.holder.as_ref() == Some(client)
             && !screen.viewers.contains_key(client)
             && screen.shows.get(client).copied().unwrap_or(0) == shows;
         if unshown {
@@ -455,12 +476,22 @@ impl Terminal {
         unshown
     }
 
+    /// Frees the lock when `client` holds it, however it shows the terminal; reports whether it did.
+    pub fn free(&self, client: &Client) -> bool {
+        let mut screen = lock(&self.screen);
+        let held = screen.holder.as_ref() == Some(client);
+        if held {
+            screen.holder = None;
+        }
+        held
+    }
+
     /// Gives `client` the lock from whoever holds it, sized to `cols`×`rows`; reports whether the screen changed.
-    pub fn take(&self, client: &str, cols: u16, rows: u16) -> Result<bool, Error> {
+    pub fn take(&self, client: &Client, cols: u16, rows: u16) -> Result<bool, Refusal> {
         let mut screen = lock(&self.screen);
         let resized = self.set_size(&mut screen, cols, rows)?;
-        let moved = screen.holder.as_deref() != Some(client);
-        screen.holder = Some(client.to_string());
+        let moved = screen.holder.as_ref() != Some(client);
+        screen.holder = Some(client.clone());
         Ok(resized || moved)
     }
 
@@ -476,20 +507,15 @@ impl Terminal {
         Ok(true)
     }
 
-    /// Fails `pty_locked` naming the holder when another client holds the lock, or `conflict` while it is free.
-    pub fn check_holder(&self, client: &str) -> Result<(), Error> {
-        match self.holder() {
-            Some(holder) if holder == client => Ok(()),
-            Some(holder) => Err(Error::PtyLocked { holder }),
-            None => Err(Error::conflict(format!("{client} holds no lock on {}; take it first", self.id))),
-        }
+    pub fn check_holder(&self, client: &Client) -> Result<(), Refusal> {
+        lock(&self.screen).check_holder(client)
     }
 
     /// Writes only while `client` still holds the lock it claimed earlier.
-    pub fn write_as(&self, client: &str, bytes: &[u8]) -> Result<(), Error> {
+    pub fn write_as(&self, client: &Client, bytes: &[u8]) -> Result<(), Refusal> {
         self.check_holder(client)?;
         if !self.running() {
-            return Err(Error::conflict(format!("{} has exited", self.id)));
+            return Err(Error::conflict(format!("{} has exited", self.id)).into());
         }
         let mut input = lock(&self.input);
         let mut stream = match input.take() {
@@ -502,14 +528,10 @@ impl Terminal {
     }
 
     /// Resizes for the holder alone; reports whether the size changed.
-    pub fn resize(&self, client: &str, cols: u16, rows: u16) -> Result<bool, Error> {
+    pub fn resize(&self, client: &Client, cols: u16, rows: u16) -> Result<bool, Refusal> {
         let mut screen = lock(&self.screen);
-        match screen.holder.as_deref() {
-            Some(holder) if holder == client => {}
-            Some(holder) => return Err(Error::PtyLocked { holder: holder.to_string() }),
-            None => return Err(Error::conflict(format!("{client} holds no lock on {}; take it first", self.id))),
-        }
-        self.set_size(&mut screen, cols, rows)
+        screen.check_holder(client)?;
+        Ok(self.set_size(&mut screen, cols, rows)?)
     }
 
     pub fn reset_size(&self) -> Result<(), Error> {

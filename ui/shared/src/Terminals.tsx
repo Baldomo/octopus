@@ -185,7 +185,7 @@ function Stack(props: { key: string; openLink: OpenLink }) {
               <Show when={selected()}>
                 {(panel) => (
                   <span class="lock">
-                    {panel().lock_holder === null ? "lock free" : `✎ ${panel().lock_holder}`}
+                    {panel().lock_holder === null ? "lock free" : `✎ ${panel().lock_holder?.name}`}
                     {panel().listening ? " · listening" : ""}
                   </span>
                 )}

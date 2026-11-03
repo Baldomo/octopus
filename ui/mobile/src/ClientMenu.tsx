@@ -2,7 +2,15 @@ import { createResource, createSignal, For, Match, Show, Switch } from "solid-js
 import { backend } from "@octopus/shared/backend.ts";
 import { aboutCopy, APPEARANCES, NEXT_START } from "@octopus/shared/ClientMenu.tsx";
 import { VERSION, ZOOMS, type ShownOffer } from "@octopus/shared/generated.ts";
-import { clientStatus, clock, expiry, grouped, inviteCode, ticking } from "@octopus/shared/SidebarControls.tsx";
+import {
+  clientStatus,
+  clock,
+  expiry,
+  grouped,
+  inviteCode,
+  isThisClient,
+  ticking,
+} from "@octopus/shared/SidebarControls.tsx";
 import {
   harnesses,
   me,
@@ -14,7 +22,7 @@ import {
   ui,
   zoom,
 } from "@octopus/shared/state.ts";
-import { host, shortKey } from "./format";
+import { shortKey } from "./format";
 import { feel } from "./feel";
 import { Icon } from "./Icon";
 import { go, showInSheet } from "./nav";
@@ -24,9 +32,6 @@ import { Sheet, SheetHead } from "./Sheet";
 import { notify } from "./Toast";
 
 const toMenu = () => showInSheet({ is: "client" }, "back");
-
-/** A private IPv4 address, the one a server's header names as its LAN. */
-const LAN = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
 
 const rtt = (ms: number | null) => `${ms ?? "–"} ms`;
 
@@ -146,9 +151,7 @@ export function ServerMenu(props: { name: string }) {
     const reach = shown.reachable
       ? `reachable · ${rtt(shown.rtt_ms)}`
       : `unreachable since ${clock(shown.since, "h23")}`;
-    const key = shown.key === null ? "local socket" : `key ${shortKey(shown.key)}`;
-    const lan = shown.addresses.find((address) => LAN.test(address)) ?? shown.addresses[0];
-    return [reach, lan === undefined ? key : `${key} · lan ${host(lan)}`];
+    return [reach, shown.key === null ? "local socket" : `key ${shortKey(shown.key)}`];
   };
   const showCode = () => backend.serverOffer(props.name).then(setMode, report);
   const copyInvite = (invite: string) =>
@@ -227,11 +230,11 @@ export function ServerMenu(props: { name: string }) {
                 <For each={listed()}>
                   {(client) => (
                     <Mi
-                      slot={<i class={client.connected || client.name === me() ? "dot srv" : "dot idle"} />}
+                      slot={<i class={client.connected || isThisClient(client) ? "dot srv" : "dot idle"} />}
                       end={
                         <>
                           <Why>{clientStatus(client, now())}</Why>
-                          <Show when={client.name !== me()}>
+                          <Show when={!isThisClient(client)}>
                             <button class="btn danger" onClick={() => revoke(client.name)}>
                               Revoke
                             </button>

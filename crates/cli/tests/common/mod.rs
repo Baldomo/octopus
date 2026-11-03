@@ -11,7 +11,7 @@ use octopus_proto::device::DeviceKey;
 use octopus_proto::local::Listener;
 use octopus_proto::ops::{TaskCreate, TaskGet, WorkspaceAdd};
 use octopus_proto::remote::{self, RelayUrl};
-use octopus_proto::types::{Checkout, Color, Task, TaskId, TaskState, WorkspaceId};
+use octopus_proto::types::{Checkout, Color, Panel, Task, TaskId, TaskState, WorkspaceId};
 use octopus_server::{Server, TerminalHost, serve};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -21,9 +21,8 @@ pub const OCTOPUS: &str = env!("CARGO_BIN_EXE_octopus");
 pub struct Running {
     pub server: Arc<Server>,
     pub socket: PathBuf,
-    /// The relay the server is homed on, served on loopback over plain HTTP for as long as the server runs; none
-    /// for a server homed on a relay nobody answers at.
-    pub relay: Option<iroh_relay::server::Server>,
+    /// The relay the server is homed on, served on loopback over plain HTTP for as long as the server runs.
+    pub relay: iroh_relay::server::Server,
 }
 
 /// A relay URL that refuses every connection, for a server whose tests reach it over the local socket alone.
@@ -40,23 +39,7 @@ pub async fn start_with(dir: &Path, socket: &str, host: &str, microphone: bool) 
     let mut config = iroh_relay::server::ServerConfig::default();
     config.relay = Some(iroh_relay::server::RelayConfig::new(([127, 0, 0, 1], 0)));
     let relay = iroh_relay::server::Server::spawn(config).await.expect("spawn a relay");
-    let url = format!("http://{}", relay.http_addr().expect("the relay serves HTTP")).parse().expect("a URL");
-    serve_homed_on(dir, socket, host, url, Some(relay), microphone).await
-}
-
-/// A server homed on a relay nobody answers at, which clients reach at its direct addresses alone.
-pub async fn start_unrelayed(dir: &Path) -> Running {
-    serve_homed_on(dir, "server.sock", "host.sock", NO_RELAY.parse().expect("a URL"), None, false).await
-}
-
-async fn serve_homed_on(
-    dir: &Path,
-    socket: &str,
-    host: &str,
-    url: RelayUrl,
-    relay: Option<iroh_relay::server::Server>,
-    microphone: bool,
-) -> Running {
+    let url: RelayUrl = format!("http://{}", relay.http_addr().expect("the relay serves HTTP")).parse().expect("a URL");
     let socket = dir.join(socket);
     let host = TerminalHost { program: OCTOPUS.into(), address: dir.join(host) };
     let server = Server::open(SERVER, &dir.join("store.db"), &dir.join("worktrees"), &host, url.clone(), microphone)
@@ -171,6 +154,11 @@ pub async fn create(connection: &Connection, workspace: &WorkspaceId, checkout: 
 
 pub async fn task(connection: &Connection, task: &TaskId) -> Task {
     connection.call(&TaskGet { task: task.clone() }).await.expect("task.get")
+}
+
+/// The label of the panel's lock holder, the way every client shows it.
+pub fn holder_name(panel: &Panel) -> Option<&str> {
+    panel.lock_holder.as_ref().map(|holder| holder.name.as_str())
 }
 
 /// Everything the stream sent until `needle` arrived.

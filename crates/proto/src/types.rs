@@ -2,6 +2,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::device::PublicKey;
 use crate::schema::{Arg, Shape};
 
 macro_rules! id {
@@ -294,11 +295,21 @@ pub struct Panel {
     pub id: PtyId,
     pub name: String,
     pub running: bool,
-    pub lock_holder: Option<String>,
+    pub lock_holder: Option<LockHolder>,
     pub cols: u16,
     pub rows: u16,
     /// A program of the terminal records from its virtual microphone, so the holder sends its own on `mic:<pty>`.
     pub listening: bool,
+}
+
+/// Who holds a terminal's lock: a paired device by its key, labelled with the name it is pinned under, or a client on
+/// the server's local socket by its name alone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct LockHolder {
+    pub name: String,
+    #[ts(type = "string | null")]
+    pub key: Option<PublicKey>,
 }
 
 impl Panel {

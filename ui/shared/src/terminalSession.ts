@@ -6,7 +6,7 @@ import { backend, Channel } from "./backend";
 import { type Panel, type TaskRef, TERM_HISTORY_LINES, type TermScreen } from "./generated";
 import { lockClaim } from "./lockClaim";
 import { sgrMouse } from "./mouseReports";
-import { act, me, report, serverView } from "./state";
+import { act, holds, report, serverView } from "./state";
 import { colors, px, type Scheme, scheme, token } from "./tokens";
 
 const themes: Partial<Record<Scheme, ITheme>> = {};
@@ -53,7 +53,7 @@ const [windowFocuses, setWindowFocuses] = createSignal(0);
 export const windowFocused = () => setWindowFocuses((count) => count + 1);
 
 export const readOnlyLabel = (panel: Panel) =>
-  panel.lock_holder === null ? "read-only · lock free" : `read-only · held by ${panel.lock_holder}`;
+  panel.lock_holder === null ? "read-only · lock free" : `read-only · held by ${panel.lock_holder.name}`;
 
 type Cells = { cols: number; rows: number };
 export type Size = { width: number; height: number };
@@ -93,7 +93,7 @@ export type TerminalSession = {
  * that size.
  */
 export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown: () => boolean }): TerminalSession {
-  const mine = createMemo(() => props.panel().lock_holder === me());
+  const mine = createMemo(() => holds(props.at.server, props.panel().lock_holder));
   const shown = createMemo(props.shown);
   const xterm = new Terminal({
     fontFamily: token("--mono-terminal"),
@@ -184,7 +184,7 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
   };
   const takenByOther = () => {
     const holder = props.panel().lock_holder;
-    return holder !== null && holder !== me();
+    return holder !== null && !holds(props.at.server, holder);
   };
   const claimUnlessTaken = () => {
     const { id, running } = props.panel();

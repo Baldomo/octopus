@@ -293,8 +293,8 @@ impl Store {
         Ok(key)
     }
 
-    /// A name pinned to another device stays its, until `pairing.forget` lets it go.
-    pub fn refuse_namesake(&self, name: &str, key: &PublicKey) -> Result<(), Error> {
+    /// A name pinned to another device stays its until `pairing.forget` lets it go.
+    pub fn refuse_claim(&self, name: &str, key: &PublicKey) -> Result<(), Error> {
         let holder: Option<String> = self
             .db
             .query_row("SELECT key FROM clients WHERE name = ?1", [name], |row| row.get(0))
@@ -302,7 +302,8 @@ impl Store {
             .map_err(Error::internal)?;
         match holder {
             Some(holder) if holder != key.to_string() => Err(Error::conflict(format!(
-                "the client name {name} is paired to another device's key; `pairing forget` it first"
+                "the client name {name} is paired to another device; rename this device, or `pairing forget` the other \
+                 one"
             ))),
             _ => Ok(()),
         }
@@ -317,25 +318,28 @@ impl Store {
         tx.commit().map_err(Error::internal)
     }
 
-    pub fn forget_client(&mut self, name: &str) -> Result<(), Error> {
-        match self.db.execute("DELETE FROM clients WHERE name = ?1", [name]).map_err(Error::internal)? {
-            0 => Err(Error::not_found(format!("a paired client named {name}"))),
-            _ => Ok(()),
-        }
+    /// Unpins the named client and returns the key it was pinned to.
+    pub fn forget_client(&mut self, name: &str) -> Result<PublicKey, Error> {
+        self.db
+            .query_row("DELETE FROM clients WHERE name = ?1 RETURNING key", [name], |row| wire_column(row, "key"))
+            .optional()
+            .map_err(Error::internal)?
+            .ok_or_else(|| Error::not_found(format!("a paired client named {name}")))
     }
 
-    /// Every pinned client's name, with when one of its connections last opened or closed.
-    pub fn clients(&self) -> Result<Vec<(String, Option<i64>)>, Error> {
+    /// Every pinned client's key and name, with when one of its connections last opened or closed.
+    pub fn clients(&self) -> Result<Vec<(PublicKey, String, Option<i64>)>, Error> {
         let mut statement =
-            self.db.prepare("SELECT name, seen_at FROM clients ORDER BY name").map_err(Error::internal)?;
-        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?))).map_err(Error::internal)?;
+            self.db.prepare("SELECT key, name, seen_at FROM clients ORDER BY name").map_err(Error::internal)?;
+        let rows = statement
+            .query_map([], |row| Ok((wire_column(row, "key")?, row.get("name")?, row.get("seen_at")?)))
+            .map_err(Error::internal)?;
         rows.collect::<Result<_, _>>().map_err(Error::internal)
     }
 
-    /// A name no client paired under, such as a local socket client's, is seen by nobody.
-    pub fn client_seen(&self, name: &str, at: i64) -> Result<(), Error> {
+    pub fn client_seen(&self, key: &PublicKey, at: i64) -> Result<(), Error> {
         self.db
-            .execute("UPDATE clients SET seen_at = ?2 WHERE name = ?1", params![name, at])
+            .execute("UPDATE clients SET seen_at = ?2 WHERE key = ?1", params![key.to_string(), at])
             .map(drop)
             .map_err(Error::internal)
     }
@@ -344,6 +348,13 @@ impl Store {
         self.db
             .query_row("SELECT name FROM clients WHERE key = ?1", [key.to_string()], |row| row.get(0))
             .optional()
+            .map_err(Error::internal)
+    }
+
+    pub fn rename_client(&self, key: &PublicKey, name: &str) -> Result<(), Error> {
+        self.db
+            .execute("UPDATE clients SET name = ?2 WHERE key = ?1", params![key.to_string(), name])
+            .map(drop)
             .map_err(Error::internal)
     }
 

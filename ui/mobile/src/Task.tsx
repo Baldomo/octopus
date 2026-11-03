@@ -3,7 +3,7 @@ import { Portal } from "solid-js/web";
 import { backend } from "@octopus/shared/backend.ts";
 import { AGENT_PANEL, type Panel, type PtyId, type TaskRef, type TaskView } from "@octopus/shared/generated.ts";
 import { ago, clock, ticking } from "@octopus/shared/SidebarControls.tsx";
-import { act, me, model, report, scale, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
+import { act, holds, model, report, scale, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
 import { clickReport, type ScreenCell, wheelReport } from "@octopus/shared/mouseReports.ts";
 import { cellSize, type Size, terminalSession } from "@octopus/shared/terminalSession.ts";
 import { colors, scheme } from "@octopus/shared/tokens.ts";
@@ -139,11 +139,13 @@ function PhoneTerm(props: {
   /** Losing the lock to another client while showing it is worth a warning; taking it over, a success. */
   createEffect(
     on(
-      () => props.visible && props.panel.running && props.panel.lock_holder,
-      (holder, was) => {
-        if (!holder || !was || holder === was) return;
-        if (holder === me()) feel("success");
-        else if (was === me()) feel("warning");
+      () => {
+        const holder = props.visible && props.panel.running ? props.panel.lock_holder : null;
+        return holder === null ? null : holds(props.at.server, holder);
+      },
+      (mine, was) => {
+        if (mine === null || was === null || was === undefined || mine === was) return;
+        feel(mine ? "success" : "warning");
       },
       { defer: true },
     ),
@@ -500,7 +502,7 @@ function PhoneTerm(props: {
                   </button>
                 </Match>
                 <Match when={props.panel.running}>
-                  <Id>{props.panel.lock_holder ?? "lock free"}</Id>
+                  <Id>{props.panel.lock_holder?.name ?? "lock free"}</Id>
                   <button class="btn" onClick={session.take}>
                     Take over
                   </button>
@@ -515,8 +517,8 @@ function PhoneTerm(props: {
 }
 
 /** A coral microphone while the selected terminal hears this phone, or a red crossed-out one while the OS denies it. */
-function Mic(props: { panel: Panel }) {
-  const hearing = () => props.panel.running && props.panel.lock_holder === me() && props.panel.listening;
+function Mic(props: { at: TaskRef; panel: Panel }) {
+  const hearing = () => props.panel.running && holds(props.at.server, props.panel.lock_holder) && props.panel.listening;
   return (
     <Show when={hearing()}>
       <Show
@@ -630,7 +632,9 @@ function TaskScreen(props: { open: TaskView }) {
           </span>
           <b class="name">{props.open.task.title}</b>
         </div>
-        <Show when={reach().is !== "unreachable" && selected()}>{(panel) => <Mic panel={panel()} />}</Show>
+        <Show when={reach().is !== "unreachable" && selected()}>
+          {(panel) => <Mic at={props.open.at} panel={panel()} />}
+        </Show>
         <Circle
           icon="more"
           label="Task menu"

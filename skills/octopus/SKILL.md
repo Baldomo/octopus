@@ -319,16 +319,16 @@ List the clients this server has paired with.
 
 ## `octopus pairing forget`
 
-Forget a paired client, which must pair with a new invite; its open connections stay until they close.
+Forget a paired client, closing its open connections and freeing its locks; it pairs again only with a new invite.
 
 - `--server <server>`: The paired server's name.
-- `--client <client>`: The client's name, as it paired.
+- `--client <client>`: The name the client last gave.
 
 ## `octopus pairing accept`
 
 Pair with a server on another machine using the invite its `pairing offer` showed, and list it under its name.
 
-- `--invite <invite>`: The one-time invite `pairing offer` printed: octopus://<server key>?code=…&relay=…&addr=….
+- `--invite <invite>`: The one-time invite `pairing offer` printed: octopus://<server key>?code=…&relay=….
 
 ## `octopus server run`
 

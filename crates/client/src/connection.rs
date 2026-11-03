@@ -1,7 +1,6 @@
 //! One connection from this client to one server, over the local socket or iroh with the same protocol on both.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
@@ -11,7 +10,7 @@ use anyhow::{Context, anyhow};
 use octopus_proto::device::DeviceKey;
 use octopus_proto::ops::{SessionHello, SessionPing};
 use octopus_proto::remote::{Connection as RemoteConnection, Dialer};
-use octopus_proto::types::{Stream, TaskId};
+use octopus_proto::types::{LockHolder, Stream, TaskId};
 use octopus_proto::{Error, Op, Outcome, Push, Request, ServerFrame, StreamHeader, line, local};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, WriteHalf};
@@ -45,6 +44,16 @@ impl Identity {
     /// Names this client on every connection and pairing it opens from now on.
     pub fn rename(&self, name: String) {
         *lock(&self.name) = name;
+    }
+
+    /// Whether this client holds the lock `holder` holds on the server at `address`: a server it is paired with
+    /// knows it by its key, and the server on its local socket by its name.
+    pub fn holds(&self, holder: &LockHolder, address: &Address) -> bool {
+        match (&holder.key, address) {
+            (Some(key), _) => *key == self.key.public(),
+            (None, Address::Local { .. }) => holder.name == self.name(),
+            (None, Address::Remote { .. }) => false,
+        }
     }
 
     pub async fn dialer(&self) -> std::io::Result<&Dialer> {
@@ -137,7 +146,6 @@ impl Control {
 pub struct Connection {
     link: Link,
     client: String,
-    server_addresses: Vec<SocketAddr>,
     control: Arc<Control>,
     pushes: broadcast::Sender<Push>,
     _reader: Task,
@@ -190,9 +198,9 @@ impl Connection {
     pub async fn connect(address: &Address, me: &Identity) -> anyhow::Result<Self> {
         let link = match address {
             Address::Local { socket } => Link::Local(socket.clone()),
-            Address::Remote { key, relay, addresses } => {
+            Address::Remote { key, relay } => {
                 let dialer = me.dialer().await?;
-                let connection = dialer.connect(&me.key, *key, relay, addresses).await?;
+                let connection = dialer.connect(&me.key, *key, relay).await?;
                 Link::Remote { connection, _dialer: dialer.clone() }
             }
         };
@@ -208,17 +216,11 @@ impl Connection {
         });
         let (pushes, _) = broadcast::channel(PUSH_BACKLOG);
         let reader = Task(tokio::spawn(read_frames(read, Arc::downgrade(&control), pushes.clone())));
-        let welcome =
-            control.call(&SessionHello { client: me.name() }).await.map_err(|error| anyhow!("{address}: {error}"))?;
-        let heartbeat = Task(tokio::spawn(heartbeat(Arc::downgrade(&control))));
         let client = me.name();
-        let server_addresses = welcome.addresses;
-        Ok(Self { link, client, server_addresses, control, pushes, _reader: reader, _heartbeat: heartbeat })
-    }
-
-    /// Where the server said, as this connection opened, a client on another machine reaches it directly.
-    pub fn server_addresses(&self) -> &[SocketAddr] {
-        &self.server_addresses
+        let hello = SessionHello { client: client.clone() };
+        control.call(&hello).await.map_err(|error| anyhow!("{address}: {error}"))?;
+        let heartbeat = Task(tokio::spawn(heartbeat(Arc::downgrade(&control))));
+        Ok(Self { link, client, control, pushes, _reader: reader, _heartbeat: heartbeat })
     }
 
     pub fn pushes(&self) -> broadcast::Receiver<Push> {

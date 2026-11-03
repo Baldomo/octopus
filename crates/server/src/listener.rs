@@ -13,7 +13,8 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{Semaphore, broadcast, mpsc};
 
-use crate::service::Terminal;
+use crate::client::Client;
+use crate::service::{Refusal, Terminal};
 use crate::{Server, report};
 
 const WORKTREE_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
@@ -23,6 +24,8 @@ const INPUT_BYTES: usize = 4096;
 const PAIRING_PATIENCE: Duration = Duration::from_secs(10);
 /// A `pairing.pair` request line is far shorter; an unpaired peer gets no more of the server's memory.
 const PAIRING_LINE_BYTES: u64 = 4096;
+/// A stream's first line, a request or a data stream's header, is far shorter; a longer one fails to parse.
+const FIRST_LINE_BYTES: u64 = 16 * 1024;
 /// Requests of one control connection waiting their turn; a client that sends faster waits on its stream.
 const QUEUED_REQUESTS: usize = 64;
 /// Connections at once whose client is not yet known to be paired.
@@ -37,25 +40,28 @@ const TOO_MANY_UNPROVEN: &[u8] = b"too many connections awaiting their device pr
 const TOO_MANY_UNPAIRED: &[u8] = b"too many unpaired connections";
 const INTERNAL: &[u8] = b"internal error";
 
-/// Who a stream comes from. The local socket admits only the server's own OS user, who names any client; a paired
-/// client is the name it paired under.
-#[derive(Clone)]
+/// Who a stream comes from: the local socket admits only the server's own OS user, and a paired device is the key
+/// it proved.
+#[derive(Clone, Copy)]
 enum Peer {
     Local,
-    Paired { name: String, key: PublicKey },
+    Paired(PublicKey),
 }
 
 impl Peer {
-    fn remote(&self) -> bool {
-        matches!(self, Self::Paired { .. })
+    /// The client a `session.hello` names; a paired device's hello records the name it gives.
+    async fn hello(self, server: &Arc<Server>, name: String) -> Result<Client, Error> {
+        match self {
+            Self::Local => Ok(Client::Local(name)),
+            Self::Paired(key) => blocking(server, move |server| server.hello_paired(key, &name)).await,
+        }
     }
 
-    fn admit(&self, client: &str) -> Result<(), Error> {
+    /// The client a data stream's header names; a paired device is its key, whatever name the header gives.
+    fn stream(self, name: String) -> Client {
         match self {
-            Self::Paired { name, .. } if name != client => {
-                Err(Error::invalid(format!("this connection is paired as {name}, not {client}")))
-            }
-            _ => Ok(()),
+            Self::Local => Client::Local(name),
+            Self::Paired(key) => Client::Paired(key),
         }
     }
 }
@@ -64,7 +70,6 @@ impl Peer {
 pub async fn serve(server: Arc<Server>, local: Listener, remote: Endpoint) {
     tokio::spawn(remove_expired_worktrees(Arc::clone(&server)));
     tokio::spawn(reclaim_agents(Arc::clone(&server)));
-    server.reach_at(remote.clone());
     tokio::spawn(serve_remote(Arc::clone(&server), remote));
     local::accept_forever(local, |stream| drop(tokio::spawn(serve_stream(Arc::clone(&server), stream, Peer::Local))))
         .await
@@ -100,60 +105,73 @@ async fn serve_remote_connection(
         return connection.close(remote::REFUSED, NO_PROOF);
     };
     drop(proving);
-    let pinned = blocking(&server, move |server| server.paired_name(&key)).await;
-    let name = match pinned {
-        Ok(Some(name)) => name,
-        Ok(None) if !server.offering() => return connection.close(remote::REFUSED, NO_CODE_ON_OFFER),
-        Ok(None) => {
+    match track(&server, key, &connection).await {
+        Ok(true) => {}
+        Ok(false) if !server.offering() => return connection.close(remote::REFUSED, NO_CODE_ON_OFFER),
+        Ok(false) => {
             let Ok(_pairing) = unpaired.try_acquire() else {
                 return connection.close(remote::REFUSED, TOO_MANY_UNPAIRED);
             };
-            match pair(&server, &connection, key).await {
-                Some(name) => name,
-                None => return connection.close(remote::REFUSED, UNPAIRED),
+            if !pair(&server, &connection, key).await {
+                return connection.close(remote::REFUSED, UNPAIRED);
+            }
+            match track(&server, key, &connection).await {
+                Ok(true) => {}
+                Ok(false) => return connection.close(remote::REFUSED, UNPAIRED),
+                Err(error) => {
+                    report!("look up the pin of {key}: {error}");
+                    return connection.close(remote::REFUSED, INTERNAL);
+                }
             }
         }
         Err(error) => {
             report!("look up the pin of {key}: {error}");
             return connection.close(remote::REFUSED, INTERNAL);
         }
-    };
+    }
     remote::admit(&connection);
     while let Ok((send, receive)) = connection.accept_bi().await {
-        let peer = Peer::Paired { name: name.clone(), key };
-        tokio::spawn(serve_stream(Arc::clone(&server), tokio::io::join(receive, send), peer));
+        tokio::spawn(serve_stream(Arc::clone(&server), tokio::io::join(receive, send), Peer::Paired(key)));
     }
+    blocking(&server, move |server| server.untrack(&key, &connection)).await;
+}
+
+/// Whether `key` is pinned, keeping `connection` among its open ones if it is, so forgetting the key closes it.
+async fn track(server: &Arc<Server>, key: PublicKey, connection: &Connection) -> Result<bool, Error> {
+    let connection = connection.clone();
+    blocking(server, move |server| server.track(key, &connection)).await
 }
 
 /// An unpaired client's first stream carries one `pairing.pair`; the client is paired once it proves a code.
-async fn pair(server: &Arc<Server>, connection: &Connection, key: PublicKey) -> Option<String> {
-    let (mut send, receive) = tokio::time::timeout(PAIRING_PATIENCE, connection.accept_bi()).await.ok()?.ok()?;
+async fn pair(server: &Arc<Server>, connection: &Connection, key: PublicKey) -> bool {
+    let Ok(Ok((mut send, receive))) = tokio::time::timeout(PAIRING_PATIENCE, connection.accept_bi()).await else {
+        return false;
+    };
     let mut first = String::new();
     let mut bounded = BufReader::new(receive.take(PAIRING_LINE_BYTES));
-    tokio::time::timeout(PAIRING_PATIENCE, bounded.read_line(&mut first)).await.ok()?.ok()?;
+    let Ok(Ok(_)) = tokio::time::timeout(PAIRING_PATIENCE, bounded.read_line(&mut first)).await else {
+        return false;
+    };
     let (id, claimed) = match parse_request(&first) {
         Ok(request) => (request.id, claim(server, key, &request).await),
         Err((id, error)) => (id, Err(error)),
     };
-    let name = claimed.as_ref().ok().map(|(name, _)| name.clone());
-    let reply = respond(id, Outcome::from(claimed.map(|(_, paired)| paired)));
-    if send.write_all(reply.as_bytes()).await.is_ok() && send.finish().is_ok() {
+    let paired = claimed.is_ok();
+    if send.write_all(respond(id, Outcome::from(claimed)).as_bytes()).await.is_ok() && send.finish().is_ok() {
         // Closing the connection drops unacknowledged bytes, and a refusal must still reach the client.
         let _acknowledged_or_gone = tokio::time::timeout(PAIRING_PATIENCE, send.stopped()).await;
     }
-    name
+    paired
 }
 
 /// Pins the client proving `key` once its request proves a code. A paired client may pair again, to pin the
 /// server's key anew.
-async fn claim(server: &Arc<Server>, key: PublicKey, request: &Request) -> Result<(String, Paired), Error> {
+async fn claim(server: &Arc<Server>, key: PublicKey, request: &Request) -> Result<Paired, Error> {
     if request.op != PairingPair::NAME {
         return Err(Error::Unpaired);
     }
     let op = parse_args::<PairingPair>(&request.args)?;
-    let name = op.client.clone();
-    let paired = blocking(server, move |server| server.pair(&key, op)).await?;
-    Ok((name, paired))
+    blocking(server, move |server| server.pair(&key, op)).await
 }
 
 async fn remove_expired_worktrees(server: Arc<Server>) {
@@ -199,25 +217,22 @@ async fn serve_stream<S: AsyncRead + AsyncWrite + Send + 'static>(server: Arc<Se
     let (read, mut write) = tokio::io::split(stream);
     let mut lines = BufReader::new(read);
     let mut first = String::new();
-    if lines.read_line(&mut first).await.unwrap_or(0) == 0 {
+    if (&mut lines).take(FIRST_LINE_BYTES).read_line(&mut first).await.unwrap_or(0) == 0 {
         return;
     }
     let reply = match serde_json::from_str::<Value>(&first) {
-        Ok(value) if value.get("open").is_some() => {
-            let header =
-                parse_args::<StreamHeader>(&value).and_then(|header| peer.admit(&header.client).map(|()| header));
-            match header {
-                Ok(header) => return serve_data_stream(server, header, peer.remote(), lines, write).await,
-                Err(error) => line(&Outcome::Err(error)),
+        Ok(value) if value.get("open").is_some() => match parse_args::<StreamHeader>(&value) {
+            Ok(header) => {
+                return serve_data_stream(server, header.open, peer.stream(header.client), lines, write).await;
             }
-        }
-        Ok(value) => match (request_from(value), &peer) {
-            (Ok(request), Peer::Paired { key, .. }) if request.op == PairingPair::NAME => {
-                let claimed = claim(&server, *key, &request).await;
-                respond(request.id, Outcome::from(claimed.map(|(_, paired)| paired)))
+            Err(error) => line(&Outcome::Err(error)),
+        },
+        Ok(value) => match (request_from(value), peer) {
+            (Ok(request), Peer::Paired(key)) if request.op == PairingPair::NAME => {
+                respond(request.id, Outcome::from(claim(&server, key, &request).await))
             }
-            (Ok(request), _) => match hello(&request, &peer) {
-                Ok(client) => return serve_control(server, request, client, peer.remote(), lines, write).await,
+            (Ok(request), _) => match hello(&server, &request, peer).await {
+                Ok(client) => return serve_control(server, request, client, lines, write).await,
                 Err(error) => respond(request.id, Outcome::Err(error)),
             },
             (Err((id, error)), _) => respond(id, Outcome::Err(error)),
@@ -227,27 +242,19 @@ async fn serve_stream<S: AsyncRead + AsyncWrite + Send + 'static>(server: Arc<Se
     let _peer_gone = write.write_all(reply.as_bytes()).await;
 }
 
-fn hello(request: &Request, peer: &Peer) -> Result<String, Error> {
+async fn hello(server: &Arc<Server>, request: &Request, peer: Peer) -> Result<Client, Error> {
     if request.op != SessionHello::NAME {
         return Err(Error::invalid(format!("the first request must be {}", SessionHello::NAME)));
     }
-    let hello = parse_args::<SessionHello>(&request.args)?;
-    peer.admit(&hello.client)?;
-    Ok(hello.client)
+    peer.hello(server, parse_args::<SessionHello>(&request.args)?.client).await
 }
 
-async fn serve_control<R, W>(
-    server: Arc<Server>,
-    hello: Request,
-    client: String,
-    remote: bool,
-    mut lines: BufReader<R>,
-    mut write: W,
-) where
+async fn serve_control<R, W>(server: Arc<Server>, hello: Request, client: Client, mut lines: BufReader<R>, mut write: W)
+where
     R: AsyncRead + Unpin + Send,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    server.client_connected(&client, remote);
+    server.client_connected(&client);
     let (out, mut outbox) = mpsc::unbounded_channel::<String>();
     let mut pushes = server.subscribe();
     let _client_gone = out.send(respond(hello.id, server.handle(&client, &hello)));
@@ -328,7 +335,7 @@ fn find_terminal(server: &Server, id: &PtyId) -> Result<Arc<Terminal>, Error> {
     server.terminal(id).ok_or_else(|| Error::not_found(id))
 }
 
-async fn open(server: &Arc<Server>, name: &str, client: &str) -> Result<Opened, Error> {
+async fn open(server: &Arc<Server>, name: &str, client: &Client) -> Result<Opened, Error> {
     match Stream::parse(name).ok_or_else(|| Error::invalid(format!("no stream named {name}")))? {
         Stream::File { task, path } => {
             Ok(Opened::File(blocking(server, move |server| server.read_file(&task, &path)).await?))
@@ -342,8 +349,12 @@ async fn open(server: &Arc<Server>, name: &str, client: &str) -> Result<Opened, 
             Ok(Opened::Pty(terminal, output))
         }
         Stream::Mic(id) => {
-            let terminal = blocking(server, move |server| find_terminal(server, &id)).await?;
-            terminal.check_holder(client)?;
+            let client = client.clone();
+            let terminal = blocking(server, move |server| {
+                let terminal = find_terminal(server, &id)?;
+                server.check_holder(&client, &terminal).map(|()| terminal)
+            })
+            .await?;
             Ok(Opened::Mic(terminal))
         }
         Stream::Tunnel(port) => Ok(Opened::Tunnel(crate::browser::dial(port).await?)),
@@ -353,24 +364,24 @@ async fn open(server: &Arc<Server>, name: &str, client: &str) -> Result<Opened, 
 
 async fn serve_data_stream<R, W>(
     server: Arc<Server>,
-    header: StreamHeader,
-    remote: bool,
+    open_name: String,
+    client: Client,
     input: BufReader<R>,
     mut write: W,
 ) where
     R: AsyncRead + Unpin + Send,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    let opened = open(&server, &header.open, &header.client).await;
+    let opened = open(&server, &open_name, &client).await;
     // The client counts as showing a terminal before it hears the stream opened, so a claim it sends next always
     // finds it showing.
     if let Ok(Opened::Pty(terminal, _)) = &opened {
-        terminal.show(&header.client);
+        terminal.show(&client);
     }
     let reply = line(&Outcome::from(opened.as_ref().map(drop).map_err(Error::clone)));
     if write.write_all(reply.as_bytes()).await.is_err() {
         if let Ok(Opened::Pty(terminal, _)) = opened {
-            blocking(&server, move |server| server.stopped_showing(&header.client, terminal, true)).await;
+            blocking(&server, move |server| server.stopped_showing(&client, terminal, true)).await;
         }
         return;
     }
@@ -388,9 +399,9 @@ async fn serve_data_stream<R, W>(
             }
         }
         Opened::Pty(terminal, output) => {
-            relay_terminal(server, header.client, remote, terminal, output, input, write).await;
+            relay_terminal(server, client, terminal, output, input, write).await;
         }
-        Opened::Mic(terminal) => hear(&server, &header.client, &terminal, input).await,
+        Opened::Mic(terminal) => hear(&server, &client, &terminal, input).await,
         Opened::Tunnel(mut port) => {
             let _either_side_closed =
                 tokio::io::copy_bidirectional(&mut tokio::io::join(input, write), &mut port).await;
@@ -403,8 +414,7 @@ async fn serve_data_stream<R, W>(
 /// with the client's hang-up still reads as a finish.
 async fn relay_terminal<R, W>(
     server: Arc<Server>,
-    client: String,
-    remote: bool,
+    client: Client,
     terminal: Arc<Terminal>,
     mut terminal_output: local::Stream,
     mut input: BufReader<R>,
@@ -413,7 +423,7 @@ async fn relay_terminal<R, W>(
     R: AsyncRead + Unpin + Send,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    server.client_connected(&client, remote);
+    server.client_connected(&client);
     let mut output = tokio::spawn(async move {
         tokio::io::copy(&mut terminal_output, &mut write).await?;
         write.shutdown().await
@@ -428,8 +438,8 @@ async fn relay_terminal<R, W>(
                 Ok(read) => {
                     let (from, to, bytes) = (client.clone(), Arc::clone(&terminal), buffer[..read].to_vec());
                     match tokio::task::spawn_blocking(move || to.write_as(&from, &bytes)).await {
-                        Ok(Ok(()) | Err(Error::PtyLocked { .. } | Error::Conflict { .. })) => {}
-                        Ok(Err(error)) => report!("input from {client} to {}: {error}", terminal.id),
+                        Ok(Ok(()) | Err(Refusal::HeldBy(_) | Refusal::Free)) => {}
+                        Ok(Err(Refusal::Failed(error))) => report!("input from {client} to {}: {error}", terminal.id),
                         Err(error) => report!("input from {client} to {} panicked: {error}", terminal.id),
                     }
                 }
@@ -466,7 +476,7 @@ async fn receive<R: AsyncRead + Unpin>(
 }
 
 /// Takes the holder's audio until it closes the stream or the lock leaves it, which closes the stream.
-async fn hear<R: AsyncRead + Unpin>(server: &Server, client: &str, terminal: &Terminal, mut input: BufReader<R>) {
+async fn hear<R: AsyncRead + Unpin>(server: &Server, client: &Client, terminal: &Terminal, mut input: BufReader<R>) {
     server.sending(terminal, true);
     let mut buffer = [0u8; INPUT_BYTES];
     while let Ok(read) = input.read(&mut buffer).await

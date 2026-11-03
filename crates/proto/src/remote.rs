@@ -8,14 +8,14 @@
 
 use std::collections::HashSet;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub use iroh::endpoint::Connection;
 use iroh::endpoint::{BindOpts, QuicTransportConfig, VarInt, presets};
 pub use iroh::{Endpoint, RelayUrl};
-use iroh::{EndpointAddr, EndpointId, RelayConfig, RelayMap, RelayMode, SecretKey, Signature, TransportAddr};
+use iroh::{EndpointAddr, EndpointId, RelayConfig, RelayMap, RelayMode, SecretKey, Signature};
 
 use crate::device::{DeviceKey, PublicKey};
 
@@ -105,24 +105,6 @@ pub async fn listen(udp: SocketAddr, relay: RelayUrl, key: &DeviceKey) -> io::Re
     builder.bind().await.map_err(|error| failed(format!("bind UDP {udp}"), error))
 }
 
-/// The UDP addresses a client on the same network, or on the same tailnet or VPN, reaches `endpoint` at directly.
-/// The server's public addresses stay out: an invite travels by chat and mail, and a client finds them through the
-/// relay anyway.
-pub fn direct_addresses(endpoint: &Endpoint) -> Vec<SocketAddr> {
-    let mut addresses: Vec<SocketAddr> =
-        endpoint.addr().ip_addrs().copied().filter(|address| is_local_network(address.ip())).collect();
-    addresses.sort();
-    addresses
-}
-
-/// Loopback, a private IPv4 range, the shared range tailnets use (100.64.0.0/10), or an IPv6 unique local address.
-fn is_local_network(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => ip.is_loopback() || ip.is_private() || (ip.octets()[0] == 100 && ip.octets()[1] & 0xc0 == 64),
-        IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local(),
-    }
-}
-
 /// Gives a paired client's connection every stream and the whole window.
 pub fn admit(connection: &Connection) {
     connection.set_max_concurrent_bi_streams(PAIRED_STREAMS);
@@ -154,24 +136,17 @@ impl Dialer {
         Ok(Self { endpoint, relays: Arc::default() })
     }
 
-    /// Dials the server holding `server` at its direct `addresses` and through `relay` at once, then proves `device` on
-    /// the connection. Only that key's holder can complete the handshake.
-    pub async fn connect(
-        &self,
-        device: &DeviceKey,
-        server: PublicKey,
-        relay: &RelayUrl,
-        addresses: &[SocketAddr],
-    ) -> io::Result<Connection> {
+    /// Dials the server holding `server` through `relay`, then proves `device` on the connection. Only that key's
+    /// holder can complete the handshake.
+    pub async fn connect(&self, device: &DeviceKey, server: PublicKey, relay: &RelayUrl) -> io::Result<Connection> {
         let at = format!("{server} at {relay}");
-        let direct = addresses.iter().copied().map(TransportAddr::Ip);
         let learned = self.relays.lock().unwrap_or_else(|poison| poison.into_inner()).insert(relay.clone());
         if learned {
             self.endpoint.insert_relay(relay.clone(), Arc::new(RelayConfig::from(relay.clone()))).await;
         }
         let connection = self
             .endpoint
-            .connect(EndpointAddr::new(server.endpoint()).with_relay_url(relay.clone()).with_addrs(direct), ALPN)
+            .connect(EndpointAddr::new(server.endpoint()).with_relay_url(relay.clone()), ALPN)
             .await
             .map_err(|error| failed(&at, error))?;
         let signature = device.secret().sign(&claim(server.endpoint(), self.endpoint.id()));

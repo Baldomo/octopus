@@ -1,5 +1,6 @@
 mod browser;
 mod checkouts;
+mod client;
 mod emulator;
 mod files;
 mod harness;
@@ -14,7 +15,7 @@ mod tasks;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, Weak, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use octopus_proto::device::{DeviceKey, PublicKey};
@@ -27,26 +28,28 @@ use octopus_proto::ops::{
     WorkspaceCreated, WorkspaceList, WorkspaceRemove, WorkspaceRename, WorkspaceSetColor, Workspaces, Written,
 };
 use octopus_proto::pairing::{Invite, Side};
-use octopus_proto::remote::{self, Endpoint, RelayUrl};
+use octopus_proto::remote::{self, Connection, RelayUrl};
 use octopus_proto::types::{
-    AGENT_PANEL, Agent, AgentStatus, BrowserPanel, Checkout, ENV_SERVER, ENV_TASK, Hooks, Panel, PtyId, SessionId,
-    Task, TaskId, web_page,
+    AGENT_PANEL, Agent, AgentStatus, BrowserPanel, Checkout, ENV_SERVER, ENV_TASK, Hooks, LockHolder, Panel, PtyId,
+    SessionId, Task, TaskId, web_page,
 };
 use octopus_proto::{Error, Event, Op, Outcome, Push, Request, parse_args};
 use tokio::sync::broadcast;
 
 pub use checkouts::WORKTREE_LIFETIME_MS;
+use client::Client;
 pub use listener::serve;
 use mic::Microphones;
 #[cfg(target_os = "macos")]
 pub use mic::give_back_input;
 use pairing::Offers;
-use service::{HostClient, Terminal};
+use service::{HostClient, Refusal, Terminal};
 pub use service::{TerminalHost, run_terminal_host};
 use store::{Harness, PanelRow, Store, TaskRow};
 use tasks::{MoveEffect, apply_move};
 
 const PUSH_BACKLOG: usize = 4096;
+const FORGOTTEN: &[u8] = b"this client was forgotten; pair it again with a fresh invite";
 /// How long a holder whose connection dropped keeps its locks.
 const HOLDER_GRACE: Duration = Duration::from_secs(10);
 /// Stands for the task's session id in a harness's start and resume args.
@@ -89,17 +92,15 @@ pub struct Server {
     name: String,
     device: DeviceKey,
     relay: RelayUrl,
-    /// Set once `serve` takes the endpoint, before any client can ask for an invite.
-    endpoint: OnceLock<Endpoint>,
     offers: Mutex<Offers>,
     worktrees: PathBuf,
     /// The `octopus` binary, through which an agent's hooks report.
     octopus: PathBuf,
     host: Arc<HostClient>,
     state: Mutex<State>,
-    clients: Mutex<HashMap<String, usize>>,
-    /// The clients whose newest connection came over QUIC, from another machine.
-    remote: Mutex<HashSet<String>>,
+    clients: Mutex<HashMap<Client, usize>>,
+    /// Each paired device's open connections over iroh.
+    connections: Mutex<HashMap<PublicKey, Vec<Connection>>>,
     mic: Microphones,
     pushes: broadcast::Sender<Push>,
     file_changes: mpsc::Sender<(TaskId, String)>,
@@ -221,13 +222,34 @@ impl State {
                     id: terminal.id.clone(),
                     name: name.to_string(),
                     running: terminal.running(),
-                    lock_holder: screen.holder,
+                    lock_holder: screen.holder.map(|holder| self.lock_holder(holder)),
                     cols: screen.cols,
                     rows: screen.rows,
                     listening: self.listening.contains(&terminal.id),
                 }
             })
             .collect()
+    }
+
+    /// A paired holder is labelled with the name its key is pinned under now, or its key once it is no longer pinned.
+    fn lock_holder(&self, holder: Client) -> LockHolder {
+        match holder {
+            Client::Local(name) => LockHolder { name, key: None },
+            Client::Paired(key) => {
+                let name = match self.store.client_pinned_to(&key) {
+                    Ok(Some(name)) => name,
+                    Ok(None) => {
+                        report!("{key} holds a lock though it is no longer pinned");
+                        key.to_string()
+                    }
+                    Err(error) => {
+                        report!("look up the name {key} is pinned under: {error}");
+                        key.to_string()
+                    }
+                };
+                LockHolder { name, key: Some(key) }
+            }
+        }
     }
 
     fn find_terminal(&self, task: &TaskId, key: &str) -> Result<Arc<Terminal>, Error> {
@@ -310,7 +332,6 @@ impl Server {
             name: name.to_string(),
             device,
             relay,
-            endpoint: OnceLock::new(),
             offers: Mutex::default(),
             worktrees: worktrees.to_path_buf(),
             octopus: host_program,
@@ -324,7 +345,7 @@ impl Server {
                 listening: HashSet::new(),
             }),
             clients: Mutex::new(HashMap::new()),
-            remote: Mutex::default(),
+            connections: Mutex::new(HashMap::new()),
             mic,
             pushes,
             file_changes,
@@ -380,18 +401,10 @@ impl Server {
         &self.relay
     }
 
-    pub(crate) fn reach_at(&self, endpoint: Endpoint) {
-        self.endpoint.set(endpoint).expect("a server is served once");
-    }
-
-    fn direct_addresses(&self) -> Vec<std::net::SocketAddr> {
-        remote::direct_addresses(self.endpoint.get().expect("a client reaches a server that serves"))
-    }
-
     fn offer(&self) -> Offer {
         let (code, expires_at) = lock(&self.offers).offer(now());
         let (server, relay) = (self.device.public(), self.relay.clone());
-        Offer { invite: Invite { code, server, relay, addresses: self.direct_addresses() }, expires_at }
+        Offer { invite: Invite { code, server, relay }, expires_at }
     }
 
     /// Whether an unspent code is on offer, the one time an unpaired client gets past the handshake.
@@ -399,36 +412,91 @@ impl Server {
         lock(&self.offers).offering(now())
     }
 
-    pub(crate) fn paired_name(&self, client: &PublicKey) -> Result<Option<String>, Error> {
-        lock(&self.state).store.client_pinned_to(client)
+    /// Keeps `connection` among the open connections of `key` while the key is pinned, so forgetting it closes them.
+    pub(crate) fn track(&self, key: PublicKey, connection: &Connection) -> Result<bool, Error> {
+        let state = lock(&self.state);
+        let pinned = state.store.client_pinned_to(&key)?.is_some();
+        if pinned {
+            lock(&self.connections).entry(key).or_default().push(connection.clone());
+        }
+        Ok(pinned)
+    }
+
+    pub(crate) fn untrack(&self, key: &PublicKey, connection: &Connection) {
+        let mut connections = lock(&self.connections);
+        if let Some(open) = connections.get_mut(key) {
+            open.retain(|each| each.stable_id() != connection.stable_id());
+            if open.is_empty() {
+                connections.remove(key);
+            }
+        }
+    }
+
+    /// A paired client goes by the name its `session.hello` gives; a key no longer pinned says hello to nobody.
+    pub(crate) fn hello_paired(&self, key: PublicKey, name: &str) -> Result<Client, Error> {
+        let mut state = lock(&self.state);
+        let pinned = state.store.client_pinned_to(&key)?.ok_or(Error::Unpaired)?;
+        if pinned != name {
+            client::check_name(name)?;
+            state.store.refuse_claim(name, &key)?;
+            state.store.rename_client(&key, name)?;
+            self.touch_held(&mut state, &Client::Paired(key))?;
+        }
+        Ok(Client::Paired(key))
     }
 
     /// Pins the client's key under its name once it proves an unspent code.
     pub(crate) fn pair(&self, client: &PublicKey, op: PairingPair) -> Result<Paired, Error> {
-        if op.client.is_empty() {
-            return Err(Error::invalid("a client name is non-empty"));
-        }
+        client::check_name(&op.client)?;
         let server = self.device.public();
         let mut state = lock(&self.state);
-        state.store.refuse_namesake(&op.client, client)?;
+        state.store.refuse_claim(&op.client, client)?;
         let code = lock(&self.offers).redeem(now(), &op.proof, &server, client).ok_or(Error::CodeRefused)?;
+        let renamed = state.store.client_pinned_to(client)?.is_some_and(|pinned| pinned != op.client);
         state.store.pin_client(&op.client, client)?;
+        if renamed {
+            self.touch_held(&mut state, &Client::Paired(*client))?;
+        }
         Ok(Paired { server: self.name.clone(), proof: code.prove(Side::Server, &server, client) })
+    }
+
+    /// Unpins the named client, closes its open connections and frees every lock it holds.
+    fn pairing_forget(&self, op: PairingForget) -> Result<Done, Error> {
+        let mut state = lock(&self.state);
+        let key = state.store.forget_client(&op.client)?;
+        for connection in lock(&self.connections).remove(&key).into_iter().flatten() {
+            connection.close(remote::REFUSED, FORGOTTEN);
+        }
+        let forgotten = Client::Paired(key);
+        self.touch_terminals(&mut state, |terminal| terminal.free(&forgotten))?;
+        Ok(Done {})
+    }
+
+    /// Republishes each task whose lock `client` holds, as its label changed.
+    fn touch_held(&self, state: &mut State, client: &Client) -> Result<(), Error> {
+        self.touch_terminals(state, |terminal| terminal.holds(client))
+    }
+
+    fn touch_terminals(&self, state: &mut State, mut pick: impl FnMut(&Terminal) -> bool) -> Result<(), Error> {
+        let picked: Vec<TaskId> =
+            state.every_terminal().filter(|(_, terminal)| pick(terminal)).map(|(task, _)| task.clone()).collect();
+        for task in picked {
+            self.touch_task(state, &task)?;
+        }
+        Ok(())
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Push> {
         self.pushes.subscribe()
     }
 
-    pub fn handle(&self, client: &str, request: &Request) -> Outcome {
+    pub fn handle(&self, client: &Client, request: &Request) -> Outcome {
         let args = &request.args;
         match request.op.as_str() {
             SessionHello::NAME => call::<SessionHello>(args, |_| self.welcome()),
             SessionSync::NAME => call::<SessionSync>(args, |_| self.snapshot()),
             SessionPing::NAME => call::<SessionPing>(args, |_| Ok(Done {})),
-            PairingForget::NAME => {
-                call::<PairingForget>(args, |op| lock(&self.state).store.forget_client(&op.client).map(|()| Done {}))
-            }
+            PairingForget::NAME => call::<PairingForget>(args, |op| self.pairing_forget(op)),
             PairingOffer::NAME => call::<PairingOffer>(args, |_| Ok::<Offer, Error>(self.offer())),
             PairingList::NAME => call::<PairingList>(args, |_| self.pairing_list()),
             WorkspaceAdd::NAME => call::<WorkspaceAdd>(args, |op| self.workspace_add(op)),
@@ -499,10 +567,9 @@ impl Server {
     fn touch_task(&self, state: &mut State, task: &TaskId) -> Result<u64, Error> {
         let row = state.store.touch_task(task)?;
         self.publish_task(state, &row);
-        let remote = lock(&self.remote);
         let held = state
             .every_terminal()
-            .filter(|(_, terminal)| terminal.screen().holder.is_some_and(|holder| remote.contains(&holder)))
+            .filter(|(_, terminal)| matches!(terminal.screen().holder, Some(Client::Paired(_))))
             .map(|(_, terminal)| terminal.id.clone())
             .collect();
         self.mic.remote_held(held);
@@ -511,7 +578,7 @@ impl Server {
 
     fn welcome(&self) -> Result<Welcome, Error> {
         let rev = lock(&self.state).store.rev()?;
-        Ok(Welcome { server: self.name.clone(), rev, addresses: self.direct_addresses() })
+        Ok(Welcome { server: self.name.clone(), rev })
     }
 
     fn snapshot(&self) -> Result<Snapshot, Error> {
@@ -579,7 +646,12 @@ impl Server {
         let connected = lock(&self.clients);
         let clients = pinned
             .into_iter()
-            .map(|(name, seen_at)| PairedClient { connected: connected.contains_key(&name), name, seen_at })
+            .map(|(key, name, seen_at)| PairedClient {
+                connected: connected.contains_key(&Client::Paired(key)),
+                name,
+                key,
+                seen_at,
+            })
             .collect();
         Ok(Clients { clients })
     }
@@ -1003,10 +1075,23 @@ impl Server {
     }
 
     /// Audio from `client` for the terminal's virtual microphone, taken only while `client` holds the lock.
-    pub(crate) fn hear(&self, client: &str, terminal: &Terminal, bytes: &[u8]) -> Result<(), Error> {
-        terminal.check_holder(client)?;
+    pub(crate) fn hear(&self, client: &Client, terminal: &Terminal, bytes: &[u8]) -> Result<(), Error> {
+        self.check_holder(client, terminal)?;
         self.mic.feed(&terminal.id, bytes);
         Ok(())
+    }
+
+    pub(crate) fn check_holder(&self, client: &Client, terminal: &Terminal) -> Result<(), Error> {
+        terminal.check_holder(client).map_err(|refusal| self.refused(terminal, refusal))
+    }
+
+    /// Words a refusal for the client, naming a holder by its label.
+    fn refused(&self, terminal: &Terminal, refusal: Refusal) -> Error {
+        match refusal {
+            Refusal::HeldBy(holder) => Error::PtyLocked { holder: lock(&self.state).lock_holder(holder).name },
+            Refusal::Free => Error::conflict(format!("this client holds no lock on {}; take it first", terminal.id)),
+            Refusal::Failed(error) => error,
+        }
     }
 
     pub(crate) fn sending(&self, terminal: &Terminal, sending: bool) {
@@ -1078,7 +1163,7 @@ impl Server {
     }
 
     /// Writes happen after the state lock is released: a full pty buffer blocks them. A take keeps the size.
-    fn term_send(&self, client: &str, op: TermSend) -> Result<Revised, Error> {
+    fn term_send(&self, client: &Client, op: TermSend) -> Result<Revised, Error> {
         let mut bytes = op.text.into_bytes();
         if op.enter {
             bytes.push(b'\r');
@@ -1087,23 +1172,23 @@ impl Server {
             let screen = terminal.screen();
             if op.take_lock { terminal.take(client, screen.cols, screen.rows) } else { Ok(false) }
         })?;
-        terminal.write_as(client, &bytes)?;
+        terminal.write_as(client, &bytes).map_err(|refusal| self.refused(&terminal, refusal))?;
         Ok(Revised { rev })
     }
 
-    fn term_claim(&self, client: &str, op: TermClaim) -> Result<Revised, Error> {
+    fn term_claim(&self, client: &Client, op: TermClaim) -> Result<Revised, Error> {
         let (_, rev) =
             self.on_screen(client, &op.task, &op.panel, |terminal| terminal.claim(client, op.cols, op.rows))?;
         Ok(Revised { rev })
     }
 
-    fn term_take_lock(&self, client: &str, op: TermTakeLock) -> Result<Revised, Error> {
+    fn term_take_lock(&self, client: &Client, op: TermTakeLock) -> Result<Revised, Error> {
         let (_, rev) =
             self.on_screen(client, &op.task, &op.panel, |terminal| terminal.take(client, op.cols, op.rows))?;
         Ok(Revised { rev })
     }
 
-    fn term_resize(&self, client: &str, op: TermResize) -> Result<Revised, Error> {
+    fn term_resize(&self, client: &Client, op: TermResize) -> Result<Revised, Error> {
         let (_, rev) =
             self.on_screen(client, &op.task, &op.panel, |terminal| terminal.resize(client, op.cols, op.rows))?;
         Ok(Revised { rev })
@@ -1111,18 +1196,27 @@ impl Server {
 
     /// Runs `change` on a panel's screen outside the state lock, since it may call the terminal host, then publishes
     /// the task when the holder or size moved. A lock `client` now holds without showing the terminal, as the CLI's,
-    /// frees after the grace.
+    /// frees after the grace. A paired client forgotten while `change` ran keeps nothing it took: the forget and this
+    /// check each hold the state lock, so whichever runs second frees the lock.
     fn on_screen(
         &self,
-        client: &str,
+        client: &Client,
         task: &TaskId,
         panel: &str,
-        change: impl FnOnce(&Terminal) -> Result<bool, Error>,
+        change: impl FnOnce(&Terminal) -> Result<bool, Refusal>,
     ) -> Result<(Arc<Terminal>, u64), Error> {
         let terminal = lock(&self.state).find_terminal(task, panel)?;
-        let changed = change(&terminal)?;
+        let changed = change(&terminal).map_err(|refusal| self.refused(&terminal, refusal))?;
         let rev = {
             let mut state = lock(&self.state);
+            if let Client::Paired(key) = client
+                && state.store.client_pinned_to(key)?.is_none()
+            {
+                if terminal.free(client) {
+                    self.touch_task(&mut state, task)?;
+                }
+                return Err(Error::Unpaired);
+            }
             if changed { self.touch_task(&mut state, task)? } else { state.store.rev()? }
         };
         if terminal.held_unshown(client) {
@@ -1133,7 +1227,7 @@ impl Server {
 
     /// A client shows a terminal while one of its data streams of it is open. Closing the last one frees the lock it
     /// holds there at once; losing it with the connection frees the lock after the grace.
-    pub(crate) fn stopped_showing(&self, client: &str, terminal: Arc<Terminal>, closed_cleanly: bool) {
+    pub(crate) fn stopped_showing(&self, client: &Client, terminal: Arc<Terminal>, closed_cleanly: bool) {
         terminal.unshow(client);
         if closed_cleanly {
             self.free_if_unshown(client, &terminal, terminal.shows(client));
@@ -1142,7 +1236,7 @@ impl Server {
         }
     }
 
-    fn free_if_unshown(&self, client: &str, terminal: &Terminal, shows: u64) {
+    fn free_if_unshown(&self, client: &Client, terminal: &Terminal, shows: u64) {
         let mut state = lock(&self.state);
         let Some((task, _)) = state.terminal_by_id(&terminal.id) else { return };
         if terminal.free_if_unshown(client, shows)
@@ -1152,8 +1246,8 @@ impl Server {
         }
     }
 
-    fn free_after_grace(&self, client: &str, terminal: Arc<Terminal>) {
-        let (server, client, shows) = (Weak::clone(&self.me), client.to_string(), terminal.shows(client));
+    fn free_after_grace(&self, client: &Client, terminal: Arc<Terminal>) {
+        let (server, client, shows) = (Weak::clone(&self.me), client.clone(), terminal.shows(client));
         std::thread::spawn(move || {
             std::thread::sleep(HOLDER_GRACE);
             if let Some(server) = server.upgrade() {
@@ -1166,27 +1260,22 @@ impl Server {
         lock(&self.state).terminal_by_id(id).map(|(_, terminal)| terminal)
     }
 
-    fn saw(&self, client: &str) {
-        if let Err(error) = lock(&self.state).store.client_seen(client, now()) {
+    /// Only a paired client is seen: it alone is pinned.
+    fn saw(&self, client: &Client) {
+        let Client::Paired(key) = client else { return };
+        if let Err(error) = lock(&self.state).store.client_seen(key, now()) {
             report!("record when {client} was seen: {error}");
         }
     }
 
-    pub(crate) fn client_connected(&self, client: &str, remote: bool) {
+    pub(crate) fn client_connected(&self, client: &Client) {
         self.saw(client);
-        let mut remotes = lock(&self.remote);
-        if remote {
-            remotes.insert(client.to_string())
-        } else {
-            remotes.remove(client)
-        };
-        drop(remotes);
-        *lock(&self.clients).entry(client.to_string()).or_default() += 1;
+        *lock(&self.clients).entry(client.clone()).or_default() += 1;
     }
 
     /// A holder that disconnects keeps its locks through the grace, so a dropped connection that comes back in time
     /// and shows its terminals again keeps them.
-    pub(crate) fn client_disconnected(&self, client: &str) {
+    pub(crate) fn client_disconnected(&self, client: &Client) {
         self.saw(client);
         {
             let mut clients = lock(&self.clients);

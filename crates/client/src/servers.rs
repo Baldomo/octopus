@@ -1,7 +1,6 @@
 //! The servers this client knows, the only server data it persists, and pairing, which adds a remote one.
 
 use std::fmt;
-use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -21,9 +20,8 @@ use crate::connection::Identity;
 pub enum Address {
     /// A server on this machine, which admits this OS user with no pairing.
     Local { socket: PathBuf },
-    /// A paired server on another machine, dialled by its pinned `key` at its direct `addresses` and through its
-    /// `relay` at once.
-    Remote { key: PublicKey, relay: RelayUrl, addresses: Vec<SocketAddr> },
+    /// A paired server on another machine, dialled by its pinned `key` through its `relay`.
+    Remote { key: PublicKey, relay: RelayUrl },
 }
 
 impl Address {
@@ -41,7 +39,7 @@ impl fmt::Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Local { socket } => write!(f, "{}", socket.display()),
-            Self::Remote { key, relay, .. } => write!(f, "{key} at {relay}"),
+            Self::Remote { key, relay } => write!(f, "{key} at {relay}"),
         }
     }
 }
@@ -104,36 +102,27 @@ pub fn create_parent(path: &std::path::Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))
 }
 
-/// Rewrites each entry paired over QUIC, `{"path":"quic","endpoint":"<host:port>","key"}`, to dial the same key at
-/// the addresses the endpoint resolves to and through n0's relay, which every server installed then is homed on once
-/// upgraded. The key stays, so neither side pairs again. Returns whether any entry changed.
-pub(crate) fn migrate_quic_entries(listed: &mut serde_json::Value) -> anyhow::Result<bool> {
+/// Rewrites each `quic` entry to `remote` on n0's relay and strips `addresses` from each `remote` entry, keeping the
+/// pinned keys. Returns whether any entry changed.
+pub(crate) fn migrate_entries(listed: &mut serde_json::Value) -> anyhow::Result<bool> {
     let Some(servers) = listed.get_mut("servers").and_then(serde_json::Value::as_array_mut) else { return Ok(false) };
     let mut migrated = false;
     for server in servers.iter_mut() {
         let name = server.get("name").and_then(serde_json::Value::as_str).unwrap_or("a server").to_string();
         let Some(address) = server.get_mut("address") else { continue };
-        if address.get("path").and_then(serde_json::Value::as_str) != Some("quic") {
-            continue;
-        }
-        let (Some(endpoint), Some(key)) =
-            (address.get("endpoint").and_then(serde_json::Value::as_str), address.get("key"))
-        else {
-            bail!("{name} is listed over QUIC without both an endpoint and a key; pair it again with an invite");
-        };
-        let addresses: Vec<String> = match endpoint.to_socket_addrs() {
-            Ok(resolved) => resolved.map(|address| address.to_string()).collect(),
-            Err(error) => {
-                eprintln!(
-                    "octopus: {name} keeps only n0's relay: its QUIC endpoint {endpoint} does not resolve: {error}"
-                );
-                Vec::new()
+        match address.get("path").and_then(serde_json::Value::as_str) {
+            Some("quic") => {
+                let Some(key) = address.get("key") else {
+                    bail!("{name} is listed over QUIC without a key; pair it again with an invite");
+                };
+                *address = serde_json::json!({"path": "remote", "key": key, "relay": remote::N0_EU_RELAY});
+                migrated = true;
             }
-        };
-        *address = serde_json::json!({
-            "path": "remote", "key": key, "relay": remote::N0_EU_RELAY, "addresses": addresses,
-        });
-        migrated = true;
+            Some("remote") => {
+                migrated |= address.as_object_mut().and_then(|fields| fields.remove("addresses")).is_some();
+            }
+            _ => {}
+        }
     }
     Ok(migrated)
 }
@@ -145,8 +134,7 @@ impl Servers {
             Ok(text) => {
                 let mut listed: serde_json::Value =
                     serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
-                let migrated =
-                    migrate_quic_entries(&mut listed).with_context(|| format!("migrate {}", path.display()))?;
+                let migrated = migrate_entries(&mut listed).with_context(|| format!("migrate {}", path.display()))?;
                 let servers: Self =
                     serde_json::from_value(listed).with_context(|| format!("parse {}", path.display()))?;
                 servers
@@ -168,22 +156,6 @@ impl Servers {
         let path = config.file(SERVERS_FILE);
         create_parent(&path)?;
         std::fs::write(&path, serde_json::to_string_pretty(self)?).with_context(|| format!("write {}", path.display()))
-    }
-
-    /// Points the listed remote server `name` at the direct `addresses` it reported, saving the list when they
-    /// changed, so a server whose network moved stays reachable with no relay.
-    pub fn refresh(config: &Config, name: &str, addresses: &[SocketAddr]) -> anyhow::Result<()> {
-        let mut servers = Self::load(config)?;
-        let Some(Address::Remote { addresses: listed, .. }) =
-            servers.servers.iter_mut().find(|server| server.name == name).map(|server| &mut server.address)
-        else {
-            return Ok(());
-        };
-        if listed.as_slice() == addresses {
-            return Ok(());
-        }
-        *listed = addresses.to_vec();
-        servers.save(config)
     }
 
     /// Replaces a listed server only at the same place, as re-pairing does to pin a new key; a name listed for
@@ -248,12 +220,26 @@ impl Identity {
             }
             Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
         };
-        Ok(Self::new(hostname(), key))
+        Ok(Self::new(machine_name()?, key))
     }
 }
 
-pub fn hostname() -> String {
-    gethostname::gethostname().to_string_lossy().into_owned()
+/// The name the user gave this computer, which names both its server and its client. macOS's hostname follows the
+/// network it joins, so it names neither there.
+pub fn machine_name() -> anyhow::Result<String> {
+    #[cfg(target_os = "macos")]
+    {
+        const UNNAMED: &str = "this Mac has no name; set one in System Settings > General > Sharing";
+        let output = std::process::Command::new("/usr/sbin/scutil").args(["--get", "ComputerName"]).output();
+        let output = output.context("run scutil")?;
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !output.status.success() || name.is_empty() {
+            bail!(UNNAMED);
+        }
+        Ok(name)
+    }
+    #[cfg(not(target_os = "macos"))]
+    Ok(gethostname::gethostname().to_string_lossy().into_owned())
 }
 
 fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -272,8 +258,8 @@ pub async fn pair(invite: &Invite, me: &Identity) -> anyhow::Result<Server> {
 }
 
 async fn exchange(invite: &Invite, me: &Identity) -> anyhow::Result<Server> {
-    let Invite { code, server, relay, addresses } = invite;
-    let connection = me.dialer().await?.connect(&me.key, *server, relay, addresses).await?;
+    let Invite { code, server, relay } = invite;
+    let connection = me.dialer().await?.connect(&me.key, *server, relay).await?;
     let client = me.key.public();
     let op = PairingPair { client: me.name(), proof: code.prove(Side::Client, server, &client) };
     let request = Request { id: 1, op: PairingPair::NAME.to_string(), args: serde_json::to_value(op)? };
@@ -293,7 +279,7 @@ async fn exchange(invite: &Invite, me: &Identity) -> anyhow::Result<Server> {
     if !code.proves(&paired.proof, Side::Server, server, &client) {
         bail!("{server} did not prove it holds the code, so it was not pinned");
     }
-    let address = Address::Remote { key: *server, relay: relay.clone(), addresses: addresses.clone() };
+    let address = Address::Remote { key: *server, relay: relay.clone() };
     let server = Server { name: paired.server, address };
     server.validate()?;
     Ok(server)

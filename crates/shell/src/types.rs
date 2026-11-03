@@ -3,7 +3,7 @@
 use octopus_proto::ops::{Entry, EntryKind, Match, Offer, PairedClient};
 use octopus_proto::term::HISTORY_LINES;
 use octopus_proto::types::{
-    AGENT_PANEL, Agent, AgentStatus, BACKGROUND_BROWSER_PANEL, BrowserId, BrowserPanel, Checkout, Hue,
+    AGENT_PANEL, Agent, AgentStatus, BACKGROUND_BROWSER_PANEL, BrowserId, BrowserPanel, Checkout, Hue, LockHolder,
     NEW_BROWSER_PANEL, Panel, PtyId, SessionId, Swatch, Task, TaskId, TaskState, Tone, WorkspaceId,
 };
 use serde::Serialize;
@@ -53,6 +53,7 @@ pub fn render() -> String {
         Swatch,
         Agent,
         Panel,
+        LockHolder,
         BrowserPanel,
         Task,
         EntryKind,

@@ -4,11 +4,11 @@ import { createMemo, createRoot, createSignal, onCleanup } from "solid-js";
 import type { Panel } from "./generated.ts";
 import { EachPanel } from "./panels.ts";
 
-const shell = (id: string, lock_holder: string | null = null): Panel => ({
+const shell = (id: string, holder: string | null = null): Panel => ({
   id,
   name: id,
   running: true,
-  lock_holder,
+  lock_holder: holder === null ? null : { name: holder, key: null },
   cols: 80,
   rows: 24,
   listening: false,
@@ -24,7 +24,7 @@ function mounted(panels: Panel[]) {
         return list();
       },
       children: (panel) => {
-        const holder = createMemo(() => panel().lock_holder);
+        const holder = createMemo(() => panel().lock_holder?.name);
         mounts.push(panel().id);
         onCleanup(() => unmounts.push(`${panel().id}:${holder()}`));
         return panel().id;

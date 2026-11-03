@@ -24,11 +24,13 @@ export type Swatch = { hue: Hue, tone: Tone, };
 
 export type Agent = { "kind": "not_started" } | { "kind": "running", status: AgentStatus, } | { "kind": "harness_not_installed", install: string, } | { "kind": "harness_unknown" };
 
-export type Panel = { id: PtyId, name: string, running: boolean, lock_holder: string | null, cols: number, rows: number, 
+export type Panel = { id: PtyId, name: string, running: boolean, lock_holder: LockHolder | null, cols: number, rows: number, 
 /**
  * A program of the terminal records from its virtual microphone, so the holder sends its own on `mic:<pty>`.
  */
 listening: boolean, };
+
+export type LockHolder = { name: string, key: string | null, };
 
 export type BrowserPanel = { panel: BrowserId, 
 /**
@@ -62,9 +64,13 @@ export type ShownOffer = { offer: Offer, qr: string, };
 
 export type PairedClient = { 
 /**
- * The client's name, as it paired.
+ * The name the client last gave.
  */
-name: string, connected: boolean, 
+name: string, 
+/**
+ * The key the client is pinned by, which is who it is.
+ */
+key: string, connected: boolean, 
 /**
  * When one of its connections last opened or closed, in milliseconds since 1970; null if it never connected.
  */
@@ -132,11 +138,7 @@ relay: string | null,
 /**
  * The key a remote server is pinned by, in hex; none for a server on the local socket.
  */
-key: string | null, 
-/**
- * Where a remote server is dialled directly.
- */
-addresses: Array<string>, reachable: boolean, 
+key: string | null, reachable: boolean, 
 /**
  * When `reachable` last changed, in milliseconds since 1970.
  */
@@ -222,9 +224,13 @@ export type Viewport = { width: number, height: number, };
 
 export type Boot = { 
 /**
- * This client's name, as terminal lock holders see it.
+ * This client's name, which the server on its local socket knows it by.
  */
-me: string, servers: Array<ServerView>, model: Model, ui: Ui, };
+me: string, 
+/**
+ * This client's device key, which every server it is paired with knows it by.
+ */
+key: string, servers: Array<ServerView>, model: Model, ui: Ui, };
 
 export type NewTask = { server: string, workspace: WorkspaceId, title: string, parent: TaskId | null, state: TaskState, checkout: Checkout, harness: string, 
 /**

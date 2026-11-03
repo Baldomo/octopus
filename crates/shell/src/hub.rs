@@ -13,8 +13,8 @@ use octopus_proto::types::{Color, WorkspaceId};
 use octopus_proto::{Event, Op, Push};
 use serde::Serialize;
 use tauri::AppHandle;
-use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{Notify, mpsc, oneshot};
 use ts_rs::TS;
 
 use crate::microphone::{AskAccess, Capture, Listener, MICROPHONE_DENIED_EVENT, Microphone};
@@ -41,8 +41,6 @@ pub struct ServerView {
     pub relay: Option<String>,
     /// The key a remote server is pinned by, in hex; none for a server on the local socket.
     pub key: Option<String>,
-    /// Where a remote server is dialled directly.
-    pub addresses: Vec<String>,
     pub reachable: bool,
     /// When `reachable` last changed, in milliseconds since 1970.
     pub since: i64,
@@ -194,9 +192,6 @@ impl Hub {
         asked: &mut mpsc::UnboundedReceiver<oneshot::Sender<Result<(), String>>>,
     ) -> anyhow::Result<String> {
         let connection = Arc::new(Connection::connect(&server.address, &self.me).await?);
-        if let Err(error) = Servers::refresh(&self.config, &server.name, connection.server_addresses()) {
-            eprintln!("octopus app: keep the addresses {} reported: {error:#}", server.name);
-        }
         let mut pushes = connection.pushes();
         self.resync(&server.name, &connection).await?;
         let mut refresh = tokio::time::interval(RTT_REFRESH);
@@ -436,10 +431,6 @@ impl Hub {
                     Address::Local { .. } => None,
                     Address::Remote { key, .. } => Some(key.hex()),
                 },
-                addresses: match &link.address {
-                    Address::Local { .. } => Vec::new(),
-                    Address::Remote { addresses, .. } => addresses.iter().map(ToString::to_string).collect(),
-                },
                 reachable: link.connection.is_some(),
                 since: link.since,
                 rtt_ms: link
@@ -455,15 +446,12 @@ impl Hub {
     /// The listening terminals whose lock this client holds, on servers it reaches.
     fn listeners(&self) -> BTreeMap<Listener, Arc<Connection>> {
         let state = lock(&self.state);
-        let me = self.me.name();
         let mut listeners = BTreeMap::new();
         for (server, cache) in &state.caches {
-            let Some(Link { connection: Some(connection), .. }) = state.links.get(server) else { continue };
-            let held = cache
-                .tasks
-                .values()
-                .flat_map(|task| &task.panels)
-                .filter(|panel| panel.listening && panel.lock_holder.as_deref() == Some(me.as_str()));
+            let Some(Link { connection: Some(connection), address, .. }) = state.links.get(server) else { continue };
+            let held = cache.tasks.values().flat_map(|task| &task.panels).filter(|panel| {
+                panel.listening && panel.lock_holder.as_ref().is_some_and(|holder| self.me.holds(holder, address))
+            });
             for panel in held {
                 listeners.insert((server.clone(), panel.id.clone()), Arc::clone(connection));
             }

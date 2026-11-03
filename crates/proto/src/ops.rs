@@ -1,8 +1,7 @@
-use std::net::SocketAddr;
-
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::device::PublicKey;
 use crate::frames::Op;
 use crate::pairing::{Invite, Proof};
 use crate::schema::{Field, record};
@@ -35,8 +34,6 @@ pub struct Revised {
 pub struct Welcome {
     pub server: String,
     pub rev: u64,
-    /// Where a client on another machine reaches the server directly now, which it dials next time.
-    pub addresses: Vec<SocketAddr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -103,8 +100,11 @@ pub struct Offer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct PairedClient {
-    /// The client's name, as it paired.
+    /// The name the client last gave.
     pub name: String,
+    /// The key the client is pinned by, which is who it is.
+    #[ts(type = "string")]
+    pub key: PublicKey,
     pub connected: bool,
     /// When one of its connections last opened or closed, in milliseconds since 1970; null if it never connected.
     pub seen_at: Option<i64>,
@@ -133,9 +133,9 @@ op!(
     PairingList = "pairing.list" -> Clients {}
 );
 op!(
-    /// Forget a paired client, which must pair with a new invite; its open connections stay until they close.
+    /// Forget a paired client, closing its open connections and freeing its locks; it pairs again only with a new invite.
     PairingForget = "pairing.forget" -> Done {
-        /// The client's name, as it paired.
+        /// The name the client last gave.
         client: String,
     }
 );

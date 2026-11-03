@@ -18,7 +18,7 @@ import { anyMenuOpen, closeMenu, Head, Item, Sep } from "./Menu";
 import {
   act,
   isLocal,
-  me,
+  myKey,
   model,
   report,
   serverLabel,
@@ -122,9 +122,12 @@ export const grouped = (code: string) => code.match(/.{1,4}/g)?.join(" ") ?? cod
 
 export const inviteCode = (offered: Offer) => new URL(offered.invite).searchParams.get("code") ?? "";
 
+/** Whether a server's paired client is this one: the server pins it by its key. */
+export const isThisClient = (client: PairedClient) => client.key === myKey();
+
 /** What a paired client's row says of it beside its name. */
 export const clientStatus = (client: PairedClient, now: number) =>
-  client.name === me()
+  isThisClient(client)
     ? "this client"
     : client.connected
       ? "connected"
@@ -251,7 +254,7 @@ export function ServerMenu(props: { name: string }) {
                 <span class="dot" classList={{ idle: !client.connected }} />
                 <span class="name">{client.name}</span>
                 <span class="mono">{clientStatus(client, now())}</span>
-                <Show when={client.name !== me()}>
+                <Show when={!isThisClient(client)}>
                   <button class="mini" onClick={() => revoke(client.name)}>
                     Revoke
                   </button>

@@ -44,7 +44,8 @@ pub enum ServerVerb {
         #[arg(long)]
         address: PathBuf,
     },
-    /// Register again the service an older binary installed with --quic; its server hands itself here.
+    /// Register again the service an older binary installed with flags this one no longer takes; its server hands
+    /// itself here.
     #[command(hide = true)]
     Upgrade {
         /// The --name the service was installed with.
@@ -91,6 +92,11 @@ impl ServerVerb {
                     "octopus server {name} listening on {}, and as {key} on UDP {udp} and {relay}",
                     socket.display()
                 );
+                if udp.ip().is_loopback() {
+                    eprintln!(
+                        "octopus server {name}: UDP {udp} is loopback, so clients on other machines reach it only through {relay}"
+                    );
+                }
                 octopus_server::serve(server, local, endpoint).await;
                 Ok(())
             }
@@ -212,7 +218,7 @@ impl FileVerb {
 pub enum PairingVerb {
     /// Pair with a server on another machine using the invite its `pairing offer` showed, and list it under its name.
     Accept {
-        /// The one-time invite `pairing offer` printed: octopus://<server key>?code=…&relay=…&addr=….
+        /// The one-time invite `pairing offer` printed: octopus://<server key>?code=…&relay=….
         #[arg(long)]
         invite: Invite,
     },

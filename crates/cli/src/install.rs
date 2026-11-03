@@ -1,6 +1,7 @@
 //! Registers `octopus server run` with the platform's user service manager, started at login.
 
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -100,8 +101,12 @@ fn absolute(path: PathBuf) -> anyhow::Result<PathBuf> {
 }
 
 impl Service {
-    /// Service managers start in their own working directory, so every path is made absolute.
+    /// Service managers start in their own working directory, so every path is made absolute. A service listens
+    /// beyond loopback, since a loopback address leaves clients on other machines the relay alone.
     pub fn new(run: ServerRun, program: PathBuf, log: PathBuf) -> anyhow::Result<Self> {
+        if run.udp.ip().is_loopback() {
+            bail!("--udp {} is loopback; install with --udp 0.0.0.0:{}", run.udp, run.udp.port());
+        }
         let id = service_id(&run.name)?;
         let run = ServerRun {
             name: run.name,
@@ -182,41 +187,72 @@ fn systemd_word(word: &str) -> String {
     format!("\"{}\"", specifiers(word).replace('\\', "\\\\").replace('"', "\\\"").replace('$', "$$"))
 }
 
+/// Each escape `systemd_word` writes is one marker character and the character it stands for.
+#[cfg(any(target_os = "linux", test))]
+fn systemd_argument(spelled: &str) -> String {
+    let mut argument = String::new();
+    let mut characters = spelled.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '%' | '$' | '\\' => argument.extend(characters.next()),
+            _ => argument.push(character),
+        }
+    }
+    argument
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn plist_argument(spelled: &str) -> String {
+    spelled.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+}
+
+/// How a unit format spells `server run`'s arguments: each as a word, words joined by a separator.
+struct Spelling {
+    word: fn(&str) -> String,
+    /// The argument a word holds, its escapes undone.
+    argument: fn(&str) -> String,
+    separator: &'static str,
+}
+
+#[cfg(any(target_os = "macos", test))]
+const PLIST: Spelling = Spelling { word: plist_word, argument: plist_argument, separator: "" };
+
+#[cfg(any(target_os = "linux", test))]
+const SYSTEMD: Spelling = Spelling { word: systemd_word, argument: systemd_argument, separator: " " };
+
 /// Text no argument holds, which shows where a word puts its argument.
 const MARK: &str = "\u{0}";
 
-/// Where `flag` and the value after it sit in `text`: the flag's start, the value as spelled, and the value's end.
-fn flag_value(
-    text: &str,
-    flag: &str,
-    word: &impl Fn(&str) -> String,
-    separator: &str,
-) -> Option<(usize, String, usize)> {
-    let flag = word(flag) + separator;
-    let marked = word(MARK);
+/// Where the value after `flag` sits in `text`: the span of its word, and the argument the word holds.
+fn flag_value(text: &str, flag: &str, spelling: &Spelling) -> Option<(Range<usize>, String)> {
+    let flag = (spelling.word)(flag) + spelling.separator;
+    let marked = (spelling.word)(MARK);
     let (prefix, suffix) = marked.split_once(MARK).expect("a word wraps its text");
-    let start = text.find(&flag)?;
-    let value_start = start + flag.len() + prefix.len();
-    text[start + flag.len()..].starts_with(prefix).then_some(())?;
+    let word_start = text.find(&flag)? + flag.len();
+    text[word_start..].starts_with(prefix).then_some(())?;
+    let value_start = word_start + prefix.len();
     let value_end = value_start + text[value_start..].find(suffix)?;
-    Some((start, format!("{prefix}{}{suffix}", &text[value_start..value_end]), value_end + suffix.len()))
+    Some((word_start..value_end + suffix.len(), (spelling.argument)(&text[value_start..value_end])))
 }
 
-/// The unit `text`, spelled word by word with `word` and `separator`, re-spelled to the flags this binary takes:
-/// `--quic <address>` becomes `--udp <address> --relay <n0's relay>`, keeping the address as the unit spells it, and
-/// a unit without `--microphone` gains `--microphone true` after its relay. None for a unit already current.
-fn upgraded_unit(text: &str, word: impl Fn(&str) -> String, separator: &str) -> Option<String> {
-    let off_quic = flag_value(text, "--quic", &word, separator).map(|(start, address, end)| {
-        let current = [word("--udp"), address, word("--relay"), word(remote::N0_EU_RELAY)].join(separator);
-        format!("{}{current}{}", &text[..start], &text[end..])
-    });
-    let text = off_quic.as_deref().unwrap_or(text);
-    if text.contains(&(word("--microphone") + separator)) {
-        return off_quic;
+/// The unit `text` as this binary would write it: a loopback `--udp` address becomes every IPv4 address on its port,
+/// and a unit without `--microphone` gains `--microphone true` after its relay. None for a unit this binary would
+/// write the same.
+fn upgraded_unit(text: &str, spelling: &Spelling) -> Option<String> {
+    let word = spelling.word;
+    let mut unit = text.to_string();
+    if let Some((span, address)) = flag_value(text, "--udp", spelling)
+        && let Ok(address) = address.parse::<SocketAddr>()
+        && address.ip().is_loopback()
+    {
+        unit.replace_range(span, &word(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, address.port())).to_string()));
     }
-    let (_, _, relay_end) = flag_value(text, "--relay", &word, separator)?;
-    let microphone = [String::new(), word("--microphone"), word("true")].join(separator);
-    Some(format!("{}{microphone}{}", &text[..relay_end], &text[relay_end..]))
+    if flag_value(&unit, "--microphone", spelling).is_none()
+        && let Some((span, _)) = flag_value(&unit, "--relay", spelling)
+    {
+        unit.insert_str(span.end, &[String::new(), word("--microphone"), word("true")].join(spelling.separator));
+    }
+    (unit != text).then_some(unit)
 }
 
 /// `KillMode=process` stops the server alone, so its terminal host and every agent outlive a restart.
@@ -240,14 +276,6 @@ WantedBy=default.target
 ",
         exec = exec.join(" ")
     )
-}
-
-/// The name the user gave this computer, which names its server.
-fn machine_name() -> anyhow::Result<String> {
-    #[cfg(target_os = "macos")]
-    return run("scutil", &["--get", "ComputerName"]);
-    #[cfg(target_os = "linux")]
-    Ok(octopus_client::servers::hostname())
 }
 
 /// Returns the command's trimmed stdout.
@@ -287,9 +315,9 @@ fn unit_path(id: &str) -> anyhow::Result<PathBuf> {
 /// How long an upgrade may hold a unit before another takes it over.
 const UPGRADE_PATIENCE: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Registers again each octopus unit that runs this binary with flags it no longer takes, so its server
-/// comes back up on today's. A unit it cannot read is another program's. Every unit has its turn, and
-/// the error names each one that could not be registered.
+/// Rewrites and registers again each octopus unit that runs this binary and that this binary would write
+/// differently. A unit it cannot read is another program's. Every unit has its turn, and the error names
+/// each one that could not be registered.
 pub fn upgrade_units() -> anyhow::Result<()> {
     let directory = manager::unit_directory()?;
     let entries = match std::fs::read_dir(&directory) {
@@ -306,7 +334,7 @@ pub fn upgrade_units() -> anyhow::Result<()> {
         if !manager::runs(&text, &program) {
             continue;
         }
-        if let Some(upgraded) = manager::upgraded(&text) {
+        if let Some(upgraded) = upgraded_unit(&text, manager::SPELLING) {
             let registered = std::fs::write(&unit, upgraded)
                 .with_context(|| format!("write {}", unit.display()))
                 .and_then(|()| manager::register(id, &unit));
@@ -314,14 +342,14 @@ pub fn upgrade_units() -> anyhow::Result<()> {
         }
     }
     if !failed.is_empty() {
-        bail!("register the services installed with older flags again: {}", failed.join("; "));
+        bail!("register again the services this binary would write differently: {}", failed.join("; "));
     }
     Ok(())
 }
 
-/// Upgrades the unit of the service `name`, whose server found it still passing `--quic`, and registers it again
-/// whatever its file now says, since the service manager may still hold the old copy. A service manager restarting
-/// the old server spawns many of these at once, and one does the work.
+/// Upgrades the unit of the service `name`, whose server found it passing flags it no longer takes, and registers it
+/// again whatever its file now says, since the service manager may still hold the old copy. A service manager
+/// restarting the old server spawns many of these at once, and one does the work.
 pub fn upgrade_service(name: &str) -> anyhow::Result<()> {
     let id = service_id(name)?;
     let unit = unit_path(&id)?;
@@ -333,22 +361,46 @@ pub fn upgrade_service(name: &str) -> anyhow::Result<()> {
             return Ok(());
         }
     }
-    let upgraded = manager::upgraded(&text)
+    let upgraded = upgraded_unit(&text, manager::SPELLING)
         .map_or(Ok(()), |upgraded| std::fs::write(&unit, upgraded).with_context(|| format!("write {}", unit.display())))
         .and_then(|()| manager::register(&id, &unit));
     let _lock_gone = std::fs::remove_file(&lock);
     upgraded
 }
 
-/// A service an older binary installed starts `server run` with `--quic` or without `--microphone`, which no longer
-/// parses. Its server hands the upgrade to `server upgrade` in a process group of its own, which outlives the service
-/// manager stopping this one.
+/// What a server started without `--microphone` says when `server upgrade` cannot give its service one: its unit
+/// file `unit` is unreadable, or carries no `--microphone` even once upgraded. None when the upgraded file carries
+/// one, since the service manager may still hold an older command line than the file.
+fn reinstall_reason(unit: anyhow::Result<String>, spelling: &Spelling) -> Option<String> {
+    let reason = match unit {
+        Err(error) => format!("{error:#}"),
+        Ok(text) => {
+            let upgraded = upgraded_unit(&text, spelling).unwrap_or(text);
+            if flag_value(&upgraded, "--microphone", spelling).is_some() {
+                return None;
+            }
+            "its unit is too old to upgrade".to_string()
+        }
+    };
+    Some(format!("octopus: this service cannot upgrade itself: {reason}; run `octopus server install` for it again"))
+}
+
+/// A service an older binary installed starts `server run` without `--microphone`, which no longer parses. Its
+/// server hands the upgrade to `server upgrade` in a process group of its own, which outlives the service manager
+/// stopping this one.
 pub fn hand_off_old_service(argv: &[String]) {
     use std::os::unix::process::CommandExt;
-    let old_flags = argv.iter().any(|word| word == "--quic") || !argv.iter().any(|word| word == "--microphone");
-    let old_server = argv.get(1..3) == Some(&["server".to_string(), "run".to_string()]) && old_flags;
-    let Some(name) = argv.windows(2).find(|pair| pair[0] == "--name").map(|pair| &pair[1]) else { return };
+    let old_server = argv.get(1..3) == Some(&["server".to_string(), "run".to_string()])
+        && !argv.iter().any(|word| word == "--microphone");
     if !old_server {
+        return;
+    }
+    let name = argv.windows(2).find(|pair| pair[0] == "--name").map(|pair| pair[1].as_str()).unwrap_or_default();
+    let unit = service_id(name)
+        .and_then(|id| unit_path(&id))
+        .and_then(|unit| std::fs::read_to_string(&unit).with_context(|| format!("read {}", unit.display())));
+    if let Some(reason) = reinstall_reason(unit, manager::SPELLING) {
+        eprintln!("{reason}");
         return;
     }
     let upgrade = std::env::current_exe().and_then(|program| {
@@ -414,7 +466,7 @@ fn list_or_install_this_machine() -> anyhow::Result<()> {
         return Ok(());
     }
     let home = dirs::home_dir().ok_or_else(|| anyhow!("no home directory"))?.join(".octopus");
-    let (name, socket) = (machine_name()?, local_socket(&home, "server"));
+    let (name, socket) = (octopus_client::servers::machine_name()?, local_socket(&home, "server"));
     servers.add(Server { name: name.clone(), address: Address::Local { socket: socket.clone() } })?;
     if local::connect_blocking(&socket).is_err() {
         let run = ServerRun {
@@ -446,9 +498,7 @@ mod manager {
         Ok(account_home()?.join("Library").join("LaunchAgents"))
     }
 
-    pub fn upgraded(unit: &str) -> Option<String> {
-        upgraded_unit(unit, plist_word, "")
-    }
+    pub const SPELLING: &Spelling = &PLIST;
 
     pub fn runs(unit: &str, program: &str) -> bool {
         unit.contains(&plist_word(program))
@@ -491,9 +541,7 @@ mod manager {
         Ok(account_home()?.join(".config").join("systemd").join("user"))
     }
 
-    pub fn upgraded(unit: &str) -> Option<String> {
-        upgraded_unit(unit, systemd_word, " ")
-    }
+    pub const SPELLING: &Spelling = &SYSTEMD;
 
     pub fn runs(unit: &str, program: &str) -> bool {
         unit.contains(&format!("ExecStart={}", systemd_word(program)))
@@ -806,38 +854,112 @@ WantedBy=default.target
         assert_eq!(systemd_unit(&service("/var/octopus/100%.log")), expected);
     }
 
-    #[test]
-    fn a_unit_installed_with_quic_is_rewritten_to_the_unit_installed_now() {
-        let service = service("/var/octopus/server.log");
-        type Word = fn(&str) -> String;
-        let formats: [(String, Word, &str); 2] =
-            [(launchd_plist(&service), plist_word, ""), (systemd_unit(&service), systemd_word, " ")];
-        for (current, word, separator) in formats {
-            let flags = |words: &[&str]| words.iter().map(|text| word(text)).collect::<Vec<_>>().join(separator);
-            let now = flags(&["--udp", "0.0.0.0:7300", "--relay", remote::N0_EU_RELAY, "--microphone", "true"]);
-            let before_microphones = flags(&["--udp", "0.0.0.0:7300", "--relay", remote::N0_EU_RELAY]);
-            for old in [flags(&["--quic", "0.0.0.0:7300"]), before_microphones] {
-                let old = current.replace(&now, &old);
-                assert_ne!(old, current);
-                assert_eq!(upgraded_unit(&old, word, separator), Some(current.clone()));
-            }
-            assert_eq!(upgraded_unit(&current, word, separator), None);
+    /// A unit format and the unit installed now in it.
+    struct Format {
+        current: String,
+        spelling: &'static Spelling,
+    }
+
+    impl Format {
+        fn all() -> [Self; 2] {
+            let service = service("/var/octopus/server.log");
+            [
+                Self { current: launchd_plist(&service), spelling: &PLIST },
+                Self { current: systemd_unit(&service), spelling: &SYSTEMD },
+            ]
+        }
+
+        fn spell(&self, words: &[&str]) -> String {
+            words.iter().map(|text| (self.spelling.word)(text)).collect::<Vec<_>>().join(self.spelling.separator)
+        }
+
+        /// The current unit with its flags from `--udp` on replaced by `flags`.
+        fn with(&self, flags: &[&str]) -> String {
+            let now = self.spell(&["--udp", "0.0.0.0:7300", "--relay", remote::N0_EU_RELAY, "--microphone", "true"]);
+            self.current.replace(&now, &self.spell(flags))
+        }
+
+        fn upgraded(&self, unit: &str) -> Option<String> {
+            upgraded_unit(unit, self.spelling)
         }
     }
 
     #[test]
-    fn a_systemd_unit_installed_with_quic_keeps_its_escaped_address() {
-        let old = r#"[Service]
-ExecStart="/opt/octopus/bin/octopus" "server" "run" "--name" "mac-mini" "--quic" "[fe80::1%%2]:7300"
-Restart=always
-"#;
-        let upgraded = upgraded_unit(old, systemd_word, " ").expect("an old unit");
+    fn a_flag_gives_back_the_argument_its_word_spells() {
+        for argument in ["[::1%1]:7300", "[fe80::1%2]:7300", "https://relay.example/a?b=1&c=100%25$x"] {
+            for format in Format::all() {
+                let unit = format.spell(&["--udp", argument, "--relay", remote::N0_EU_RELAY]);
+                let (_, read) = flag_value(&unit, "--udp", format.spelling).expect("the flag");
+                assert_eq!(read, argument);
+            }
+        }
+    }
+
+    #[test]
+    fn a_server_without_a_microphone_hands_off_unless_its_unit_cannot_gain_one() {
         let relay = remote::N0_EU_RELAY;
-        assert!(upgraded.contains(&format!(
-            r#""--udp" "[fe80::1%%2]:7300" "--relay" "{relay}" "--microphone" "true"
-Restart"#
-        )));
-        assert_eq!(upgraded_unit(&upgraded, systemd_word, " "), None);
+        for format in Format::all() {
+            let before_microphones = format.with(&["--udp", "0.0.0.0:7300", "--relay", relay]);
+            for upgradable in [before_microphones, format.current.clone()] {
+                assert_eq!(reinstall_reason(Ok(upgradable), format.spelling), None);
+            }
+            let quic = format.with(&["--quic", "0.0.0.0:7300"]);
+            let reason = reinstall_reason(Ok(quic), format.spelling).expect("a --quic unit is too old");
+            assert!(reason.contains("too old") && reason.contains("`octopus server install`"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn a_server_whose_unit_is_unreadable_names_the_reinstall_and_why() {
+        let missing = std::env::temp_dir().join("octopus-no-such-unit.plist");
+        let unit = std::fs::read_to_string(&missing).with_context(|| format!("read {}", missing.display()));
+        let reason = reinstall_reason(unit, &PLIST).expect("an unreadable unit");
+        assert!(reason.contains(&format!("read {}", missing.display())), "{reason}");
+        assert!(reason.contains("`octopus server install`"), "{reason}");
+        let reason = reinstall_reason(service_id("").map(|_| String::new()), &PLIST).expect("no --name");
+        assert!(reason.contains("--name must not be empty"), "{reason}");
+    }
+
+    #[test]
+    fn a_service_never_installs_on_loopback() {
+        for udp in ["127.0.0.1:7300", "[::1]:7300"] {
+            let mut run = service("/log").run;
+            run.udp = udp.parse().expect("an address");
+            let error = Service::new(run, "/opt/octopus/bin/octopus".into(), "/log".into()).err().expect("refused");
+            assert!(error.to_string().contains("--udp 0.0.0.0:7300"), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_unit_with_older_flags_is_rewritten_to_the_unit_installed_now() {
+        let relay = remote::N0_EU_RELAY;
+        for format in Format::all() {
+            for old in [
+                format.with(&["--udp", "0.0.0.0:7300", "--relay", relay]),
+                format.with(&["--udp", "127.0.0.1:7300", "--relay", relay, "--microphone", "true"]),
+                format.with(&["--udp", "127.1.2.3:7300", "--relay", relay, "--microphone", "true"]),
+                format.with(&["--udp", "[::1]:7300", "--relay", relay, "--microphone", "true"]),
+                format.with(&["--udp", "[::1%1]:7300", "--relay", relay, "--microphone", "true"]),
+                format.with(&["--udp", "127.0.0.1:7300", "--relay", relay]),
+            ] {
+                assert_ne!(old, format.current);
+                assert_eq!(format.upgraded(&old), Some(format.current.clone()));
+            }
+            assert_eq!(format.upgraded(&format.current), None);
+        }
+    }
+
+    #[test]
+    fn a_unit_keeps_every_listen_address_but_loopback() {
+        let relay = remote::N0_EU_RELAY;
+        for format in Format::all() {
+            for address in ["0.0.0.0:7300", "192.168.1.20:7300", "100.101.102.103:7300", "[fe80::1%2]:7300"] {
+                let current = format.with(&["--udp", address, "--relay", relay, "--microphone", "true"]);
+                assert_eq!(format.upgraded(&current), None, "{address}");
+                let old = format.with(&["--udp", address, "--relay", relay]);
+                assert_eq!(format.upgraded(&old), Some(current), "{address}");
+            }
+        }
     }
 
     #[test]

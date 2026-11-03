@@ -1,16 +1,19 @@
 mod common;
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{Running, SERVER, connect, create, echo_agent, eventually, identity, read_until, start, task, workspace};
+use common::{
+    Running, SERVER, connect, create, echo_agent, eventually, holder_name, identity, read_until, start, task, workspace,
+};
 use octopus_client::servers::{self, Address};
 use octopus_client::tunnel::Tunnel;
-use octopus_client::{CallError, Connection, Identity};
+use octopus_client::{CallError, Connection, DataStream, Identity};
 use octopus_proto::device::DeviceKey;
 use octopus_proto::ops::{
     BrowserClose, BrowserMove, BrowserOpen, BrowserReport, HarnessSet, PairingForget, PairingList, PairingOffer,
-    TaskFocus, TaskGet, TermSend,
+    TaskFocus, TaskGet, TermClaim, TermSend,
 };
 use octopus_proto::pairing::Invite;
 use octopus_proto::types::{BrowserId, BrowserPanel, BrowserTarget, Checkout, Hooks, Stream, Task, TaskId};
@@ -24,16 +27,12 @@ async fn offer(running: &Running) -> Invite {
 
 /// The server as a client reaches it through its relay alone.
 fn remote(running: &Running) -> Address {
-    Address::Remote { key: running.server.device().public(), relay: running.server.relay().clone(), addresses: vec![] }
+    Address::Remote { key: running.server.device().public(), relay: running.server.relay().clone() }
 }
 
 async fn paired(running: &Running, me: &Identity) -> Connection {
-    let invite = offer(running).await;
-    assert!(!invite.addresses.is_empty(), "an invite carries the server's direct addresses");
-    let listed = servers::pair(&invite, me).await.expect("pair");
-    let (key, relay, addresses) = (invite.server, running.server.relay().clone(), invite.addresses.clone());
-    let address = Address::Remote { key, relay, addresses };
-    assert_eq!(listed, servers::Server { name: SERVER.into(), address });
+    let listed = servers::pair(&offer(running).await, me).await.expect("pair");
+    assert_eq!(listed, servers::Server { name: SERVER.into(), address: remote(running) });
     Connection::connect(&listed.address, me).await.expect("connect over iroh")
 }
 
@@ -58,7 +57,7 @@ async fn only_a_client_that_spent_a_code_reaches_a_remote_server() {
     assert!(format!("{spent:#}").contains("no pairing code is on offer"), "{spent:#}");
     let (fresh, namesake) = (offer(&running).await, identity("laptop"));
     let refused = servers::pair(&fresh, &namesake).await;
-    assert!(format!("{:#}", refused.expect_err("a namesake")).contains("another device's key"));
+    assert!(format!("{:#}", refused.expect_err("a namesake")).contains("paired to another device"));
     connect(&running, "owner").await.call(&PairingForget { client: "laptop".into() }).await.expect("forget");
     servers::pair(&fresh, &namesake).await.expect("the refusal left the code unspent");
     let laptop = namesake;
@@ -68,10 +67,23 @@ async fn only_a_client_that_spent_a_code_reaches_a_remote_server() {
     let listed = connection.call(&PairingList {}).await.expect("pairing.list").clients;
     let [client] = listed.as_slice() else { panic!("one paired client, got {listed:?}") };
     assert!(client.name == "laptop" && client.connected && client.seen_at.is_some(), "{client:?}");
+    assert_eq!(client.key, laptop.key.public(), "the list carries the key the client is pinned by");
     let unknown = connection.call(&PairingForget { client: "desk".into() }).await;
     assert!(matches!(unknown, Err(CallError::Server(Error::NotFound { .. }))), "{unknown:?}");
-    let impostor = Connection::connect(&remote(&running), &twin(&laptop, "desk")).await.err().expect("impostor");
-    assert!(format!("{impostor:#}").contains("paired as laptop"), "{impostor:#}");
+    let desk = twin(&laptop, "desk");
+    let renamed = Connection::connect(&remote(&running), &desk).await.expect("a renamed client");
+    let listed = renamed.call(&PairingList {}).await.expect("pairing.list").clients;
+    let [client] = listed.as_slice() else { panic!("one paired client, got {listed:?}") };
+    assert_eq!(client.name, "desk", "a paired client goes by the name its hello gives");
+    let seen_at = client.seen_at;
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    drop(renamed);
+    let list = || async { connection.call(&PairingList {}).await.expect("pairing.list").clients.remove(0) };
+    eventually("the renamed connection closes", async || list().await.seen_at > seen_at).await;
+    assert!(list().await.connected, "the device stays connected while its connection under the old name is open");
+    servers::pair(&offer(&running).await, &identity("phone")).await.expect("pair a phone");
+    let namesake = Connection::connect(&remote(&running), &twin(&laptop, "phone")).await.err().expect("a namesake");
+    assert!(format!("{namesake:#}").contains("paired to another device"), "{namesake:#}");
 
     let second_process = Connection::connect(&remote(&running), &twin(&laptop, "laptop")).await.expect("a second");
     for open in [&connection, &second_process] {
@@ -110,6 +122,100 @@ async fn a_task_runs_over_iroh_and_a_stalled_file_transfer_never_blocks_its_term
     let mut received = Vec::new();
     transfer.as_mut().expect("open the transfer").read_to_end(&mut received).await.expect("read the transfer");
     assert_eq!(received.len(), large.len());
+}
+
+/// A task whose agent terminal `holder` shows and holds the lock of.
+async fn held_terminal(dir: &Path, holder: &Connection) -> (TaskId, DataStream) {
+    let workspace = workspace(holder, dir).await;
+    let harness = HarnessSet {
+        id: "echo".into(),
+        argv: echo_agent("agent:up"),
+        install: "true".into(),
+        start: vec![],
+        resume: vec![],
+        hooks: Hooks::None,
+    };
+    holder.call(&harness).await.expect("harness.set");
+    let id = create(holder, &workspace, Checkout::Root, "echo").await;
+    holder.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("task.focus");
+    let agent = Stream::Pty(task(holder, &id).await.panels[0].id.clone());
+    let mut shown = holder.open_data_stream(&agent).await.expect("attach");
+    read_until(&mut shown, "agent:up").await;
+    holder.call(&send(&id, true)).await.expect("take the lock");
+    (id, shown)
+}
+
+fn send(task: &TaskId, take_lock: bool) -> TermSend {
+    TermSend { task: task.clone(), panel: "agent".into(), text: "x".into(), enter: true, take_lock }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_terminal_lock_follows_its_holders_key_and_not_a_name_it_gave_up() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
+    let (laptop, phone) = (identity("laptop"), identity("phone"));
+    let holder = paired(&running, &laptop).await;
+    paired(&running, &phone).await;
+    let (id, _shown) = held_terminal(dir.path(), &holder).await;
+
+    let renamed = Connection::connect(&remote(&running), &twin(&laptop, "desk")).await.expect("rename the laptop");
+    let panel = task(&renamed, &id).await.panels.remove(0);
+    assert_eq!(holder_name(&panel), Some("desk"), "the lock is labelled with its holder's new name");
+    let impostor = Connection::connect(&remote(&running), &twin(&phone, "laptop")).await.expect("a freed name");
+    let written = impostor.call(&send(&id, false)).await;
+    assert!(matches!(&written, Err(CallError::Server(Error::PtyLocked { holder })) if holder == "desk"), "{written:?}");
+    holder.call(&send(&id, false)).await.expect("the holder still writes under its old name");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_claim_under_a_connections_old_name_keeps_the_lock_labelled_with_the_new_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
+    let laptop = identity("laptop");
+    let holder = paired(&running, &laptop).await;
+    let (id, _shown) = held_terminal(dir.path(), &holder).await;
+    let _renamed = Connection::connect(&remote(&running), &twin(&laptop, "desk")).await.expect("rename the laptop");
+
+    let panel = task(&holder, &id).await.panels.remove(0);
+    let claim = TermClaim { task: id.clone(), panel: "agent".into(), cols: panel.cols, rows: panel.rows };
+    holder.call(&claim).await.expect("claim under the old name");
+    holder.call(&send(&id, true)).await.expect("take under the old name");
+    assert_eq!(holder_name(&task(&holder, &id).await.panels[0]), Some("desk"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn forgetting_a_device_closes_its_connections_and_frees_every_lock_it_holds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
+    let holder = paired(&running, &identity("laptop")).await;
+    let (id, _shown) = held_terminal(dir.path(), &holder).await;
+
+    let owner = connect(&running, "owner").await;
+    owner.call(&PairingForget { client: "laptop".into() }).await.expect("forget the laptop");
+    assert_eq!(holder_name(&task(&owner, &id).await.panels[0]), None);
+    let closed = tokio::time::timeout(Duration::from_secs(5), holder.closed()).await.expect("the connection closes");
+    assert!(closed.contains("forgotten"), "{closed}");
+    let claim = TermClaim { task: id.clone(), panel: "agent".into(), cols: 80, rows: 24 };
+    assert!(holder.call(&claim).await.is_err(), "a forgotten device claims nothing");
+    assert_eq!(holder_name(&task(&owner, &id).await.panels[0]), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_local_client_and_a_paired_one_of_one_name_each_hold_only_their_own_lock() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
+    let (local_me, paired_me) = (identity("laptop"), identity("laptop"));
+    let local = connect(&running, "laptop").await;
+    let paired = paired(&running, &paired_me).await;
+    let (id, _shown) = held_terminal(dir.path(), &local).await;
+    let (on_socket, over_iroh) = (Address::Local { socket: running.socket.clone() }, remote(&running));
+
+    let local_lock = task(&local, &id).await.panels.remove(0).lock_holder.expect("the local client holds it");
+    assert!(local_me.holds(&local_lock, &on_socket) && !paired_me.holds(&local_lock, &over_iroh));
+    paired.call(&send(&id, true)).await.expect("the paired client takes the lock");
+    let paired_lock = task(&local, &id).await.panels.remove(0).lock_holder.expect("the paired client holds it");
+    assert_ne!(local_lock, paired_lock, "two clients of one name hold two different locks");
+    assert!(paired_me.holds(&paired_lock, &over_iroh) && !local_me.holds(&paired_lock, &on_socket));
 }
 
 fn open(task: &TaskId, url: &str, panel: BrowserTarget) -> BrowserOpen {
@@ -240,13 +346,4 @@ async fn a_connection_whose_device_proof_fails_is_closed_unread() {
     proof.finish().expect("finish the proof");
     let closed = tokio::time::timeout(Duration::from_secs(5), connection.closed()).await.expect("closed");
     assert!(closed.to_string().contains("no valid device proof"), "{closed}");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_server_on_the_same_network_pairs_and_connects_with_no_relay_reachable() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let running = common::start_unrelayed(dir.path()).await;
-    let laptop = paired(&running, &identity("laptop")).await;
-    laptop.call(&PairingList {}).await.expect("a call over the direct path");
-    assert!(!laptop.server_addresses().is_empty(), "each hello names where the server is reachable now");
 }

@@ -1,7 +1,7 @@
 mod common;
 
 use common::{
-    SERVER, ServerProcess, connect, create, echo_agent, eventually, read_until, start, task, workspace,
+    SERVER, ServerProcess, connect, create, echo_agent, eventually, holder_name, read_until, start, task, workspace,
     write_login_profile,
 };
 use octopus_client::{CallError, Connection};
@@ -59,7 +59,7 @@ async fn a_focused_task_runs_its_agent_terminal_end_to_end() {
     let write = TermSend { take_lock: false, ..send(&id, "ping") };
     laptop.call(&write).await.expect("term.send");
     read_until(&mut live, "ping").await;
-    assert_eq!(task(&laptop, &id).await.panels[0].lock_holder.as_deref(), Some("laptop"));
+    assert_eq!(holder_name(&task(&laptop, &id).await.panels[0]), Some("laptop"));
 
     let desk = connect(&running, "desk").await;
     let mut replay = desk.open_data_stream(&agent).await.expect("reattach");
@@ -69,7 +69,7 @@ async fn a_focused_task_runs_its_agent_terminal_end_to_end() {
     locked(desk.call(&TermResize { task: id.clone(), panel: "agent".into(), cols: 90, rows: 20 }).await, "laptop");
     desk.call(&TermTakeLock { task: id.clone(), panel: "agent".into(), cols: 100, rows: 30 }).await.expect("take");
     let panel = task(&laptop, &id).await.panels.remove(0);
-    assert_eq!((panel.lock_holder.as_deref(), panel.cols, panel.rows), (Some("desk"), 100, 30));
+    assert_eq!((holder_name(&panel), panel.cols, panel.rows), (Some("desk"), 100, 30));
     drop(replay);
     eventually("a holder that stops showing the terminal freeing its lock", async || {
         task(&laptop, &id).await.panels[0].lock_holder.is_none()

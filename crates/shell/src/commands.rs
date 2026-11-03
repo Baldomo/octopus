@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use octopus_client::CallError;
 use octopus_proto::Error;
+use octopus_proto::device::PublicKey;
 use octopus_proto::ops::{
     Entry, EntryKind, FileCopy, FileCreate, FileDelete, FileList, FileMove, FileSearch, FileWrite, Match, Offer,
     PairedClient, PairingForget, PairingList, PairingOffer, TaskArchive, TaskCreate, TaskFocus, TaskMove, TaskRename,
@@ -35,8 +36,11 @@ pub struct ShownOffer {
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 pub struct Boot {
-    /// This client's name, as terminal lock holders see it.
+    /// This client's name, which the server on its local socket knows it by.
     pub me: String,
+    /// This client's device key, which every server it is paired with knows it by.
+    #[ts(type = "string")]
+    pub key: PublicKey,
     pub servers: Vec<ServerView>,
     pub model: Model,
     pub ui: Ui,
@@ -44,7 +48,7 @@ pub struct Boot {
 
 #[tauri::command]
 pub fn boot(hub: Hubbed, ui: Uis) -> Boot {
-    Boot { me: hub.me.name(), servers: hub.servers(), model: hub.model(), ui: ui.ui() }
+    Boot { me: hub.me.name(), key: hub.me.key.public(), servers: hub.servers(), model: hub.model(), ui: ui.ui() }
 }
 
 #[tauri::command]

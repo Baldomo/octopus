@@ -50,7 +50,7 @@ function Facts(props: { view: TaskView; panel: PtyId | null }) {
         {(shown) => (
           <span class="chip">
             <span class="mono">
-              {shown().lock_holder} · {shown().cols}×{shown().rows}
+              {shown().lock_holder?.name} · {shown().cols}×{shown().rows}
             </span>
           </span>
         )}
