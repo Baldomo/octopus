@@ -1,5 +1,8 @@
 import { Show } from "solid-js";
+import type { Checkout } from "@octopus/shared/generated.ts";
 import { openView, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
+
+const checkoutLabel = (checkout: Checkout) => (checkout.kind === "worktree" ? checkout.branch : "root checkout");
 
 export function StatusBar() {
   return (
@@ -15,8 +18,8 @@ export function StatusBar() {
                 </Show>{" "}
                 {serverLabel(open().at.server)} · {server()?.reachable ? `${server()?.rtt_ms ?? "–"}ms` : "unreachable"}
               </span>
-              <span>{open().task.panels.length} pty</span>
-              <span>⎇ {open().task.branch ?? "root checkout"}</span>
+              <span>{open().panels.length} pty</span>
+              <span>⎇ {checkoutLabel(open().task.checkout)}</span>
             </>
           );
         }}

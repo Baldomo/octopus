@@ -97,7 +97,7 @@ pub struct Lists {
 const AUTO_HUES: [Hue; 7] = [Hue::Mint, Hue::Teal, Hue::Sky, Hue::Blue, Hue::Indigo, Hue::Violet, Hue::Pink];
 
 /// The soft tone of a hue hashed from the section's name.
-pub fn auto_swatch(name: &str) -> Swatch {
+pub(crate) fn auto_swatch(name: &str) -> Swatch {
     let hash = name.chars().fold(7_u32, |hash, char| hash.wrapping_mul(31).wrapping_add(u32::from(char)));
     Swatch { hue: AUTO_HUES[hash as usize % AUTO_HUES.len()], tone: Tone::Soft }
 }
@@ -112,7 +112,7 @@ fn section_swatch(caches: &BTreeMap<String, Cache>, name: &str) -> Swatch {
     picked.unwrap_or_else(|| auto_swatch(name))
 }
 
-pub fn section_of<'a>(cache: &'a Cache, task: &'a Task) -> &'a str {
+pub(crate) fn section_of<'a>(cache: &'a Cache, task: &'a Task) -> &'a str {
     cache.workspaces.get(&task.workspace).map_or(task.workspace.0.as_str(), |workspace| workspace.name.as_str())
 }
 
@@ -228,7 +228,7 @@ pub fn lists(caches: &BTreeMap<String, Cache>) -> Lists {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use octopus_proto::types::{Checkout, Workspace};
+    use octopus_proto::types::{Checkout, Session, SessionId, Workspace};
 
     pub fn task(id: &str, workspace: &str, parent: Option<&str>, title: &str, state: TaskState) -> Task {
         Task {
@@ -239,9 +239,8 @@ pub(crate) mod tests {
             state,
             checkout: Checkout::Root,
             harness: "claude-code".into(),
-            session: None,
+            session: Session { id: SessionId("ses".into()), started: false },
             directory: "/repo".into(),
-            branch: None,
             ended_at: None,
             archived_at: None,
             rev: 1,

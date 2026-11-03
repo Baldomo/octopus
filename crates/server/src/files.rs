@@ -1,8 +1,14 @@
+//! A task's files as a client reaches them, kept inside the checkout no path leaves.
+
 use std::io::{BufRead, BufReader};
 use std::path::{Component, Path, PathBuf};
 
 use octopus_proto::Error;
 use octopus_proto::ops::{Entry, EntryKind, Match};
+
+use octopus_proto::types::TaskId;
+
+use crate::{Server, lock};
 
 const MAX_MATCHES: usize = 1000;
 
@@ -15,7 +21,7 @@ fn io(path: &Path, error: std::io::Error) -> Error {
 }
 
 /// A checkout-relative path as the wire spells it, `/`-separated on every platform.
-pub fn wire_path(relative: &Path) -> String {
+pub(crate) fn wire_path(relative: &Path) -> String {
     let components: Vec<_> = relative.components().map(|component| component.as_os_str().to_string_lossy()).collect();
     components.join("/")
 }
@@ -235,7 +241,7 @@ pub fn delete(checkout: &Path, path: &str, trash: bool) -> Result<(), Error> {
 }
 
 /// Skips files git ignores.
-pub fn search_literal(checkout: &Path, pattern: &str) -> Vec<Match> {
+pub(crate) fn search_literal(checkout: &Path, pattern: &str) -> Vec<Match> {
     let mut matches = Vec::new();
     for entry in ignore::WalkBuilder::new(checkout).build().flatten() {
         if !entry.file_type().is_some_and(|kind| kind.is_file()) {
@@ -255,4 +261,18 @@ pub fn search_literal(checkout: &Path, pattern: &str) -> Vec<Match> {
         }
     }
     matches
+}
+
+impl Server {
+    pub(crate) fn checkout_dir(&self, task: &TaskId) -> Result<PathBuf, Error> {
+        Ok(PathBuf::from(lock(&self.state).store.task(task)?.directory))
+    }
+
+    pub(crate) fn read_file(&self, task: &TaskId, path: &str) -> Result<Vec<u8>, Error> {
+        read(&self.checkout_dir(task)?, path)
+    }
+
+    pub(crate) fn upload_file(&self, task: &TaskId, path: &str, bytes: u64) -> Result<Upload, Error> {
+        upload(&self.checkout_dir(task)?, path, bytes)
+    }
 }

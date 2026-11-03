@@ -80,7 +80,7 @@ Create a task.
 - `--state pinned|temporary|completed|cancelled`: The task's state.
 - `--checkout root|worktree`: Where the task's files live: the workspace root, or a worktree of its own.
 - `--harness <harness>`: The harness that runs the task's agent.
-- `--session <session>`: An existing session for the agent to resume; none for a fresh session.
+- `--session <session>`: An existing session's id for the agent to resume; fresh for a fresh session.
 
 ## `octopus task move`
 

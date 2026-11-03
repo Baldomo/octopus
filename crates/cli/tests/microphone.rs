@@ -11,7 +11,7 @@ use common::{Running, SERVER, connect, create, eventually, read_until, start_wit
 use octopus_client::{CallError, Connection, DataStream};
 use octopus_proto::Error;
 use octopus_proto::ops::{HarnessSet, TaskFocus, TermSend};
-use octopus_proto::types::{Checkout, Hooks, MIC_FORMAT, PtyId, Stream, TaskId};
+use octopus_proto::types::{CheckoutKind, Hooks, MIC_FORMAT, PtyId, Stream, TaskId};
 use octopus_shell::microphone::{Access, Capture, Chunk, Microphone};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
@@ -79,7 +79,7 @@ impl Listening {
             hooks: Hooks::None,
         };
         holder.call(&harness).await.expect("harness.set");
-        let id = create(&holder, &workspace, Checkout::Root, "rec").await;
+        let id = create(&holder, &workspace, CheckoutKind::Root, "rec").await;
         holder.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
         let pty = task(&holder, &id).await.panels[0].id.clone();
         let live = holder.open_data_stream(&Stream::Pty(pty.clone())).await.expect("attach");

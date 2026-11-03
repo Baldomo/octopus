@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use octopus_client::cache::Cache;
-use octopus_proto::types::Task;
-use serde::Serialize;
+use octopus_proto::types::{LockHolder, Panel, Task};
+use serde::ser::Error as _;
+use serde::{Serialize, Serializer};
 use ts_rs::TS;
 
 use crate::task_lists::{Glyph, TaskRef, section_of};
@@ -16,7 +17,26 @@ pub struct TaskView {
     pub crumbs: Vec<String>,
     pub live: bool,
     pub glyph: Glyph,
+    /// The task with its panels taken out: they reach the UI through `panels` alone.
+    #[serde(serialize_with = "without_panels")]
+    #[ts(type = "Omit<Task, \"panels\">")]
     pub task: Task,
+    pub panels: Vec<PanelView>,
+}
+
+fn without_panels<S: Serializer>(task: &Task, serializer: S) -> Result<S::Ok, S::Error> {
+    let mut task = serde_json::to_value(task).map_err(S::Error::custom)?;
+    task.as_object_mut().expect("a task serializes to an object").remove("panels");
+    task.serialize(serializer)
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+pub struct PanelView {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub panel: Panel,
+    /// Whether this client holds the panel's lock.
+    pub held_here: bool,
 }
 
 fn crumbs(cache: &Cache, task: &Task) -> Vec<String> {
@@ -32,11 +52,25 @@ fn crumbs(cache: &Cache, task: &Task) -> Vec<String> {
         .collect()
 }
 
-pub fn task_views(caches: &BTreeMap<String, Cache>) -> BTreeMap<String, TaskView> {
+/// Each task of every server, with `held_here` telling whether this client holds a lock on a server.
+pub(crate) fn task_views(
+    caches: &BTreeMap<String, Cache>,
+    held_here: impl Fn(&str, &LockHolder) -> bool,
+) -> BTreeMap<String, TaskView> {
+    let held_here = &held_here;
     caches
         .iter()
         .flat_map(|(server, cache)| {
             cache.tasks.values().map(move |task| {
+                let panels = task
+                    .panels
+                    .iter()
+                    .map(|panel| PanelView {
+                        held_here: panel.lock_holder.as_ref().is_some_and(|holder| held_here(server, holder)),
+                        panel: panel.clone(),
+                    })
+                    .collect();
+                let viewed = Task { panels: Vec::new(), ..task.clone() };
                 let at = TaskRef { server: server.clone(), task: task.id.clone() };
                 let view = TaskView {
                     key: at.key(),
@@ -44,7 +78,8 @@ pub fn task_views(caches: &BTreeMap<String, Cache>) -> BTreeMap<String, TaskView
                     crumbs: crumbs(cache, task),
                     live: task.state.is_live(),
                     glyph: Glyph::of(task),
-                    task: task.clone(),
+                    task: viewed,
+                    panels,
                     at,
                 };
                 (view.key.clone(), view)
@@ -72,7 +107,7 @@ mod tests {
                 ],
             ),
         )]);
-        let views = task_views(&caches);
+        let views = task_views(&caches, |_, _| false);
         assert_eq!(views["mac-mini/tsk_3"].crumbs, ["octopus", "protocol v1", "strict serde", "envelope"]);
     }
 }

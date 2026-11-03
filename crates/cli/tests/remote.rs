@@ -16,7 +16,7 @@ use octopus_proto::ops::{
     TaskFocus, TaskGet, TermClaim, TermSend,
 };
 use octopus_proto::pairing::Invite;
-use octopus_proto::types::{BrowserId, BrowserPanel, BrowserTarget, Checkout, Hooks, Stream, Task, TaskId};
+use octopus_proto::types::{BrowserId, BrowserPanel, BrowserTarget, CheckoutKind, Hooks, Stream, Task, TaskId};
 use octopus_proto::{Error, Event};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -106,7 +106,7 @@ async fn a_task_runs_over_iroh_and_a_stalled_file_transfer_never_blocks_its_term
         hooks: Hooks::None,
     };
     laptop.call(&harness).await.expect("harness.set");
-    let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
+    let id = create(&laptop, &workspace, CheckoutKind::Root, "echo").await;
     laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("task.focus");
     let agent = Stream::Pty(task(&laptop, &id).await.panels[0].id.clone());
 
@@ -136,7 +136,7 @@ async fn held_terminal(dir: &Path, holder: &Connection) -> (TaskId, DataStream) 
         hooks: Hooks::None,
     };
     holder.call(&harness).await.expect("harness.set");
-    let id = create(holder, &workspace, Checkout::Root, "echo").await;
+    let id = create(holder, &workspace, CheckoutKind::Root, "echo").await;
     holder.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("task.focus");
     let agent = Stream::Pty(task(holder, &id).await.panels[0].id.clone());
     let mut shown = holder.open_data_stream(&agent).await.expect("attach");
@@ -230,7 +230,7 @@ async fn a_browser_panel_is_task_state_and_its_localhost_page_tunnels_to_the_ser
     let desk = connect(&running, "desk").await;
     let mut pushes = desk.pushes();
     let workspace = workspace(&desk, dir.path()).await;
-    let id = create(&desk, &workspace, Checkout::Root, "none").await;
+    let id = create(&desk, &workspace, CheckoutKind::Root, "none").await;
 
     let shown = laptop.call(&open(&id, "http://localhost:5173/", BrowserTarget::New)).await.expect("browser.open");
     let settings = "http://localhost:5173/settings";

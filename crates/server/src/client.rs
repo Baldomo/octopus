@@ -5,6 +5,8 @@ use std::fmt;
 use octopus_proto::Error;
 use octopus_proto::device::PublicKey;
 
+use crate::{Server, lock, now, report};
+
 const NAME_CHARS: usize = 64;
 
 /// A paired device is the key it proved, whatever name it goes by; a client on the local socket, which only the
@@ -25,11 +27,26 @@ impl fmt::Display for Client {
 }
 
 /// A paired client's name is one line of at most 64 characters, so it reads whole wherever a client is listed.
-pub fn check_name(name: &str) -> Result<(), Error> {
+pub(crate) fn check_name(name: &str) -> Result<(), Error> {
     if name.is_empty() || name.chars().count() > NAME_CHARS || name.chars().any(char::is_control) {
         return Err(Error::invalid(format!(
             "a client name is 1 to {NAME_CHARS} characters with no control characters, not {name:?}"
         )));
     }
     Ok(())
+}
+
+impl Server {
+    /// Only a paired client is seen: it alone is pinned.
+    pub(crate) fn saw(&self, client: &Client) {
+        let Client::Paired(key) = client else { return };
+        if let Err(error) = lock(&self.state).store.client_seen(key, now()) {
+            report!("record when {client} was seen: {error}");
+        }
+    }
+
+    pub(crate) fn client_connected(&self, client: &Client) {
+        self.saw(client);
+        *lock(&self.clients).entry(client.clone()).or_default() += 1;
+    }
 }

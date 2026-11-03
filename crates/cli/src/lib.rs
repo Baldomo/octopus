@@ -1,5 +1,7 @@
 mod attach;
 pub mod commands;
+#[cfg(feature = "desktop")]
+mod first_run;
 mod install;
 mod manual;
 pub mod skill;
@@ -52,15 +54,15 @@ pub fn main() -> ExitCode {
                 eprintln!("error: {missing}");
                 return ExitCode::from(USAGE);
             }
-            None => {
-                install::hand_off_old_service(&argv);
-                error.exit()
-            }
+            None => error.exit(),
         },
     };
     let outcome = match matches.subcommand() {
+        #[cfg(feature = "desktop")]
         Some(("app", _)) => octopus_desktop::run(
-            install::list_this_machine().err().map(|error| format!("list this machine's server: {error:#}")),
+            first_run::list_or_install_this_machine()
+                .err()
+                .map(|error| format!("list this machine's server: {error:#}")),
         ),
         _ => tokio::runtime::Runtime::new()
             .context("start the runtime")

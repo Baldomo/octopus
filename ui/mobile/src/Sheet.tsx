@@ -24,7 +24,7 @@ import { releaseFocus } from "./viewport";
  * where `inPlace` says, takes the other's height and grows or shrinks to its own. A leaving sheet calls `gone` once it
  * is off the screen.
  */
-export type Presence = { inPlace: Toward | null; leaving: Accessor<boolean>; gone: () => void };
+type Presence = { inPlace: Toward | null; leaving: Accessor<boolean>; gone: () => void };
 export const SheetPresence = createContext<Presence>();
 
 /** A released sheet closes once its throw would carry it past half its height, or when thrown faster than this. */

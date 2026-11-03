@@ -30,7 +30,7 @@ const selectedRenders = () => {
 };
 
 /** What the Browser surface does on its keys, on a client that has one. */
-export type BrowserKeys = {
+type BrowserKeys = {
   /** Whether Browser shows a page. */
   shows: () => boolean;
   /** Whether Browser shows its tabs. */

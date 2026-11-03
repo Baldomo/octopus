@@ -4,7 +4,7 @@ import { mac } from "./commands";
 import type { EntryKind, TaskView } from "./generated";
 import { keepInView } from "./keepInView";
 import { closeMenu, Head, Item, onRightClick, openMenu, Sep } from "./Menu";
-import { toast } from "./SidebarControls";
+import { toast } from "./Toast";
 import { act, isLocal, serverLabel } from "./state";
 import { freeName, join, nameOf, parentOf, within, type TaskFiles } from "./taskFiles";
 import { openShell } from "./Terminals";

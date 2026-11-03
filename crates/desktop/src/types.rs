@@ -40,8 +40,12 @@ pub fn render() -> String {
         "browserDownloaded": DOWNLOADED_EVENT,
         "menuCommand": COMMAND_EVENT,
     });
-    let constants =
-        [constant("FLOAT_LAYER", &FLOAT), constant("FLOAT_TOP", &title_bar_height()), constant("EVENTS", &events)];
+    let constants = [
+        constant("FLOAT_LAYER", &FLOAT),
+        constant("FLOAT_TOP", &title_bar_height()),
+        constant("EVENTS", &events),
+        constant("COMMANDS", &crate::COMMANDS),
+    ];
     let header = concat!(
         "// Rendered from the Rust types by `cargo run -p octopus-desktop --example types`. Edit those, not this.\n",
         "import type { BrowserId, Bounds, TaskRef } from \"@octopus/shared/generated.ts\";\n",

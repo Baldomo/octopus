@@ -115,7 +115,7 @@ export const Note = (props: { children: JSX.Element; err?: boolean }) => (
     <span class="name">{props.children}</span>
   </div>
 );
-export const Gap = (props: { n: 1 | 2 | 3 | 4 | 5 }) => <div class={`sp${props.n}`} />;
+export const Gap = (props: { n: 2 | 3 | 4 | 5 }) => <div class={`sp${props.n}`} />;
 
 /** A segmented control, the current segment on the surface under a thumb that slides to each choice. */
 export function Seg<T extends string>(props: {

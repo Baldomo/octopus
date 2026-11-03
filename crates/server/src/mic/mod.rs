@@ -14,6 +14,11 @@ use std::sync::{Arc, Mutex};
 use octopus_proto::types::{MIC_FORMAT, PtyId};
 
 use crate::{lock, report};
+use octopus_proto::Error;
+
+use crate::Server;
+use crate::client::Client;
+use crate::terminals::Terminal;
 
 /// The most audio a terminal buffers ahead of its programs; a holder sending faster loses its oldest bytes.
 const BUFFERED_SECONDS: f64 = 0.25;
@@ -25,7 +30,7 @@ fn buffered_bytes() -> usize {
 type Changed = Box<dyn Fn(&PtyId, bool) + Send + Sync>;
 
 /// What the platform shares with the server: which terminals listen, and the audio waiting for each.
-pub struct Shared {
+pub(crate) struct Shared {
     listening: Mutex<HashSet<PtyId>>,
     audio: Mutex<HashMap<PtyId, VecDeque<u8>>>,
     changed: Changed,
@@ -33,7 +38,7 @@ pub struct Shared {
 
 impl Shared {
     /// Takes the terminals now listening, reporting each that started or stopped.
-    pub fn set_listening(&self, now: HashSet<PtyId>) {
+    pub(crate) fn set_listening(&self, now: HashSet<PtyId>) {
         let before = std::mem::replace(&mut *lock(&self.listening), now.clone());
         for stopped in before.difference(&now) {
             lock(&self.audio).remove(stopped);
@@ -56,7 +61,7 @@ impl Shared {
 
     /// `pull` for a real-time thread: reports false, filling nothing, when the audio is locked elsewhere.
     #[cfg(target_os = "macos")]
-    pub fn try_pull(&self, id: &PtyId, out: &mut [u8]) -> bool {
+    pub(crate) fn try_pull(&self, id: &PtyId, out: &mut [u8]) -> bool {
         match self.audio.try_lock() {
             Ok(mut audio) => drain(&mut audio, id, out),
             Err(std::sync::TryLockError::Poisoned(poison)) => drain(&mut poison.into_inner(), id, out),
@@ -100,7 +105,7 @@ pub fn directory(terminal_host: &Path) -> PathBuf {
     PathBuf::from(format!("{}.mic", terminal_host.display()))
 }
 
-pub struct Microphones {
+pub(crate) struct Microphones {
     shared: Arc<Shared>,
     /// None when this server gives its terminals no virtual microphone.
     platform: Option<platform::Platform>,
@@ -150,22 +155,46 @@ impl Microphones {
     }
 
     /// The terminals whose lock a client connected over QUIC holds.
-    pub fn remote_held(&self, terminals: HashSet<PtyId>) {
+    pub(crate) fn remote_held(&self, terminals: HashSet<PtyId>) {
         if let Some(platform) = &self.platform {
             platform.remote_held(terminals);
         }
     }
 
     /// Whether the terminal's holder has its `mic:` stream open.
-    pub fn streaming(&self, id: &PtyId, streaming: bool) {
+    pub(crate) fn streaming(&self, id: &PtyId, streaming: bool) {
         if let Some(platform) = &self.platform {
             platform.streaming(id, streaming);
         }
     }
 
     /// Audio from the terminal's lock holder, as `MIC_FORMAT`.
-    pub fn feed(&self, id: &PtyId, bytes: &[u8]) {
+    pub(crate) fn feed(&self, id: &PtyId, bytes: &[u8]) {
         self.shared.push(id, bytes);
+    }
+}
+
+impl Server {
+    pub(crate) fn listening_changed(&self, id: &PtyId, listening: bool) {
+        let mut state = lock(&self.state);
+        let task = state.terminal_by_id(id).map(|(task, _)| task);
+        let changed =
+            if listening { task.is_some() && state.listening.insert(id.clone()) } else { state.listening.remove(id) };
+        let Some(task) = task else { return };
+        if changed && let Err(error) = self.touch_task(&mut state, &task) {
+            report!("publish whether {id} is listening: {error}");
+        }
+    }
+
+    /// Audio from `client` for the terminal's virtual microphone, taken only while `client` holds the lock.
+    pub(crate) fn hear(&self, client: &Client, terminal: &Terminal, bytes: &[u8]) -> Result<(), Error> {
+        self.check_holder(client, terminal)?;
+        self.mic.feed(&terminal.id, bytes);
+        Ok(())
+    }
+
+    pub(crate) fn sending(&self, terminal: &Terminal, sending: bool) {
+        self.mic.streaming(&terminal.id, sending);
     }
 }
 

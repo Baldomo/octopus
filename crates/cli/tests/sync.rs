@@ -5,7 +5,7 @@ use std::time::Duration;
 use common::{connect, create, start, workspace};
 use octopus_client::cache::{Cache, PushEffect};
 use octopus_proto::ops::{SessionSync, TaskMove, WorkspaceRemove};
-use octopus_proto::types::{Checkout, TaskState};
+use octopus_proto::types::{CheckoutKind, TaskState};
 use octopus_proto::{Event, Push};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -18,7 +18,7 @@ async fn clients_moving_tasks_at_once_converge_on_one_server_state() {
     let mut cache = Cache::from_snapshot(laptop.call(&SessionSync { since_rev: None }).await.expect("sync"));
 
     let workspace = workspace(&desk, dir.path()).await;
-    let task = create(&desk, &workspace, Checkout::Root, "none").await;
+    let task = create(&desk, &workspace, CheckoutKind::Root, "none").await;
     let moves = TaskState::ALL.into_iter().cycle().take(40).enumerate().map(|(index, state)| {
         let (writer, task) = (if index % 2 == 0 { &laptop } else { &desk }, task.clone());
         async move { writer.call(&TaskMove { task, state }).await }

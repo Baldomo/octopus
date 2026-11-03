@@ -1,6 +1,7 @@
 import { createResource, createSignal, For, Show } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
-import { HUES, TONES, type Section, type Swatch } from "@octopus/shared/generated.ts";
+import type { Section, Swatch } from "@octopus/shared/generated.ts";
+import { pickSwatch, sameSwatch, SWATCHES } from "@octopus/shared/swatches.ts";
 import { act, model, report, serverLabel, serverView, servers } from "@octopus/shared/state.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
@@ -10,31 +11,22 @@ import { Chev, Field, Flab, Gap, Mi, Note, Path, Sep, ServerDot, Why } from "./p
 import { Rename } from "./Rename";
 import { Sheet, SheetHead } from "./Sheet";
 
-const same = (a: Swatch | null | undefined, b: Swatch | null | undefined) => a?.hue === b?.hue && a?.tone === b?.tone;
-
 /** The 12 hues across and 4 tones down; the current color ringed and the auto color dotted, which picks auto. */
 function Matrix(props: { on: Swatch | null; auto: Swatch | undefined; pick: (swatch: Swatch | null) => void }) {
   return (
     <div class="matrix">
-      <For each={TONES}>
-        {(tone) => (
-          <For each={HUES}>
-            {(hue) => {
-              const swatch = { hue, tone };
-              return (
-                <i
-                  role="button"
-                  aria-label={`${hue} ${tone}`}
-                  classList={{ on: same(props.on, swatch), auto: same(props.auto, swatch) }}
-                  style={{ "--c": swatchColor(swatch) }}
-                  onClick={() => {
-                    feel("select");
-                    props.pick(same(props.auto, swatch) ? null : swatch);
-                  }}
-                />
-              );
+      <For each={SWATCHES}>
+        {(swatch) => (
+          <i
+            role="button"
+            aria-label={`${swatch.hue} ${swatch.tone}`}
+            classList={{ on: sameSwatch(swatch, props.on), auto: sameSwatch(swatch, props.auto) }}
+            style={{ "--c": swatchColor(swatch) }}
+            onClick={() => {
+              feel("select");
+              props.pick(pickSwatch(swatch, props.auto));
             }}
-          </For>
+          />
         )}
       </For>
     </div>

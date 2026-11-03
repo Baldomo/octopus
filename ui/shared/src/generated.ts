@@ -1,4 +1,4 @@
-// Rendered from the Rust types by `cargo run -p octopus-shell --example types`. Edit those, not this.
+// Rendered from the Rust types by `cargo run -p octopus-desktop --example types`. Edit those, not this.
 
 export type TaskId = string;
 
@@ -10,9 +10,17 @@ export type BrowserId = string;
 
 export type SessionId = string;
 
+export type Session = { id: SessionId, 
+/**
+ * Its next start resumes it: the agent created it, or `task.create` or `task.set_session` named it.
+ */
+started: boolean, };
+
 export type TaskState = "pinned" | "temporary" | "completed" | "cancelled";
 
-export type Checkout = "root" | "worktree";
+export type Checkout = { "kind": "root" } | { "kind": "worktree", branch: string, };
+
+export type CheckoutKind = "root" | "worktree";
 
 export type AgentStatus = "working" | "waiting" | "idle";
 
@@ -46,7 +54,7 @@ title: string,
  */
 load: number, };
 
-export type Task = { id: TaskId, workspace: WorkspaceId, parent: TaskId | null, title: string, state: TaskState, checkout: Checkout, harness: string, session: SessionId | null, directory: string, branch: string | null, ended_at: number | null, archived_at: number | null, rev: number, agent: Agent, panels: Array<Panel>, browsers: Array<BrowserPanel>, };
+export type Task = { id: TaskId, workspace: WorkspaceId, parent: TaskId | null, title: string, state: TaskState, checkout: Checkout, harness: string, session: Session, directory: string, ended_at: number | null, archived_at: number | null, rev: number, agent: Agent, panels: Array<Panel>, browsers: Array<BrowserPanel>, };
 
 export type EntryKind = "file" | "directory";
 
@@ -118,11 +126,25 @@ root: string, };
 
 export type Lists = { sections: Array<Section>, workspaces: Array<WorkspaceRef>, };
 
+export type PanelView = { 
+/**
+ * Whether this client holds the panel's lock.
+ */
+held_here: boolean, id: PtyId, name: string, running: boolean, lock_holder: LockHolder | null, cols: number, rows: number, 
+/**
+ * A program of the terminal records from its virtual microphone, so the holder sends its own on `mic:<pty>`.
+ */
+listening: boolean, };
+
 export type TaskView = { key: string, at: TaskRef, section: string, 
 /**
  * The workspace, then each ancestor root first, then the task.
  */
-crumbs: Array<string>, live: boolean, glyph: Glyph, task: Task, };
+crumbs: Array<string>, live: boolean, glyph: Glyph, 
+/**
+ * The task with its panels taken out: they reach the UI through `panels` alone.
+ */
+task: Omit<Task, "panels">, panels: Array<PanelView>, };
 
 export type TermScreen = { cols: number, rows: number, };
 
@@ -232,11 +254,11 @@ me: string,
  */
 key: string, servers: Array<ServerView>, model: Model, ui: Ui, };
 
-export type NewTask = { server: string, workspace: WorkspaceId, title: string, parent: TaskId | null, state: TaskState, checkout: Checkout, harness: string, 
+export type NewTask = { server: string, workspace: WorkspaceId, title: string, parent: TaskId | null, state: TaskState, checkout: CheckoutKind, harness: string, 
 /**
- * An existing session for the agent to resume; none for a fresh one.
+ * `FRESH_SESSION` for a fresh session, or an existing session's id for the agent to resume.
  */
-session: SessionId | null, };
+session: string, };
 
 export type Bounds = { x: number, y: number, width: number, height: number, };
 
@@ -260,8 +282,14 @@ export const NEW_BROWSER_PANEL = "new" as const;
 
 export const BACKGROUND_BROWSER_PANEL = "background" as const;
 
+export const FRESH_SESSION = "fresh" as const;
+
 export const TERM_HISTORY_LINES = 10000 as const;
 
+export const HOLDER_GRACE_MS = 10000 as const;
+
 export const VERSION = "0.0.0" as const;
+
+export const COMMANDS = ["boot","ready","ui_act","quit","server_pair","server_offer","server_clients","server_revoke","servers_refresh","server_rename","server_forget","workspace_add","workspace_remove","section_rename","section_color","auto_color","task_focus","task_move","task_set_parent","task_rename","task_archive","task_create","term_attach","term_input","term_detach","term_open","term_close","term_claim","term_take_lock","term_resize","file_list","file_read","file_write","file_create","file_move","file_copy","file_delete","file_upload","file_search"] as const;
 
 export const EVENTS = {"filesChanged":"files_changed","microphoneDenied":"microphone_denied","model":"model","servers":"servers","ui":"ui","windowFocused":"window-focused","windowShown":"window-shown"} as const;

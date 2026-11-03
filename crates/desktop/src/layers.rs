@@ -28,10 +28,10 @@ use octopus_shell::lock;
 use octopus_shell::ui::{Bounds, FOCUSED_EVENT, Floated, Native, SHOWN_EVENT, UiStore, Viewport};
 
 /// The label of the window and of its base webview, as `tauri.conf.json` declares them.
-pub const BASE: &str = "main";
+pub(crate) const BASE: &str = "main";
 /// How often the window is asked whether it is minimized or hidden; macOS sends no event for either.
 const SHOWN_POLL: std::time::Duration = std::time::Duration::from_millis(250);
-pub const FLOAT: &str = "float";
+pub(crate) const FLOAT: &str = "float";
 
 /// The rect in window points.
 fn points(bounds: Bounds, zoom: Zoom) -> Bounds {
@@ -40,7 +40,7 @@ fn points(bounds: Bounds, zoom: Zoom) -> Bounds {
 }
 
 /// The float layer's corner sits on the window's left edge at this height in points, just below the title bar.
-pub fn title_bar_height() -> f64 {
+pub(crate) fn title_bar_height() -> f64 {
     env!("OCTOPUS_CHROME_H").parse().expect("build.rs emits --chrome-h in px")
 }
 
@@ -64,7 +64,7 @@ fn from_corner(rects: impl Iterator<Item = Bounds>, zoom: Zoom) -> Bounds {
 }
 
 /// The float layer's rect and the rects in it that take the pointer, for the surfaces that are out.
-pub fn float_cover(surfaces: &[Floated], zoom: Zoom) -> (Bounds, Vec<Bounds>) {
+pub(crate) fn float_cover(surfaces: &[Floated], zoom: Zoom) -> (Bounds, Vec<Bounds>) {
     let drawn = surfaces.iter().flat_map(|surface| [surface.input, surface.drawn]);
     (from_corner(drawn, zoom), surfaces.iter().map(|surface| surface.input).collect())
 }
@@ -83,7 +83,7 @@ fn paint(window: &Window, base: &Webview, theme: Theme) -> tauri::Result<()> {
     base.set_background_color(Some(color))
 }
 
-pub struct Layers {
+pub(crate) struct Layers {
     window: Window,
     base: Webview,
     float: Webview,
@@ -238,7 +238,7 @@ impl Layers {
     }
 
     /// Adds a page webview, hidden until shown, beneath the float layer.
-    pub fn add_page(&self, page: WebviewBuilder<tauri::Wry>) -> tauri::Result<Webview> {
+    pub(crate) fn add_page(&self, page: WebviewBuilder<tauri::Wry>) -> tauri::Result<Webview> {
         let page = add_child(&self.window, page, None)?;
         host::raise(&self.window, &self.float)?;
         if self.ui.native().modal {
@@ -249,7 +249,7 @@ impl Layers {
 
     /// Puts `next` on screen at its rect in place of the page there, or empties the page layer. The main thread
     /// serializes every swap, and a page that fails to land still lets the shown one leave.
-    pub fn show_page(&self, next: Option<(Webview, Bounds)>) -> tauri::Result<()> {
+    pub(crate) fn show_page(&self, next: Option<(Webview, Bounds)>) -> tauri::Result<()> {
         let (page, ui) = (Arc::clone(&self.page), Arc::clone(&self.ui));
         on_main_thread(&self.window, move || {
             let zoom = ui.native().zoom;
@@ -263,11 +263,11 @@ impl Layers {
     }
 
     /// The rect of the page on screen, in the UI's CSS pixels.
-    pub fn page_bounds(&self) -> Option<Bounds> {
+    pub(crate) fn page_bounds(&self) -> Option<Bounds> {
         lock(&self.page).as_ref().map(|(_, bounds)| *bounds)
     }
 
-    pub fn close_page(&self, closed: &Webview) -> tauri::Result<()> {
+    pub(crate) fn close_page(&self, closed: &Webview) -> tauri::Result<()> {
         lock(&self.page).take_if(|(shown, _)| shown.label() == closed.label());
         closed.close()
     }
@@ -286,7 +286,7 @@ mod host {
         webview.with_webview(move |_| super::pointer::take_input(bounds, input))
     }
 
-    pub fn adopt_base(_: &Webview) -> tauri::Result<()> {
+    pub(crate) fn adopt_base(_: &Webview) -> tauri::Result<()> {
         Ok(())
     }
 
@@ -307,7 +307,7 @@ mod host {
         }
     }
 
-    pub fn raise(window: &Window, webview: &Webview) -> tauri::Result<()> {
+    pub(crate) fn raise(window: &Window, webview: &Webview) -> tauri::Result<()> {
         webview.reparent(window)
     }
 }
@@ -343,7 +343,7 @@ mod host {
         widget.parent().and_then(|parent| parent.downcast().ok()).expect("tauri packs a webview into its window's box")
     }
 
-    pub fn adopt_base(base: &Webview) -> tauri::Result<()> {
+    pub(crate) fn adopt_base(base: &Webview) -> tauri::Result<()> {
         with_widget(base, |widget| {
             let packed = packed_box(&widget);
             packed.remove(&widget);
@@ -403,7 +403,7 @@ mod host {
     }
 
     /// The overlay restacks its children's windows in its order on every allocation.
-    pub fn raise(_: &Window, webview: &Webview) -> tauri::Result<()> {
+    pub(crate) fn raise(_: &Window, webview: &Webview) -> tauri::Result<()> {
         with_widget(webview, |widget| {
             let overlay = overlay();
             overlay.reorder_overlay(&widget, -1);

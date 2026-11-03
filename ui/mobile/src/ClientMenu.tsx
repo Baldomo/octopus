@@ -2,15 +2,8 @@ import { createResource, createSignal, For, Match, Show, Switch } from "solid-js
 import { backend } from "@octopus/shared/backend.ts";
 import { aboutCopy, APPEARANCES, NEXT_START } from "@octopus/shared/ClientMenu.tsx";
 import { VERSION, ZOOMS, type ShownOffer } from "@octopus/shared/generated.ts";
-import {
-  clientStatus,
-  clock,
-  expiry,
-  grouped,
-  inviteCode,
-  isThisClient,
-  ticking,
-} from "@octopus/shared/SidebarControls.tsx";
+import { clientStatus, expiry, grouped, inviteCode, isThisClient } from "@octopus/shared/pairing.ts";
+import { clock, ticking } from "@octopus/shared/time.ts";
 import {
   harnesses,
   me,

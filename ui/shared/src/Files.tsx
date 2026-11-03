@@ -4,7 +4,7 @@ import { FileTree, type Outside } from "./FileTree";
 import { FolderTabs } from "./FolderTabs";
 import type { LiftOnDrag } from "./lift";
 import { MenuHost } from "./Menu";
-import { Toast } from "./SidebarControls";
+import { Toast } from "./Toast";
 import { filesOf, loadMonaco, nameOf, renderable, tabHints, type TaskFiles } from "./taskFiles";
 import { act, openView, report } from "./state";
 

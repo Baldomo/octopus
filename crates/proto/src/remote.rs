@@ -21,7 +21,7 @@ use crate::device::{DeviceKey, PublicKey};
 
 const ALPN: &[u8] = b"octopus/1";
 /// A paired client's streams at once: a browser panel opens many tunnel streams beside terminals and file transfers.
-pub const PAIRED_STREAMS: VarInt = VarInt::from_u32(1024);
+pub(crate) const PAIRED_STREAMS: VarInt = VarInt::from_u32(1024);
 /// A connection's streams before its client is known to be paired: the one that carries `pairing.pair`.
 const UNPAIRED_STREAMS: VarInt = VarInt::from_u32(1);
 /// The bytes a peer may have in flight before it is known to be paired; a paired client gets the whole window.

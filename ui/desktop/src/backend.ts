@@ -1,9 +1,10 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke as invokeAny, type InvokeArgs } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { BrowserId, TaskRef } from "@octopus/shared/generated.ts";
 import { BACKGROUND_BROWSER_PANEL, NEW_BROWSER_PANEL } from "@octopus/shared/generated.ts";
 import {
+  COMMANDS,
   EVENTS,
   type Downloaded,
   type Failed,
@@ -16,6 +17,8 @@ import {
   type Outside,
   type Paged,
 } from "./generated";
+
+const invoke = <T>(command: (typeof COMMANDS)[number], args?: InvokeArgs) => invokeAny<T>(command, args);
 
 /** The desktop app's own commands, beside the client app core's. */
 export const desktop = {

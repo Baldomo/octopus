@@ -10,7 +10,8 @@ use octopus_proto::ops::{
     TermResize, TermSend, TermTakeLock,
 };
 use octopus_proto::types::{
-    Agent, AgentStatus, Checkout, ENV_SERVER, ENV_TASK, Hooks, SessionId, Stream, TaskId, TaskState,
+    Agent, AgentStatus, CheckoutKind, ENV_SERVER, ENV_TASK, FRESH_SESSION, Hooks, SessionId, SessionStart, Stream,
+    TaskId, TaskState,
 };
 use octopus_proto::{Error, Op, Outcome};
 use octopus_server::{AGENT_RECLAIM_MS, now};
@@ -44,7 +45,7 @@ async fn a_focused_task_runs_its_agent_terminal_end_to_end() {
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "echo", echo_agent(&format!("agent:${ENV_TASK}@${ENV_SERVER}")), Hooks::ClaudeCode).await;
 
-    let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
+    let id = create(&laptop, &workspace, CheckoutKind::Root, "echo").await;
     assert_eq!(task(&laptop, &id).await.agent, Agent::NotStarted);
     laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("task.focus");
     let view = task(&laptop, &id).await;
@@ -101,7 +102,7 @@ async fn a_shell_panel_follows_the_agent_until_its_shell_exits_or_it_closes() {
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "echo", echo_agent("agent:up"), Hooks::None).await;
-    let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
+    let id = create(&laptop, &workspace, CheckoutKind::Root, "echo").await;
     laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
 
     let shell = laptop.call(&TermOpen { task: id.clone(), directory: ".".into() }).await.expect("term.open").panel;
@@ -141,7 +142,7 @@ async fn closing_a_shell_the_terminal_host_already_ended_drops_its_panel() {
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "echo", echo_agent("agent:up"), Hooks::None).await;
-    let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
+    let id = create(&laptop, &workspace, CheckoutKind::Root, "echo").await;
     let shell = laptop.call(&TermOpen { task: id.clone(), directory: ".".into() }).await.expect("term.open").panel;
     let mut live = laptop.open_data_stream(&Stream::Pty(shell.clone())).await.expect("attach the shell");
     let trap = "trap '' TERM; echo trap$((1+1))";
@@ -174,7 +175,7 @@ async fn a_shell_panel_opens_before_its_login_profile_finishes_and_then_has_its_
     let laptop = server.connect("laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "echo", echo_agent("agent:up"), Hooks::None).await;
-    let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
+    let id = create(&laptop, &workspace, CheckoutKind::Root, "echo").await;
 
     let opening = std::time::Instant::now();
     let shell = laptop.call(&TermOpen { task: id.clone(), directory: ".".into() }).await.expect("term.open").panel;
@@ -209,13 +210,13 @@ async fn a_missing_harness_runs_nothing_and_reports_its_install_command() {
     };
     laptop.call(&harness).await.expect("harness.set");
 
-    let missing = create(&laptop, &workspace, Checkout::Root, "claude-code").await;
+    let missing = create(&laptop, &workspace, CheckoutKind::Root, "claude-code").await;
     laptop.call(&TaskFocus { task: missing.clone(), args: vec![] }).await.expect("focus");
     let view = task(&laptop, &missing).await;
     assert_eq!(view.agent, Agent::HarnessNotInstalled { install });
     assert!(view.panels.is_empty());
 
-    let unknown = create(&laptop, &workspace, Checkout::Root, "aider").await;
+    let unknown = create(&laptop, &workspace, CheckoutKind::Root, "aider").await;
     laptop.call(&TaskFocus { task: unknown.clone(), args: vec![] }).await.expect("focus");
     assert_eq!(task(&laptop, &unknown).await.agent, Agent::HarnessUnknown);
     match laptop.call(&AgentReport { task: missing, status: AgentStatus::Working }).await {
@@ -235,7 +236,7 @@ async fn concurrent_focuses_start_one_agent() {
     let desk = connect(&running, "desk").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "echo", echo_agent(&format!("start >> {}", starts.display())), Hooks::None).await;
-    let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
+    let id = create(&laptop, &workspace, CheckoutKind::Root, "echo").await;
 
     let focus = TaskFocus { task: id.clone(), args: vec![] };
     let (first, second) = tokio::join!(laptop.call(&focus), desk.call(&focus));
@@ -253,7 +254,7 @@ async fn an_agent_outlives_a_restart_of_its_server_process() {
     let laptop = before.connect("laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "echo", echo_agent("agent:up"), Hooks::None).await;
-    let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
+    let id = create(&laptop, &workspace, CheckoutKind::Root, "echo").await;
     laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
     laptop.call(&TermOpen { task: id.clone(), directory: ".".into() }).await.expect("term.open");
     let view = task(&laptop, &id).await;
@@ -283,7 +284,7 @@ async fn after_a_machine_restart_the_next_focus_starts_the_agent_again() {
     let laptop = connect(&before, "laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "echo", echo_agent("agent:up"), Hooks::None).await;
-    let id = create(&laptop, &workspace, Checkout::Root, "echo").await;
+    let id = create(&laptop, &workspace, CheckoutKind::Root, "echo").await;
     laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
 
     let after = start(dir.path(), "after.sock", "rebooted-host.sock").await;
@@ -313,7 +314,7 @@ async fn an_agent_owns_its_terminal_and_answers_for_its_own_privacy_permissions(
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "probe", vec!["perl".into(), "-e".into(), PROBE.into()], Hooks::None).await;
-    let id = create(&laptop, &workspace, Checkout::Root, "probe").await;
+    let id = create(&laptop, &workspace, CheckoutKind::Root, "probe").await;
     laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
     let agent = Stream::Pty(task(&laptop, &id).await.panels[0].id.clone());
     let mut live = laptop.open_data_stream(&agent).await.expect("attach");
@@ -345,7 +346,7 @@ async fn an_agent_that_cannot_start_fails_the_focus_with_the_reason() {
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "garbage", vec![garbage.to_string_lossy().into()], Hooks::None).await;
-    let id = create(&laptop, &workspace, Checkout::Root, "garbage").await;
+    let id = create(&laptop, &workspace, CheckoutKind::Root, "garbage").await;
     match laptop.call(&TaskFocus { task: id, args: vec![] }).await {
         Err(CallError::Server(Error::Internal { message })) => {
             assert_eq!(message, format!("start {}: Exec format error (os error 8)", garbage.display()));
@@ -361,7 +362,7 @@ async fn an_agent_that_ignores_sigterm_and_sighup_is_killed_after_the_grace() {
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "stubborn", echo_agent("trapped; trap '' TERM HUP; echo ignoring"), Hooks::None).await;
-    let id = create(&laptop, &workspace, Checkout::Root, "stubborn").await;
+    let id = create(&laptop, &workspace, CheckoutKind::Root, "stubborn").await;
     laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
     let agent = Stream::Pty(task(&laptop, &id).await.panels[0].id.clone());
     read_until(&mut laptop.open_data_stream(&agent).await.expect("attach"), "ignoring").await;
@@ -383,19 +384,16 @@ async fn focus_prints(connection: &Connection, id: &TaskId, args: &[&str], line:
     read_until(&mut connection.open_data_stream(&agent).await.expect("attach"), line).await;
 }
 
-/// The `sessions` harness, whose agent prints the args after its argv.
-async fn set_sessions_harness(connection: &Connection) {
+/// A harness whose agent prints the args after its argv, starting and resuming its session by id.
+fn sessions_harness(id: &str, hooks: Hooks) -> HarnessSet {
     let [start, resume] =
         [["--session-id", "{session}"], ["--resume", "{session}"]].map(|args| args.map(String::from).to_vec());
-    let harness = HarnessSet {
-        id: "sessions".into(),
-        argv: args_agent(),
-        start,
-        resume,
-        install: "true".into(),
-        hooks: Hooks::None,
-    };
-    connection.call(&harness).await.expect("harness.set");
+    HarnessSet { id: id.into(), argv: args_agent(), start, resume, install: "true".into(), hooks }
+}
+
+/// The `sessions` harness, which declares no hooks.
+async fn set_sessions_harness(connection: &Connection) {
+    connection.call(&sessions_harness("sessions", Hooks::None)).await.expect("harness.set");
 }
 
 fn interrupt(task: &TaskId) -> TermSend {
@@ -410,7 +408,7 @@ async fn a_focus_s_args_reach_the_agent_it_starts_and_no_running_one() {
     let desk = connect(&running, "desk").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_sessions_harness(&laptop).await;
-    let id = create(&laptop, &workspace, Checkout::Root, "sessions").await;
+    let id = create(&laptop, &workspace, CheckoutKind::Root, "sessions").await;
 
     focus_prints(&laptop, &id, &["--model", "opus"], "args: --model opus --session-id ").await;
     let started = task(&laptop, &id).await;
@@ -419,7 +417,7 @@ async fn a_focus_s_args_reach_the_agent_it_starts_and_no_running_one() {
 
     laptop.call(&interrupt(&id)).await.expect("ctrl-c");
     eventually("the interrupted agent ending", async || task(&laptop, &id).await.agent == Agent::NotStarted).await;
-    let session = started.session.expect("the first start names a session");
+    let session = started.session.id;
     focus_prints(&desk, &id, &["--other"], &format!("args: --other --resume {}", session.0)).await;
 }
 
@@ -431,9 +429,9 @@ async fn every_start_after_a_session_s_first_resumes_it() {
     let workspace = workspace(&laptop, dir.path()).await;
     set_sessions_harness(&laptop).await;
 
-    let id = create(&laptop, &workspace, Checkout::Root, "sessions").await;
+    let id = create(&laptop, &workspace, CheckoutKind::Root, "sessions").await;
     laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
-    let session = task(&laptop, &id).await.session.expect("the first start names a session");
+    let session = task(&laptop, &id).await.session.id;
     focus_prints(&laptop, &id, &[], &format!("args: --session-id {}", session.0)).await;
 
     laptop.call(&interrupt(&id)).await.expect("ctrl-c");
@@ -447,8 +445,10 @@ async fn every_start_after_a_session_s_first_resumes_it() {
     assert_eq!(task(&laptop, &id).await.panels, vec![], "a reopened task's exited agent goes");
     focus_prints(&laptop, &id, &[], &format!("args: --resume {}", session.0)).await;
 
-    let empty = TaskSetSession { task: id.clone(), session: SessionId(String::new()) };
-    assert!(matches!(laptop.call(&empty).await, Err(CallError::Server(Error::InvalidArgs { .. }))));
+    for refused in ["", FRESH_SESSION] {
+        let set = TaskSetSession { task: id.clone(), session: SessionId(refused.into()) };
+        assert!(matches!(laptop.call(&set).await, Err(CallError::Server(Error::InvalidArgs { .. }))), "{refused:?}");
+    }
     let set = TaskSetSession { task: id.clone(), session: SessionId("elsewhere".into()) };
     laptop.call(&set).await.expect("task.set_session");
     let pointed = task(&laptop, &id).await;
@@ -460,12 +460,44 @@ async fn every_start_after_a_session_s_first_resumes_it() {
         title: "imported".into(),
         parent: None,
         state: TaskState::Pinned,
-        checkout: Checkout::Root,
+        checkout: CheckoutKind::Root,
         harness: "sessions".into(),
-        session: Some(SessionId("demo-session".into())),
+        session: SessionStart::Resume(SessionId("demo-session".into())),
     };
     let imported = laptop.call(&imported).await.expect("task.create").task;
     focus_prints(&laptop, &imported, &[], "args: --resume demo-session").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hooked_agent_resumes_its_session_only_once_a_prompt_created_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
+    let laptop = connect(&running, "laptop").await;
+    let workspace = workspace(&laptop, dir.path()).await;
+    laptop.call(&sessions_harness("hooked", Hooks::ClaudeCode)).await.expect("harness.set");
+    let id = create(&laptop, &workspace, CheckoutKind::Root, "hooked").await;
+    let session = task(&laptop, &id).await.session.id;
+
+    focus_prints(&laptop, &id, &[], &format!("--session-id {}", session.0)).await;
+    laptop.call(&interrupt(&id)).await.expect("ctrl-c");
+    eventually("the unprompted agent ending", async || task(&laptop, &id).await.agent == Agent::NotStarted).await;
+    assert!(!task(&laptop, &id).await.session.started);
+    focus_prints(&laptop, &id, &[], &format!("--session-id {}", session.0)).await;
+
+    laptop.call(&AgentReport { task: id.clone(), status: AgentStatus::Working }).await.expect("agent.report");
+    assert!(task(&laptop, &id).await.session.started, "a prompt creates the session");
+    laptop.call(&interrupt(&id)).await.expect("ctrl-c");
+    eventually("the prompted agent ending", async || task(&laptop, &id).await.agent == Agent::NotStarted).await;
+    focus_prints(&laptop, &id, &[], &format!("--resume {}", session.0)).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_harness_resuming_a_session_its_start_never_names_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
+    let laptop = connect(&running, "laptop").await;
+    let unnamed = HarnessSet { start: vec![], ..sessions_harness("unnamed", Hooks::None) };
+    assert!(matches!(laptop.call(&unnamed).await, Err(CallError::Server(Error::InvalidArgs { .. }))));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -483,7 +515,7 @@ async fn a_launched_server_finds_and_runs_agents_in_the_login_environment() {
     let laptop = server.connect("laptop").await;
     let workspace = workspace(&laptop, dir.path()).await;
     set_harness(&laptop, "login", vec!["octopus-test-agent".into()], Hooks::None).await;
-    let id = create(&laptop, &workspace, Checkout::Root, "login").await;
+    let id = create(&laptop, &workspace, CheckoutKind::Root, "login").await;
 
     laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
     assert_eq!(task(&laptop, &id).await.agent, Agent::HarnessNotInstalled { install: "true".into() });
@@ -507,7 +539,7 @@ async fn the_server_stops_an_agent_idle_silent_and_unshown_for_the_reclaim_time(
     let before = now();
     let mut tasks = Vec::new();
     for harness in ["agent", "agent", "agent", "detaching"] {
-        let id = create(&laptop, &workspace, Checkout::Root, harness).await;
+        let id = create(&laptop, &workspace, CheckoutKind::Root, harness).await;
         laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
         tasks.push(id);
     }

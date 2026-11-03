@@ -48,7 +48,7 @@ mod tests {
 
     #[test]
     fn a_null_parent_is_present_not_missing() {
-        let args = json!({"workspace": "wsp_8f2", "title": "x", "parent": null, "state": "pinned", "checkout": "root", "harness": "claude-code", "session": null});
+        let args = json!({"workspace": "wsp_8f2", "title": "x", "parent": null, "state": "pinned", "checkout": "root", "harness": "claude-code", "session": "fresh"});
         assert_eq!(parse_args::<ops::TaskCreate>(&args).unwrap().parent, None);
     }
 

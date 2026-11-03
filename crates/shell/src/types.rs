@@ -3,8 +3,9 @@
 use octopus_proto::ops::{Entry, EntryKind, Match, Offer, PairedClient};
 use octopus_proto::term::HISTORY_LINES;
 use octopus_proto::types::{
-    AGENT_PANEL, Agent, AgentStatus, BACKGROUND_BROWSER_PANEL, BrowserId, BrowserPanel, Checkout, Hue, LockHolder,
-    NEW_BROWSER_PANEL, Panel, PtyId, SessionId, Swatch, Task, TaskId, TaskState, Tone, WorkspaceId,
+    AGENT_PANEL, Agent, AgentStatus, BACKGROUND_BROWSER_PANEL, BrowserId, BrowserPanel, Checkout, CheckoutKind,
+    FRESH_SESSION, HOLDER_GRACE_MS, Hue, LockHolder, NEW_BROWSER_PANEL, Panel, PtyId, Session, SessionId, Swatch, Task,
+    TaskId, TaskState, Tone, WorkspaceId,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -15,7 +16,7 @@ use crate::commands::{Boot, NewTask, ShownOffer};
 use crate::hub::{FILES_CHANGED_EVENT, FilesChanged, MODEL_EVENT, Model, SERVERS_EVENT, ServerView};
 use crate::microphone::MICROPHONE_DENIED_EVENT;
 use crate::task_lists::{Column, Glyph, Lists, Row, Section, TaskRef, WorkspaceRef};
-use crate::task_view::TaskView;
+use crate::task_view::{PanelView, TaskView};
 use crate::terminal::TermScreen;
 use crate::ui::{
     Bounds, FOCUSED_EVENT, Floated, Modal, Prefs, Reveal, SHOWN_EVENT, Split, Surface, UI_EVENT, Ui, UiAct, View,
@@ -45,8 +46,10 @@ pub fn render() -> String {
         PtyId,
         BrowserId,
         SessionId,
+        Session,
         TaskState,
         Checkout,
+        CheckoutKind,
         AgentStatus,
         Hue,
         Tone,
@@ -69,6 +72,7 @@ pub fn render() -> String {
         Section,
         WorkspaceRef,
         Lists,
+        PanelView,
         TaskView,
         TermScreen,
         ServerView,
@@ -95,15 +99,18 @@ pub fn render() -> String {
     let constants = [
         constant("TASK_STATES", &TaskState::ALL),
         constant("LIVE_STATES", &TaskState::LIVE),
-        constant("CHECKOUTS", &Checkout::ALL),
+        constant("CHECKOUTS", &CheckoutKind::ALL),
         constant("HUES", &Hue::ALL),
         constant("TONES", &Tone::ALL),
         constant("ZOOMS", &ZOOMS),
         constant("AGENT_PANEL", &AGENT_PANEL),
         constant("NEW_BROWSER_PANEL", &NEW_BROWSER_PANEL),
         constant("BACKGROUND_BROWSER_PANEL", &BACKGROUND_BROWSER_PANEL),
+        constant("FRESH_SESSION", &FRESH_SESSION),
         constant("TERM_HISTORY_LINES", &HISTORY_LINES),
+        constant("HOLDER_GRACE_MS", &HOLDER_GRACE_MS),
         constant("VERSION", &env!("CARGO_PKG_VERSION")),
+        constant("COMMANDS", &crate::COMMANDS),
         constant(
             "EVENTS",
             &json!({
@@ -118,7 +125,7 @@ pub fn render() -> String {
         ),
     ];
     let header =
-        "// Rendered from the Rust types by `cargo run -p octopus-shell --example types`. Edit those, not this.\n";
+        "// Rendered from the Rust types by `cargo run -p octopus-desktop --example types`. Edit those, not this.\n";
     std::iter::once(header.to_string()).chain(declarations).chain(constants).collect::<Vec<_>>().join("\n")
 }
 
@@ -129,7 +136,7 @@ mod tests {
         let committed = include_str!("../../../ui/shared/src/generated.ts");
         assert!(
             committed == super::render(),
-            "{} drifted from the Rust types; run `cargo run -p octopus-shell --example types`",
+            "{} drifted from the Rust types; run `cargo run -p octopus-desktop --example types`",
             super::PATH
         );
     }

@@ -14,7 +14,7 @@ use crate::{Connection, Task};
 const ACCEPT_RETRY: Duration = Duration::from_millis(100);
 
 /// The server's connection at the moment a browser connects, which a reconnect may have replaced.
-pub type Dial = Arc<dyn Fn() -> Result<Arc<Connection>, String> + Send + Sync>;
+pub(crate) type Dial = Arc<dyn Fn() -> Result<Arc<Connection>, String> + Send + Sync>;
 
 /// The port of the server's machine a page reaches, when its host is a loopback name or address.
 pub fn loopback_port(page: &url::Url) -> Option<u16> {

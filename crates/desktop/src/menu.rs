@@ -7,12 +7,12 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, Wry};
 use ts_rs::TS;
 
-pub const COMMAND_EVENT: &str = "menu_command";
+pub(crate) const COMMAND_EVENT: &str = "menu_command";
 
 /// A command of the UI under one of its keys, which the menu names back to it when chosen.
 #[derive(Debug, Clone, PartialEq, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
-pub struct MenuCommand {
+pub(crate) struct MenuCommand {
     /// The key as the UI writes it, e.g. `⌘⇧V`.
     pub key: String,
     pub label: String,
@@ -23,7 +23,7 @@ pub struct MenuCommand {
 /// A menu of the menu bar.
 #[derive(Debug, Clone, PartialEq, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
-pub struct MenuGroup {
+pub(crate) struct MenuGroup {
     pub title: String,
     pub commands: Vec<MenuCommand>,
 }
@@ -125,7 +125,7 @@ mod shifted {
         }
     }
 
-    pub fn type_shifted_keys() {
+    pub(crate) fn type_shifted_keys() {
         let application = AnyClass::get(c"NSApplication").expect("AppKit has NSApplication");
         // SAFETY: Tauri runs this on the main thread, where the shared application holds the menu bar it just set.
         unsafe {
@@ -141,7 +141,7 @@ mod shifted {
 /// A key the menu took, and whether a browser page held the keyboard then.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct MenuKey {
+pub(crate) struct MenuKey {
     pub key: String,
     pub in_page: bool,
 }

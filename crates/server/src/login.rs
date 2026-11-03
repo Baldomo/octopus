@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 
 use octopus_proto::Error;
 
-/// The PATH an agent's program is found on: the environment's own, else the one the agent inherits.
-pub fn search_path(environment: &[(String, String)]) -> Option<OsString> {
-    let own = environment.iter().find(|(key, _)| key == "PATH").map(|(_, path)| OsString::from(path));
-    own.or_else(|| std::env::var_os("PATH"))
+/// The PATH an agent's program is found on, the login environment's own.
+pub fn search_path(environment: &[(String, String)]) -> Result<OsString, Error> {
+    let path = environment.iter().find(|(key, _)| key == "PATH").map(|(_, path)| OsString::from(path));
+    path.ok_or_else(|| Error::internal("the login environment sets no PATH"))
 }
 
 /// The account's login shell, which a shell panel runs.

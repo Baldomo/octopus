@@ -44,14 +44,6 @@ pub enum ServerVerb {
         #[arg(long)]
         address: PathBuf,
     },
-    /// Register again the service an older binary installed with flags this one no longer takes; its server hands
-    /// itself here.
-    #[command(hide = true)]
-    Upgrade {
-        /// The --name the service was installed with.
-        #[arg(long)]
-        name: String,
-    },
     /// Remember a server on this machine's local socket under a name.
     Add {
         /// The name to call the server by.
@@ -102,7 +94,6 @@ impl ServerVerb {
             }
             Self::Install { run, log } => print(&install::install(&Service::new(run, std::env::current_exe()?, log)?)?),
             Self::Uninstall { name } => print(&install::uninstall(&name)?),
-            Self::Upgrade { name } => install::upgrade_service(&name),
             Self::TerminalHost { address } => {
                 octopus_server::run_terminal_host(&address).await.with_context(|| format!("host {}", address.display()))
             }

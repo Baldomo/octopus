@@ -4,20 +4,34 @@ use std::path::Path;
 use octopus_proto::Error;
 use octopus_proto::device::{DeviceKey, PublicKey};
 use octopus_proto::types::{
-    AGENT_PANEL, BrowserId, BrowserPanel, Checkout, Color, Hooks, PtyId, SessionId, TaskId, TaskState, Workspace,
-    WorkspaceId, from_wire, to_wire,
+    AGENT_PANEL, BrowserId, BrowserPanel, Checkout, CheckoutKind, Color, Hooks, PtyId, Session, SessionId, TaskId,
+    TaskState, Workspace, WorkspaceId, from_wire, to_wire,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use serde::de::DeserializeOwned;
+
+use crate::harness;
 
 const SCHEMA: &str = "
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
 INSERT OR IGNORE INTO meta (key, value) VALUES ('rev', 0);
-CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, root TEXT NOT NULL UNIQUE);
-CREATE TABLE IF NOT EXISTS harnesses (id TEXT PRIMARY KEY, argv TEXT NOT NULL, install TEXT NOT NULL, hooks TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS workspaces (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    root TEXT NOT NULL UNIQUE,
+    color TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS harnesses (
+    id TEXT PRIMARY KEY,
+    argv TEXT NOT NULL,
+    start TEXT NOT NULL,
+    resume TEXT NOT NULL,
+    install TEXT NOT NULL,
+    hooks TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     workspace TEXT NOT NULL REFERENCES workspaces(id),
@@ -26,9 +40,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     state TEXT NOT NULL,
     checkout TEXT NOT NULL,
     harness TEXT NOT NULL,
+    session TEXT NOT NULL,
+    session_started INTEGER NOT NULL,
     directory TEXT NOT NULL,
     branch TEXT,
     ended_at INTEGER,
+    archived_at INTEGER,
     rev INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS panels (
@@ -40,31 +57,14 @@ CREATE TABLE IF NOT EXISTS browsers (
     task TEXT NOT NULL REFERENCES tasks(id),
     panel TEXT NOT NULL,
     url TEXT NOT NULL,
-    title TEXT NOT NULL DEFAULT '',
-    load INTEGER NOT NULL DEFAULT 1,
-    place INTEGER NOT NULL DEFAULT 0,
+    title TEXT NOT NULL,
+    load INTEGER NOT NULL,
+    place INTEGER NOT NULL,
     PRIMARY KEY (task, panel)
 );
 CREATE TABLE IF NOT EXISTS device (id INTEGER PRIMARY KEY CHECK (id = 0), pkcs8 BLOB NOT NULL);
-CREATE TABLE IF NOT EXISTS clients (name TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE);
+CREATE TABLE IF NOT EXISTS clients (name TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, seen_at INTEGER);
 ";
-
-/// Columns added to a table after it was first created, which a store gains on its first open by a build that has
-/// them.
-const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
-    ("tasks", "archived_at", "INTEGER"),
-    ("tasks", "session", "TEXT"),
-    ("clients", "seen_at", "INTEGER"),
-    ("harnesses", "start", "TEXT NOT NULL DEFAULT '[]'"),
-    ("harnesses", "resume", "TEXT NOT NULL DEFAULT '[]'"),
-    ("workspaces", "color", "TEXT NOT NULL DEFAULT 'auto'"),
-    ("browsers", "title", "TEXT NOT NULL DEFAULT ''"),
-    ("browsers", "load", "INTEGER NOT NULL DEFAULT 1"),
-    ("browsers", "place", "INTEGER NOT NULL DEFAULT 0"),
-];
-
-/// Columns a store from an earlier build holds and this build drops on its first open.
-const DROPPED_COLUMNS: &[(&str, &str)] = &[("tasks", "focused_at")];
 
 /// A task's terminal panel: its agent's, named `agent`, or a shell's.
 #[derive(Debug, Clone, PartialEq)]
@@ -83,9 +83,8 @@ pub struct TaskRow {
     pub state: TaskState,
     pub checkout: Checkout,
     pub harness: String,
-    pub session: Option<SessionId>,
+    pub session: Session,
     pub directory: String,
-    pub branch: Option<String>,
     pub ended_at: Option<i64>,
     pub archived_at: Option<i64>,
     pub rev: u64,
@@ -140,118 +139,46 @@ fn task_row(row: &Row) -> rusqlite::Result<TaskRow> {
         parent: row.get::<_, Option<String>>("parent")?.map(TaskId),
         title: row.get("title")?,
         state: wire_column(row, "state")?,
-        checkout: wire_column(row, "checkout")?,
+        checkout: match wire_column(row, "checkout")? {
+            CheckoutKind::Root => Checkout::Root,
+            CheckoutKind::Worktree => Checkout::Worktree { branch: row.get("branch")? },
+        },
         harness: row.get("harness")?,
-        session: row.get::<_, Option<String>>("session")?.map(SessionId),
+        session: Session { id: SessionId(row.get("session")?), started: row.get("session_started")? },
         directory: row.get("directory")?,
-        branch: row.get("branch")?,
         ended_at: row.get("ended_at")?,
         archived_at: row.get("archived_at")?,
         rev: row.get::<_, i64>("rev")?.cast_unsigned(),
     })
 }
 
-/// The column's declared type, when the table has it.
-fn column_type(db: &Connection, table: &str, column: &str) -> rusqlite::Result<Option<String>> {
-    db.query_row("SELECT type FROM pragma_table_info(?1) WHERE name = ?2", [table, column], |row| row.get(0)).optional()
-}
+const INSERT_HARNESS: &str =
+    "INSERT INTO harnesses (id, argv, start, resume, install, hooks) VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
 
-fn has_column(db: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
-    column_type(db, table, column).map(|kind| kind.is_some())
-}
-
-fn migrate_columns(db: &Connection) -> rusqlite::Result<()> {
-    for (table, column, kind) in ADDED_COLUMNS {
-        if !has_column(db, table, column)? {
-            db.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"), [])?;
-        }
-    }
-    for (table, column) in DROPPED_COLUMNS {
-        if has_column(db, table, column)? {
-            db.execute(&format!("ALTER TABLE {table} DROP COLUMN {column}"), [])?;
-        }
-    }
-    Ok(())
-}
-
-/// A store from a build whose harnesses declared hooks as a flag declares none for each of them.
-fn name_hooks(db: &Connection) -> rusqlite::Result<()> {
-    if column_type(db, "harnesses", "hooks")?.as_deref() == Some("INTEGER") {
-        let tx = db.unchecked_transaction()?;
-        tx.execute("ALTER TABLE harnesses DROP COLUMN hooks", [])?;
-        tx.execute("ALTER TABLE harnesses ADD COLUMN hooks TEXT NOT NULL DEFAULT 'none'", [])?;
-        tx.commit()?;
-    }
-    Ok(())
-}
-
-const CLAUDE_CODE: &str = "claude-code";
-
-impl Harness {
-    fn claude_code() -> Self {
-        let session = crate::SESSION.to_string();
-        Self {
-            argv: vec!["claude".into()],
-            start: vec!["--session-id".into(), session.clone()],
-            resume: vec!["--resume".into(), session],
-            install: "npm install -g @anthropic-ai/claude-code".into(),
-            hooks: Hooks::ClaudeCode,
-        }
-    }
+fn harness_values(id: &str, harness: &Harness) -> [String; 6] {
+    let json = |args: &Vec<String>| serde_json::to_string(args).expect("a list of strings is JSON");
+    [
+        id.to_string(),
+        json(&harness.argv),
+        json(&harness.start),
+        json(&harness.resume),
+        harness.install.clone(),
+        to_wire(&harness.hooks),
+    ]
 }
 
 fn put_harness(db: &Connection, id: &str, harness: &Harness) -> rusqlite::Result<()> {
-    let json = |args: &Vec<String>| serde_json::to_string(args).expect("a list of strings is JSON");
-    db.execute(
-        "INSERT INTO harnesses (id, argv, start, resume, install, hooks) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT(id) DO UPDATE SET argv = excluded.argv, start = excluded.start, resume = excluded.resume,
-         install = excluded.install, hooks = excluded.hooks",
-        params![
-            id,
-            json(&harness.argv),
-            json(&harness.start),
-            json(&harness.resume),
-            harness.install,
-            to_wire(&harness.hooks)
-        ],
-    )
-    .map(drop)
+    let upsert = format!(
+        "{INSERT_HARNESS} ON CONFLICT(id) DO UPDATE SET argv = excluded.argv, start = excluded.start,
+         resume = excluded.resume, install = excluded.install, hooks = excluded.hooks"
+    );
+    db.execute(&upsert, harness_values(id, harness)).map(drop)
 }
 
-/// Once per store, marked in `meta`, so a later `harness.set` stands: each harness whose argv runs the `claude`
-/// program reports through Claude Code hooks, and a store without a `claude-code` harness gains one.
-fn install_claude_code(db: &Connection) -> rusqlite::Result<()> {
-    let tx = db.unchecked_transaction()?;
-    if tx.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('claude_code_installed', 1)", [])? == 0 {
-        return Ok(());
-    }
-    tx.execute(
-        "UPDATE harnesses SET hooks = ?1
-         WHERE json_extract(argv, '$[0]') = 'claude' OR json_extract(argv, '$[0]') LIKE '%/claude'",
-        [to_wire(&Hooks::ClaudeCode)],
-    )?;
-    let present: bool =
-        tx.query_row("SELECT EXISTS(SELECT 1 FROM harnesses WHERE id = ?1)", [CLAUDE_CODE], |row| row.get(0))?;
-    if !present {
-        put_harness(&tx, CLAUDE_CODE, &Harness::claude_code())?;
-    }
-    tx.commit()
-}
-
-/// A store from a build that kept one agent terminal per task gains each as the task's agent panel.
-fn adopt_agent_terminals(db: &Connection) -> rusqlite::Result<()> {
-    let present: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'terminals')",
-        [],
-        |row| row.get(0),
-    )?;
-    if present {
-        let tx = db.unchecked_transaction()?;
-        tx.execute("INSERT INTO panels (id, task, name) SELECT id, task, ?1 FROM terminals", [AGENT_PANEL])?;
-        tx.execute("DROP TABLE terminals", [])?;
-        tx.commit()?;
-    }
-    Ok(())
+/// A store without a `claude-code` harness gains one; a stored one stands as `harness.set` left it.
+fn seed_claude_code(db: &Connection) -> rusqlite::Result<()> {
+    let seed = format!("{INSERT_HARNESS} ON CONFLICT(id) DO NOTHING");
+    db.execute(&seed, harness_values(harness::CLAUDE_CODE, &harness::claude_code())).map(drop)
 }
 
 fn workspace_row(row: &Row) -> rusqlite::Result<Workspace> {
@@ -269,10 +196,13 @@ impl Store {
         owner_only(path).map_err(|error| Error::internal(format!("{}: {error}", path.display())))?;
         let db = Connection::open(path).map_err(Error::internal)?;
         db.execute_batch(SCHEMA).map_err(Error::internal)?;
-        migrate_columns(&db).map_err(Error::internal)?;
-        name_hooks(&db).map_err(Error::internal)?;
-        install_claude_code(&db).map_err(Error::internal)?;
-        adopt_agent_terminals(&db).map_err(Error::internal)?;
+        db.prepare("SELECT session_started FROM tasks LIMIT 0").map(drop).map_err(|_| {
+            Error::internal(format!(
+                "{}: its tasks record no session_started, so this server cannot open it",
+                path.display()
+            ))
+        })?;
+        seed_claude_code(&db).map_err(Error::internal)?;
         Ok(Self { db })
     }
 
@@ -508,19 +438,24 @@ impl Store {
         let tx = self.db.transaction().map_err(Error::internal)?;
         row.rev = bump_rev(&tx)?;
         tx.execute(
-            "INSERT INTO tasks (id, workspace, parent, title, state, checkout, harness, session, directory, branch, ended_at, archived_at, rev)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO tasks (id, workspace, parent, title, state, checkout, harness, session, session_started,
+             directory, branch, ended_at, archived_at, rev)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 row.id.0,
                 row.workspace.0,
                 row.parent.as_ref().map(|parent| &parent.0),
                 row.title,
                 to_wire(&row.state),
-                to_wire(&row.checkout),
+                to_wire(&row.checkout.kind()),
                 row.harness,
-                row.session.as_ref().map(|session| &session.0),
+                row.session.id.0,
+                row.session.started,
                 row.directory,
-                row.branch,
+                match &row.checkout {
+                    Checkout::Root => None,
+                    Checkout::Worktree { branch } => Some(branch),
+                },
                 row.ended_at,
                 row.archived_at,
                 row.rev.cast_signed()
@@ -558,13 +493,15 @@ impl Store {
         let tx = self.db.transaction().map_err(Error::internal)?;
         row.rev = bump_rev(&tx)?;
         tx.execute(
-            "UPDATE tasks SET title = ?2, state = ?3, session = ?4, ended_at = ?5, archived_at = ?6, rev = ?7, parent = ?8
+            "UPDATE tasks SET title = ?2, state = ?3, session = ?4, session_started = ?5, ended_at = ?6, archived_at = ?7,
+             rev = ?8, parent = ?9
              WHERE id = ?1",
             params![
                 row.id.0,
                 row.title,
                 to_wire(&row.state),
-                row.session.as_ref().map(|session| &session.0),
+                row.session.id.0,
+                row.session.started,
                 row.ended_at,
                 row.archived_at,
                 row.rev.cast_signed(),
@@ -698,39 +635,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_store_from_an_earlier_build_gains_and_drops_the_columns_changed_since() {
+    fn a_store_whose_tasks_record_no_session_started_is_refused() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("store.db");
-        let earlier = Connection::open(&path).expect("open");
-        earlier
-            .execute_batch(
-                "CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, parent TEXT, title TEXT NOT NULL,
-                 state TEXT NOT NULL, checkout TEXT NOT NULL, harness TEXT NOT NULL, directory TEXT NOT NULL,
-                 branch TEXT, focused_at INTEGER, ended_at INTEGER, rev INTEGER NOT NULL);
-                 INSERT INTO tasks VALUES ('tsk_1', 'wsp_1', NULL, 't', 'pinned', 'root', 'h', '/w', NULL, NULL, NULL, 1);
-                 CREATE TABLE terminals (task TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE);
-                 INSERT INTO terminals VALUES ('tsk_1', 'pty_1');
-                 CREATE TABLE clients (name TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE);
-                 CREATE TABLE harnesses (id TEXT PRIMARY KEY, argv TEXT NOT NULL, install TEXT NOT NULL,
-                 hooks INTEGER NOT NULL);
-                 INSERT INTO harnesses VALUES ('h', '[\"h\"]', 'true', 1);
-                 INSERT INTO harnesses VALUES ('claude-code', '[\"/opt/bin/claude\"]', 'true', 0);",
-            )
-            .expect("an earlier schema");
-        drop(earlier);
-        let mut store = Store::open(&path).expect("open the earlier store");
-        let task = store.task(&TaskId("tsk_1".into())).expect("its task");
-        assert_eq!((task.archived_at, task.session), (None, None));
-        assert!(!has_column(&store.db, "tasks", "focused_at").expect("table info"), "the dropped column goes");
-        assert_eq!(store.clients().expect("clients"), []);
-        assert_eq!(store.harness("h").expect("its harness").map(|harness| harness.hooks), Some(Hooks::None));
-        let claude = store.harness("claude-code").expect("its harness").expect("kept");
-        assert_eq!(
-            (claude.argv, claude.install, claude.hooks),
-            (vec!["/opt/bin/claude".into()], "true".into(), Hooks::ClaudeCode)
-        );
-        let agent = PanelRow { id: PtyId("pty_1".into()), task: TaskId("tsk_1".into()), name: AGENT_PANEL.into() };
-        assert_eq!(store.reattach(&HashSet::from([agent.id.clone()])).expect("reattach"), [agent]);
+        Connection::open(&path)
+            .and_then(|db| db.execute_batch("CREATE TABLE tasks (id TEXT PRIMARY KEY, session TEXT)"))
+            .expect("an unconverted store");
+        let Err(Error::Internal { message }) = Store::open(&path) else { panic!("the store opened") };
+        assert!(message.ends_with("its tasks record no session_started, so this server cannot open it"), "{message}");
     }
 
     #[test]
@@ -742,8 +654,8 @@ mod tests {
         store
             .db
             .execute(
-                "INSERT INTO tasks (id, workspace, title, state, checkout, harness, directory, rev)
-                 VALUES ('tsk_1', ?1, 't', 'pinned', 'root', 'h', '/w', 1)",
+                "INSERT INTO tasks (id, workspace, title, state, checkout, harness, session, session_started, directory, rev)
+                 VALUES ('tsk_1', ?1, 't', 'pinned', 'root', 'h', 's', 0, '/w', 1)",
                 [workspace.id.0],
             )
             .expect("a task");

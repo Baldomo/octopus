@@ -6,7 +6,7 @@ const MODULE = "virtual:design.css";
 const RESOLVED = `\0${MODULE}.css`;
 
 /** A design file at the repo root, and the ids of the style blocks taken from it, in order. */
-export type Blocks = [file: string, ids: string[]];
+type Blocks = [file: string, ids: string[]];
 
 /** Serves the named style blocks of the repo's design files as one stylesheet, later blocks winning. */
 export function design(...sources: Blocks[]): Plugin {

@@ -1,45 +1,11 @@
-/// Every command of the `octopus` plugin, each granted by its `default` permission.
-const COMMANDS: &[&str] = &[
-    "boot",
-    "ready",
-    "ui_act",
-    "quit",
-    "server_pair",
-    "server_offer",
-    "server_clients",
-    "server_revoke",
-    "servers_refresh",
-    "server_rename",
-    "server_forget",
-    "workspace_add",
-    "workspace_remove",
-    "section_rename",
-    "section_color",
-    "auto_color",
-    "task_focus",
-    "task_move",
-    "task_set_parent",
-    "task_rename",
-    "task_archive",
-    "task_create",
-    "term_attach",
-    "term_input",
-    "term_detach",
-    "term_open",
-    "term_close",
-    "term_claim",
-    "term_take_lock",
-    "term_resize",
-    "file_list",
-    "file_read",
-    "file_write",
-    "file_create",
-    "file_move",
-    "file_copy",
-    "file_delete",
-    "file_upload",
-    "file_search",
-];
+macro_rules! plugin_commands {
+    ($($command:ident),* $(,)?) => {
+        /// Every command of the `octopus` plugin, each granted by its `default` permission.
+        const COMMANDS: &[&str] = &[$(stringify!($command)),*];
+    };
+}
+
+include!("plugin_commands.rs");
 
 fn main() {
     let allowed: String =

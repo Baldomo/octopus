@@ -24,7 +24,7 @@ use octopus_shell::client_menu::Appearance;
 use octopus_shell::ui::UiStore;
 use tauri::{Manager, WebviewWindow};
 
-pub fn set_up(app: &tauri::App) -> anyhow::Result<()> {
+pub(crate) fn set_up(app: &tauri::App) -> anyhow::Result<()> {
     let window = app.get_webview_window("main").ok_or_else(|| anyhow::anyhow!("no main window"))?;
     bare_keyboard()?;
     on_view(&window, |view| {
@@ -62,8 +62,9 @@ fn follow_keyboard(view: Retained<UIView>) {
             Ok(since) => since.as_secs_f64() * 1000.0,
             Err(error) => return eprintln!("octopus app: read the clock the keyboard's move is timed by: {error}"),
         };
-        let moved =
-            format!("dispatchEvent(new CustomEvent('octopus-keyboard', {{ detail: {{ height: {height}, at: {at} }} }}))");
+        let moved = format!(
+            "dispatchEvent(new CustomEvent('octopus-keyboard', {{ detail: {{ height: {height}, at: {at} }} }}))"
+        );
         let unanswered: Option<&DynBlock<dyn Fn(*mut AnyObject, *mut AnyObject)>> = None;
         // SAFETY: the view is a WKWebView, which runs the script in its page; a nil handler leaves the result unread.
         let () = unsafe {
@@ -106,7 +107,12 @@ fn bare_keyboard() -> anyhow::Result<()> {
     // an IMP with the signature its type encoding names.
     unsafe {
         let imp = std::mem::transmute::<Getter, Imp>(no_view);
-        ffi::class_replaceMethod(std::ptr::from_ref(content).cast_mut(), sel!(inputAccessoryView), imp, c"@@:".as_ptr());
+        ffi::class_replaceMethod(
+            std::ptr::from_ref(content).cast_mut(),
+            sel!(inputAccessoryView),
+            imp,
+            c"@@:".as_ptr(),
+        );
     }
     Ok(())
 }

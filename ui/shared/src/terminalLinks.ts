@@ -1,12 +1,10 @@
 import type { IBufferRange, ILink, ILinkDecorations, Terminal } from "@xterm/xterm";
 import { mac } from "./commands";
+import { urlsIn } from "./terminalUrls";
 
 /** A ⌘-clicked link opens in the task's browser panel, and a ⌘⇧-clicked one in the system's browser. */
 export type LinkTarget = "task" | "system";
 export type OpenUrl = (url: string, target: LinkTarget) => void;
-
-/** From `http://` or `https://` to whitespace, quotes or angle brackets; parentheses count only in balanced pairs. */
-const URL_PATTERN = /https?:\/\/(?:[^\s"'<>`()]|\([^\s"'<>`()]*\))*(?:[^\s"'<>`().,:;!?*~\]}]|\([^\s"'<>`()]*\))/g;
 
 /** ⌘ on macOS and Ctrl elsewhere turns a URL into a link. */
 const linkKey = (event: KeyboardEvent | MouseEvent) => (mac ? event.metaKey : event.ctrlKey);
@@ -61,12 +59,12 @@ function wrappedRow(xterm: Terminal, y: number) {
 
 function urlsOn(xterm: Terminal, y: number) {
   const { text, cells } = wrappedRow(xterm, y);
-  return [...text.matchAll(URL_PATTERN)].flatMap((match) => {
-    const start = cells[match.index]!;
-    const end = cells[match.index + match[0].length - 1]!;
+  return urlsIn(text).flatMap(({ url, at }) => {
+    const start = cells[at]!;
+    const end = cells[at + url.length - 1]!;
     if (start.y > y || end.y < y) return [];
     const range: IBufferRange = { start: { x: start.x, y: start.y }, end: { x: end.x + end.width - 1, y: end.y } };
-    return [{ url: match[0], range }];
+    return [{ url, range }];
   });
 }
 

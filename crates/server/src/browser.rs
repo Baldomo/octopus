@@ -5,8 +5,12 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::{Component, Path};
 
 use octopus_proto::Error;
+use octopus_proto::ops::{BrowserClose, BrowserMove, BrowserOpen, BrowserReport, Revised, Shown};
 use octopus_proto::types::{BrowserId, BrowserPanel, BrowserTarget};
+use octopus_proto::types::{TaskId, web_page};
 use tokio::net::TcpStream;
+
+use crate::{Server, State, lock};
 
 /// The panel `target` names among the task's `panels` once it shows `url` once more, or a fresh panel showing it, or
 /// holding it unshown in the background.
@@ -63,7 +67,7 @@ fn missing(path: &Path, error: &std::io::Error) -> Error {
 }
 
 /// The bytes of the file `path` names under a file page's `root`, which neither `..` nor a symlink leads out of.
-pub async fn read_page(root: &str, path: &str) -> Result<Vec<u8>, Error> {
+pub(crate) async fn read_page(root: &str, path: &str) -> Result<Vec<u8>, Error> {
     let (root, relative) = (Path::new(root), Path::new(path));
     if !root.is_absolute() || !relative.components().all(|part| matches!(part, Component::Normal(_))) {
         return Err(Error::invalid(format!("{path} is no path under the absolute directory {}", root.display())));
@@ -75,4 +79,66 @@ pub async fn read_page(root: &str, path: &str) -> Result<Vec<u8>, Error> {
         return Err(Error::invalid(format!("{} leads out of {}", wanted.display(), root.display())));
     }
     tokio::fs::read(&file).await.map_err(|error| missing(&wanted, &error))
+}
+
+impl State {
+    pub(crate) fn browsers_of(&self, task: &TaskId) -> &[BrowserPanel] {
+        self.browsers.get(task).map(Vec::as_slice).unwrap_or_default()
+    }
+}
+
+impl Server {
+    pub(crate) fn browser_open(&self, op: BrowserOpen) -> Result<Shown, Error> {
+        web_page(&op.url).map_err(Error::invalid)?;
+        let mut state = lock(&self.state);
+        state.store.task(&op.task)?;
+        let opened = opened(state.browsers_of(&op.task), op.panel, op.url)?;
+        let panel = opened.panel.clone();
+        let rev = self.save_browser(&mut state, &op.task, opened)?;
+        Ok(Shown { panel, rev })
+    }
+
+    pub(crate) fn browser_report(&self, op: BrowserReport) -> Result<Revised, Error> {
+        web_page(&op.url).map_err(Error::invalid)?;
+        let mut state = lock(&self.state);
+        let known = find(state.browsers_of(&op.task), &op.panel)?;
+        if known.url == op.url && known.title == op.title {
+            return Ok(Revised { rev: state.store.task(&op.task)?.rev });
+        }
+        let reported = BrowserPanel { panel: op.panel, url: op.url, title: op.title, load: known.load };
+        Ok(Revised { rev: self.save_browser(&mut state, &op.task, reported)? })
+    }
+
+    pub(crate) fn browser_close(&self, op: BrowserClose) -> Result<Revised, Error> {
+        let mut state = lock(&self.state);
+        find(state.browsers_of(&op.task), &op.panel)?;
+        let row = state.store.close_browser(&op.task, &op.panel)?;
+        state.browsers.entry(op.task).or_default().retain(|known| known.panel != op.panel);
+        self.publish_task(&state, &row);
+        Ok(Revised { rev: row.rev })
+    }
+
+    pub(crate) fn browser_move(&self, op: BrowserMove) -> Result<Revised, Error> {
+        let mut state = lock(&self.state);
+        let panels = state.browsers_of(&op.task);
+        let order = moved(panels, &op.panel, op.to)?;
+        if order == panels {
+            return Ok(Revised { rev: state.store.task(&op.task)?.rev });
+        }
+        let row = state.store.order_browsers(&op.task, &order)?;
+        state.browsers.insert(op.task, order);
+        self.publish_task(&state, &row);
+        Ok(Revised { rev: row.rev })
+    }
+
+    fn save_browser(&self, state: &mut State, task: &TaskId, saved: BrowserPanel) -> Result<u64, Error> {
+        let row = state.store.save_browser(task, &saved)?;
+        let panels = state.browsers.entry(task.clone()).or_default();
+        match panels.iter_mut().find(|known| known.panel == saved.panel) {
+            Some(known) => *known = saved,
+            None => panels.push(saved),
+        }
+        self.publish_task(state, &row);
+        Ok(row.rev)
+    }
 }

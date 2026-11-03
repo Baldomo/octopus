@@ -10,12 +10,11 @@ use anyhow::Context;
 use nix::sys::socket::{getsockopt, sockopt};
 use nix::unistd::Pid;
 use octopus_proto::local;
-use octopus_proto::types::{MIC_FORMAT, PtyId};
+use octopus_proto::types::{MIC_DEVICE, MIC_FORMAT, PtyId};
 
 use super::Shared;
 use crate::{lock, report};
 
-const DEVICE_UID: &str = "octopus-microphone";
 /// The user's own default input while the Octopus Microphone stands in for it.
 const RESTORE_INPUT: &str = "restore-input";
 const LEADERS: &str = "leaders.json";
@@ -47,8 +46,8 @@ struct Inner {
 
 impl Platform {
     pub fn start(dir: &Path, terminal_host: &Path, shared: Arc<Shared>) -> anyhow::Result<Self> {
-        let device = ca::Device::find(DEVICE_UID)?
-            .with_context(|| format!("no audio device {DEVICE_UID}; reinstall the server to install it"))?;
+        let device = ca::Device::find(MIC_DEVICE.uid)?
+            .with_context(|| format!("no audio device {}; reinstall the server to install it", MIC_DEVICE.uid))?;
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
         let reached = local::connect_blocking(terminal_host)
             .with_context(|| format!("reach the terminal host {}", terminal_host.display()))?;
@@ -94,14 +93,15 @@ impl Platform {
     /// A saved leader counts while it is still the host's child.
     pub fn adopt(&self, terminals: &[PtyId]) {
         lock(&self.inner.terminals).extend(terminals.iter().cloned());
-        let saved: HashMap<PtyId, Pid> = std::fs::read(self.inner.dir.join(LEADERS))
-            .ok()
-            .and_then(|json| serde_json::from_slice::<HashMap<PtyId, i32>>(&json).ok())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(id, pid)| (id, Pid::from_raw(pid)))
-            .collect();
-        let children: HashSet<Pid> = ca::children(self.inner.host).unwrap_or_default().into_iter().collect();
+        let saved = self.inner.saved_leaders().unwrap_or_else(|error| {
+            report!("{error:#}");
+            HashMap::new()
+        });
+        let children = ca::children(self.inner.host).unwrap_or_else(|error| {
+            report!("{error:#}");
+            Vec::new()
+        });
+        let children: HashSet<Pid> = children.into_iter().collect();
         let mut leaders = lock(&self.inner.leaders);
         *leaders = saved.into_iter().filter(|(id, pid)| terminals.contains(id) && children.contains(pid)).collect();
         self.inner.save_leaders(&leaders);
@@ -184,6 +184,19 @@ impl Inner {
         lock(&self.leaders).iter().find(|(_, known)| **known == leader).map(|(id, _)| id.clone())
     }
 
+    /// No file means no terminal has started a program yet.
+    fn saved_leaders(&self) -> anyhow::Result<HashMap<PtyId, Pid>> {
+        let path = self.dir.join(LEADERS);
+        let json = match std::fs::read(&path) {
+            Ok(json) => json,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+            Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+        };
+        let raw: HashMap<PtyId, i32> =
+            serde_json::from_slice(&json).with_context(|| format!("parse {}", path.display()))?;
+        Ok(raw.into_iter().map(|(id, pid)| (id, Pid::from_raw(pid))).collect())
+    }
+
     fn save_leaders(&self, leaders: &HashMap<PtyId, Pid>) {
         let raw: HashMap<&PtyId, i32> = leaders.iter().map(|(id, pid)| (id, pid.as_raw())).collect();
         let path = self.dir.join(LEADERS);
@@ -236,7 +249,7 @@ fn restore_input(device: ca::Device, saved: &Path) -> anyhow::Result<()> {
 
 /// Gives back the input a stopped server's Octopus Microphone stood in for.
 pub fn give_back_input(dir: &Path) -> anyhow::Result<()> {
-    match ca::Device::find(DEVICE_UID)? {
+    match ca::Device::find(MIC_DEVICE.uid)? {
         Some(device) => restore_input(device, &dir.join(RESTORE_INPUT)),
         None => Ok(()),
     }

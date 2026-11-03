@@ -25,6 +25,7 @@ pub fn name(app: &AppHandle) -> anyhow::Result<String> {
 
 /// How far the status bar, the display's cutout and the navigation bar reach over the page, in CSS pixels.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Insets {
     pub top: f64,
     pub left: f64,
@@ -179,6 +180,7 @@ mod os {
     }
 
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct Kept {
         pkcs8: Option<String>,
     }
@@ -189,11 +191,13 @@ mod os {
     }
 
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct Named {
         name: String,
     }
 
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct Answered {
         granted: bool,
     }
@@ -212,7 +216,11 @@ mod os {
         &app.state::<Keeper>().inner().0
     }
 
-    pub fn run<T: serde::de::DeserializeOwned>(app: &AppHandle, command: &str, args: impl Serialize) -> anyhow::Result<T> {
+    pub fn run<T: serde::de::DeserializeOwned>(
+        app: &AppHandle,
+        command: &str,
+        args: impl Serialize,
+    ) -> anyhow::Result<T> {
         Ok(keeper(app).run_mobile_plugin(command, args)?)
     }
 

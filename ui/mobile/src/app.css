@@ -189,16 +189,6 @@ body {
 }
 
 /* parts the design's screens draw */
-.sp1 {
-  height: 4px;
-}
-.sp4 {
-  height: 20px;
-}
-.sp5 {
-  height: 32px;
-}
-
 .h1 {
   font: var(--t-title);
   letter-spacing: -0.015em;

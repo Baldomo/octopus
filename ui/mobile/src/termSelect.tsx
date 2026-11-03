@@ -1,6 +1,7 @@
 import type { Terminal } from "@xterm/xterm";
 import { createSignal, onCleanup, Show } from "solid-js";
 import { report, scale, ui } from "@octopus/shared/state.ts";
+import { urlsIn } from "@octopus/shared/terminalUrls.ts";
 import { feel } from "./feel";
 import { phone } from "./phone";
 import { LONG_PRESS_MS, type Point } from "./press";
@@ -17,14 +18,10 @@ type Char = { text: string; cell: Cell; width: number };
 
 /** xterm's double-click word separators, so a word reads the same on the phone and the desktop. */
 const SEPARATORS = " ()[]{}',\"`";
-const LINK = /https?:\/\/[^\s<>"'`]+/g;
-const SENTENCE_END = /[.,;:!?]$/;
-const OPENER: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
 const MENU_GAP_PT = 8;
 
 const before = (a: Cell, b: Cell) => a.row < b.row || (a.row === b.row && a.col < b.col);
 const ordered = (a: Cell, b: Cell): Span => (before(b, a) ? { from: b, to: a } : { from: a, to: b });
-const count = (text: string, char: string) => text.split(char).length - 1;
 
 /**
  * Whether `row` continues the line above it: xterm marks it wrapped, or the row above runs text to the right edge, as a
@@ -75,17 +72,6 @@ function wordAt(xterm: Terminal, cell: Cell): Span {
   return start && end ? { from: start.cell, to: lastCell(end) } : { from: cell, to: cell };
 }
 
-/** A URL less the punctuation closing the sentence around it, keeping a bracket the URL opened. */
-function trimmed(url: string): string {
-  for (;;) {
-    const end = url.at(-1) ?? "";
-    const opener = OPENER[end];
-    const closes = opener !== undefined && count(url, end) > count(url, opener);
-    if (!SENTENCE_END.test(end) && !closes) return url;
-    url = url.slice(0, -1);
-  }
-}
-
 function linkAt(xterm: Terminal, cell: Cell): string | null {
   const chars = wrappedLine(xterm, cell.row);
   const starts: number[] = [];
@@ -96,11 +82,7 @@ function linkAt(xterm: Terminal, cell: Cell): string | null {
   }
   const offset = starts[charAt(chars, cell)];
   if (offset === undefined) return null;
-  for (const match of text.matchAll(LINK)) {
-    const url = trimmed(match[0]);
-    if (offset >= match.index && offset < match.index + url.length) return url;
-  }
-  return null;
+  return urlsIn(text).find(({ url, at }) => offset >= at && offset < at + url.length)?.url ?? null;
 }
 
 /**

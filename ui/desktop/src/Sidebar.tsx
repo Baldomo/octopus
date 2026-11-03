@@ -16,25 +16,17 @@ import {
   lifting,
   liftSection,
   liftsIn,
-  type Within,
-} from "@octopus/shared/lift.ts";
+} from "@octopus/shared/liftTasks.ts";
+import { type Within } from "@octopus/shared/lift.ts";
 import { liftOnDrag } from "./lift";
 import { GroupHead } from "./Group";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { commands, hint } from "@octopus/shared/commands.ts";
 import { isMenuOpen, MenuHost, menuTrigger, onRightClick } from "@octopus/shared/Menu.tsx";
-import {
-  AddWorkspace,
-  holdsKeyboard,
-  isRenaming,
-  newTaskIn,
-  RenameInput,
-  SectionMenu,
-  ServerMenu,
-  startRename,
-  TaskMenu,
-  Toast,
-} from "@octopus/shared/SidebarControls.tsx";
+import { AddWorkspace, holdsKeyboard, isRenaming, RenameInput, startRename } from "@octopus/shared/SidebarControls.tsx";
+import { ServerMenu } from "@octopus/shared/ServerMenu.tsx";
+import { newTaskIn, SectionMenu, TaskMenu } from "@octopus/shared/TaskMenus.tsx";
+import { Toast } from "@octopus/shared/Toast.tsx";
 import {
   isOpen,
   openTask,

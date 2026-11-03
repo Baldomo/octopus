@@ -97,7 +97,7 @@ impl Arg for Option<TaskId> {
     }
 }
 
-/// The conversation a task's agent resumes, as its harness names it.
+/// A conversation of a task's agent, as its harness names it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(transparent)]
 pub struct SessionId(pub String);
@@ -108,9 +108,44 @@ impl Arg for SessionId {
     }
 }
 
-impl Arg for Option<SessionId> {
+/// The conversation a task's agent runs in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct Session {
+    pub id: SessionId,
+    /// Its next start resumes it: the agent created it, or `task.create` or `task.set_session` named it.
+    pub started: bool,
+}
+
+/// The session `task.create` gives a task: `fresh`, or an existing session's id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionStart {
+    Fresh,
+    Resume(SessionId),
+}
+
+/// How `task.create` asks for a fresh session.
+pub const FRESH_SESSION: &str = "fresh";
+
+impl Serialize for SessionStart {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Fresh => serializer.serialize_str(FRESH_SESSION),
+            Self::Resume(id) => id.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionStart {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Ok(if text == FRESH_SESSION { Self::Fresh } else { Self::Resume(SessionId(text)) })
+    }
+}
+
+impl Arg for SessionStart {
     fn shape() -> Shape {
-        Shape::Nullable { value: Box::new(Shape::Text), none: "a fresh session" }
+        Shape::Keyword { word: FRESH_SESSION, means: "a fresh session" }
     }
 }
 
@@ -165,18 +200,36 @@ impl Arg for TaskState {
     }
 }
 
+/// Where a task's files live: the workspace root, or a worktree of its own on its branch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Checkout {
+    Root,
+    Worktree { branch: String },
+}
+
+impl Checkout {
+    pub fn kind(&self) -> CheckoutKind {
+        match self {
+            Self::Root => CheckoutKind::Root,
+            Self::Worktree { .. } => CheckoutKind::Worktree,
+        }
+    }
+}
+
+/// The checkout `task.create` gives a task; the server names a worktree's branch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
-pub enum Checkout {
+pub enum CheckoutKind {
     Root,
     Worktree,
 }
 
-impl Checkout {
+impl CheckoutKind {
     pub const ALL: [Self; 2] = [Self::Root, Self::Worktree];
 }
 
-impl Arg for Checkout {
+impl Arg for CheckoutKind {
     fn shape() -> Shape {
         choice(&Self::ALL)
     }
@@ -289,6 +342,9 @@ pub struct Workspace {
     pub color: Color,
 }
 
+/// How long a holder whose connection dropped keeps its locks.
+pub const HOLDER_GRACE_MS: u64 = 10_000;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Panel {
@@ -397,9 +453,8 @@ pub struct Task {
     pub state: TaskState,
     pub checkout: Checkout,
     pub harness: String,
-    pub session: Option<SessionId>,
+    pub session: Session,
     pub directory: String,
-    pub branch: Option<String>,
     pub ended_at: Option<i64>,
     pub archived_at: Option<i64>,
     pub rev: u64,
@@ -449,6 +504,14 @@ impl PcmFormat {
 
 /// Signed 16-bit little-endian, 48 kHz, mono.
 pub const MIC_FORMAT: PcmFormat = PcmFormat { rate: 48_000, channels: 1, bytes_per_sample: 2 };
+
+/// The virtual microphone a macOS server's HAL driver adds: the name it shows and the UID it is found by.
+pub struct MicDevice {
+    pub name: &'static str,
+    pub uid: &'static str,
+}
+
+pub const MIC_DEVICE: MicDevice = MicDevice { name: "Octopus Microphone", uid: "octopus-microphone" };
 
 impl Stream {
     pub fn name(&self) -> String {

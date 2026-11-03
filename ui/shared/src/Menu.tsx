@@ -1,4 +1,4 @@
-import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
+import { batch, createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
 import { showClientMenu, ui } from "./state";
 
 type Point = { x: number; y: number };
@@ -14,6 +14,13 @@ export function closeMenu() {
   closePopover();
   if (ui.client_menu) showClientMenu(false);
 }
+
+/** In one batch, so a rename that replaces the menu keeps the keyboard in the sidebar throughout. */
+export const closing = (action: () => void) => () =>
+  batch(() => {
+    closeMenu();
+    action();
+  });
 
 /** Toggles menu `id` below `anchor`, or opens it at `point` for a right-click. */
 export function openMenu(id: string, anchor: HTMLElement, body: () => JSX.Element, point: Point | null = null) {

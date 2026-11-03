@@ -17,7 +17,7 @@ use octopus_proto::term::{HISTORY_LINES, Screen};
 /// Past this much, output that leaves the parser inside a sequence or a character is applied as it stands.
 const UNSETTLED_BYTES: usize = 1 << 16;
 
-pub struct Emulator {
+pub(crate) struct Emulator {
     term: Term<VoidListener>,
     parser: Processor<Unsynced>,
     /// Output since the parser last stood between sequences and characters. The screen ends with it, so a client
@@ -44,7 +44,7 @@ impl Emulator {
         Self { term, parser: Processor::new(), unsettled: Vec::new() }
     }
 
-    pub fn advance(&mut self, output: &[u8]) {
+    pub(crate) fn advance(&mut self, output: &[u8]) {
         self.unsettled.extend_from_slice(output);
         if settled(&self.unsettled) || self.unsettled.len() > UNSETTLED_BYTES {
             self.parser.advance(&mut self.term, &self.unsettled);

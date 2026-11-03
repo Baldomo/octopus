@@ -3,21 +3,15 @@ import type { Column } from "@octopus/shared/generated.ts";
 import { Glyph, statusWord } from "@octopus/shared/Glyph.tsx";
 import { dropHint } from "@octopus/shared/drop.ts";
 import { animateList } from "@octopus/shared/flip.ts";
-import {
-  dropTarget,
-  isAway,
-  isLanding,
-  isLifted,
-  isNesting,
-  lift,
-  liftsIn,
-  type Within,
-} from "@octopus/shared/lift.ts";
+import { dropTarget, isAway, isLanding, isLifted, isNesting, lift, liftsIn } from "@octopus/shared/liftTasks.ts";
+import { type Within } from "@octopus/shared/lift.ts";
 import { liftOnDrag } from "./lift";
 import { GroupHead } from "./Group";
 import { isMenuOpen, MenuHost, menuTrigger, onRightClick } from "@octopus/shared/Menu.tsx";
 import { backend } from "@octopus/shared/backend.ts";
-import { isLive, isRenaming, RenameInput, startRename, TaskMenu, Toast } from "@octopus/shared/SidebarControls.tsx";
+import { isRenaming, RenameInput, startRename } from "@octopus/shared/SidebarControls.tsx";
+import { isLive, TaskMenu } from "@octopus/shared/TaskMenus.tsx";
+import { Toast } from "@octopus/shared/Toast.tsx";
 import { model, openTask, serverLabel, ui } from "@octopus/shared/state.ts";
 
 const ON_BOARD: Within = { stage: ".tasks-view", list: ".pane", free: true };

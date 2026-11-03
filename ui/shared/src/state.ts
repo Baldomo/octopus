@@ -4,7 +4,6 @@ import { backend } from "./backend";
 import type {
   Appearance,
   Boot,
-  LockHolder,
   Model,
   Modal,
   Prefs,
@@ -33,10 +32,6 @@ export const workspaces = () => inSectionOrder(model.lists.workspaces, sectionOr
 export const [servers, setServers] = createSignal<ServerView[]>([]);
 export const [me, setMe] = createSignal("");
 export const [myKey, setMyKey] = createSignal("");
-
-/** Whether this client holds a lock on `server`: a server it is paired with knows it by its key, the local one by its name. */
-export const holds = (server: string, holder: LockHolder | null) =>
-  holder !== null && (holder.key === null ? isLocal(server) && holder.name === me() : holder.key === myKey());
 
 /** The state both layers render, owned by the app; every change goes through it and returns as a newer `Ui`. */
 const [ui, setUi] = createStore<Ui>({

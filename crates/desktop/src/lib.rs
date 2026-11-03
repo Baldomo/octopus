@@ -22,6 +22,32 @@ fn context<R: Runtime>() -> tauri::Context<R> {
     tauri::generate_context!()
 }
 
+macro_rules! app_commands {
+    ($($command:ident),* $(,)?) => {
+        /// The app's own command names, which the UI invokes.
+        const COMMANDS: &[&str] = &[$(stringify!($command)),*];
+
+        fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
+            tauri::generate_handler![$(commands::$command),*]
+        }
+    };
+}
+
+app_commands![
+    title_bar_double_click,
+    browser_open,
+    browser_close,
+    browser_move,
+    browser_load,
+    browser_show_page,
+    browser_go,
+    browser_find,
+    browser_forget,
+    app_menu,
+    file_outside,
+    haptic_alignment,
+];
+
 /// Opens the window and blocks until it closes.
 pub fn run(launch_problem: Option<String>) -> anyhow::Result<()> {
     let config = Config::user()?;
@@ -35,20 +61,7 @@ pub fn run(launch_problem: Option<String>) -> anyhow::Result<()> {
     tauri::Builder::default()
         .plugin(octopus_shell::plugin())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![
-            commands::title_bar_double_click,
-            commands::browser_open,
-            commands::browser_close,
-            commands::browser_move,
-            commands::browser_load,
-            commands::browser_show_page,
-            commands::browser_go,
-            commands::browser_find,
-            commands::browser_forget,
-            commands::app_menu,
-            commands::file_outside,
-            commands::haptic_alignment,
-        ])
+        .invoke_handler(invoke_handler())
         .setup(move |app| {
             octopus_shell::start(app.handle(), client, launch_problem);
             menu::relay(app.handle());

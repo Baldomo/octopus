@@ -11,7 +11,7 @@ use octopus_proto::device::DeviceKey;
 use octopus_proto::local::Listener;
 use octopus_proto::ops::{TaskCreate, TaskGet, WorkspaceAdd};
 use octopus_proto::remote::{self, RelayUrl};
-use octopus_proto::types::{Checkout, Color, Panel, Task, TaskId, TaskState, WorkspaceId};
+use octopus_proto::types::{CheckoutKind, Color, Panel, SessionStart, Task, TaskId, TaskState, WorkspaceId};
 use octopus_server::{Server, TerminalHost, serve};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -139,7 +139,7 @@ pub async fn workspace(connection: &Connection, root: &Path) -> WorkspaceId {
     connection.call(&add).await.expect("workspace.add").workspace
 }
 
-pub async fn create(connection: &Connection, workspace: &WorkspaceId, checkout: Checkout, harness: &str) -> TaskId {
+pub async fn create(connection: &Connection, workspace: &WorkspaceId, checkout: CheckoutKind, harness: &str) -> TaskId {
     let create = TaskCreate {
         workspace: workspace.clone(),
         title: "Strict serde".into(),
@@ -147,7 +147,7 @@ pub async fn create(connection: &Connection, workspace: &WorkspaceId, checkout: 
         state: TaskState::Pinned,
         checkout,
         harness: harness.into(),
-        session: None,
+        session: SessionStart::Fresh,
     };
     connection.call(&create).await.expect("task.create").task
 }

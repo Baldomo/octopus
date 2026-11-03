@@ -2,7 +2,7 @@ import { createSignal, For, onMount, Show } from "solid-js";
 import type { Appearance, ServerView } from "./generated";
 import { commands, hint } from "./commands";
 import { closePopover, dismissible, Head, Item, Sep } from "./Menu";
-import { ServerMenu } from "./SidebarControls";
+import { ServerMenu } from "./ServerMenu";
 import { VERSION } from "./generated";
 import { harnesses, me, report, servers, setAgentFlags, setAppearance, showClientMenu, ui, zoom } from "./state";
 

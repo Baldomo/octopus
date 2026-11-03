@@ -13,8 +13,8 @@ use serde_json::Value;
 use crate::manual::{FileVerb, PairingVerb, ServerVerb, TermVerb};
 use crate::{call, connect, print, server_error};
 
-pub const SERVER_FLAG: &str = "server";
-pub const SERVER_HELP: &str = "The paired server's name.";
+pub(crate) const SERVER_FLAG: &str = "server";
+pub(crate) const SERVER_HELP: &str = "The paired server's name.";
 
 fn kebab(name: &str) -> String {
     name.replace('_', "-")
@@ -29,9 +29,9 @@ fn sentence(doc: &str, addition: &str) -> String {
 }
 
 fn help(field: &Field) -> String {
-    match &field.shape {
-        Shape::Workspace => sentence(field.doc, ", by name"),
-        Shape::Nullable { none, .. } => sentence(field.doc, &format!("; none for {none}")),
+    match (&field.shape, field.shape.keyword()) {
+        (Shape::Workspace, _) => sentence(field.doc, ", by name"),
+        (_, Some((word, means))) => sentence(field.doc, &format!("; {word} for {means}")),
         _ => field.doc.to_string(),
     }
 }
@@ -39,7 +39,7 @@ fn help(field: &Field) -> String {
 /// The JSON a flag's text stands for; a workspace stays its name until the call resolves it.
 fn to_json(shape: &Shape, text: &str) -> Result<Value, String> {
     match shape {
-        Shape::Text | Shape::Workspace => Ok(Value::String(text.to_string())),
+        Shape::Text | Shape::Workspace | Shape::Keyword { .. } => Ok(Value::String(text.to_string())),
         Shape::Boolean => text.parse::<bool>().map(Value::Bool).map_err(|_| "pass true or false".to_string()),
         Shape::Integer => text.parse::<u64>().map(Value::from).map_err(|error| error.to_string()),
         Shape::Choice(values) if values.iter().any(|value| value == text) => Ok(Value::String(text.to_string())),
@@ -64,7 +64,7 @@ fn flag(field: &Field) -> Arg {
     }
 }
 
-pub fn server_flag() -> Arg {
+pub(crate) fn server_flag() -> Arg {
     Arg::new(SERVER_FLAG).long(SERVER_FLAG).value_name(SERVER_FLAG).required(true).help(SERVER_HELP)
 }
 
@@ -91,15 +91,16 @@ pub fn tree() -> Command {
     extend(&mut nouns, "term", TermVerb::augment_subcommands);
     extend(&mut nouns, "file", FileVerb::augment_subcommands);
     extend(&mut nouns, "pairing", PairingVerb::augment_subcommands);
+    #[cfg(feature = "desktop")]
+    nouns.insert(0, Command::new("app").about("Open the window onto every server in this client's list."));
     Command::new("octopus")
         .about("Drive octopus servers. Every flag is required, and a success prints JSON.")
         .subcommand_required(true)
-        .subcommand(Command::new("app").about("Open the window onto every server in this client's list."))
         .subcommands(nouns)
 }
 
-/// `error` lists each flag as `--parent <parent>`; a nullable flag says what its `none` means.
-pub fn missing_flags(error: &clap::Error, argv: &[String]) -> Option<String> {
+/// `error` lists each flag as `--parent <parent>`; a flag with a keyword says what the keyword means.
+pub(crate) fn missing_flags(error: &clap::Error, argv: &[String]) -> Option<String> {
     if error.kind() != ErrorKind::MissingRequiredArgument {
         return None;
     }
@@ -110,12 +111,13 @@ pub fn missing_flags(error: &clap::Error, argv: &[String]) -> Option<String> {
         ops::commands().into_iter().find(|command| Some(command.op) == op.as_deref()).map(|command| command.fields);
     let named = missing.iter().map(|missing| {
         let flag = missing.split_whitespace().next().unwrap_or(missing);
-        let nullable = fields.iter().flatten().find_map(|field| match &field.shape {
-            Shape::Nullable { none, .. } if format!("--{}", kebab(field.name)) == flag => Some(*none),
-            _ => None,
-        });
-        match nullable {
-            Some(none) => format!("{flag} (pass none for {none})"),
+        let keyword = fields
+            .iter()
+            .flatten()
+            .find(|field| format!("--{}", kebab(field.name)) == flag)
+            .and_then(|field| field.shape.keyword());
+        match keyword {
+            Some((word, means)) => format!("{flag} (pass {word} for {means})"),
             None => flag.to_string(),
         }
     });

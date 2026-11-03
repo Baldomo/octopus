@@ -10,7 +10,7 @@ use octopus_proto::ops::{
     TaskSetParent, TermClaim, TermClose, TermOpen, TermResize, TermTakeLock, WorkspaceAdd, WorkspaceRemove,
 };
 use octopus_proto::pairing::Invite;
-use octopus_proto::types::{Checkout, Color, PtyId, SessionId, Stream, Swatch, TaskId, TaskState, WorkspaceId};
+use octopus_proto::types::{CheckoutKind, Color, PtyId, SessionStart, Stream, Swatch, TaskId, TaskState, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeBody, InvokeResponseBody, Response};
 use tauri::{Runtime, State};
@@ -25,17 +25,17 @@ use crate::ui::{Ui, UiAct, UiStore};
 type Hubbed<'a> = State<'a, Arc<Hub>>;
 type Uis<'a> = State<'a, Arc<UiStore>>;
 
-pub struct Launched(pub Instant);
+pub(crate) struct Launched(pub Instant);
 
 /// An offer as the window shows it, beside its invite drawn as an SVG QR code.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
-pub struct ShownOffer {
+pub(crate) struct ShownOffer {
     pub offer: Offer,
     pub qr: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
-pub struct Boot {
+pub(crate) struct Boot {
     /// This client's name, which the server on its local socket knows it by.
     pub me: String,
     /// This client's device key, which every server it is paired with knows it by.
@@ -173,16 +173,17 @@ pub async fn task_set_parent(hub: Hubbed<'_>, at: TaskRef, parent: Option<TaskRe
 /// Every field of `task.create`, plus the server that creates it.
 #[derive(Debug, Clone, PartialEq, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
-pub struct NewTask {
+pub(crate) struct NewTask {
     pub server: String,
     pub workspace: WorkspaceId,
     pub title: String,
     pub parent: Option<TaskId>,
     pub state: TaskState,
-    pub checkout: Checkout,
+    pub checkout: CheckoutKind,
     pub harness: String,
-    /// An existing session for the agent to resume; none for a fresh one.
-    pub session: Option<SessionId>,
+    /// `FRESH_SESSION` for a fresh session, or an existing session's id for the agent to resume.
+    #[ts(type = "string")]
+    pub session: SessionStart,
 }
 
 /// Resolves to the created task's key.

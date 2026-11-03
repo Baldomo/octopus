@@ -1,7 +1,7 @@
 import { createEffect, For, on, onCleanup, onMount, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 import { backend } from "./backend";
-import { AGENT_PANEL, type Panel, type PtyId, type TaskRef, type TaskView } from "./generated";
+import { AGENT_PANEL, type PanelView, type PtyId, type TaskRef, type TaskView } from "./generated";
 import { Glyph } from "./Glyph";
 import { keepInView } from "./keepInView";
 import { EachPanel } from "./panels";
@@ -33,7 +33,7 @@ export const openShell = (at: TaskRef, key: string, directory: string) =>
 export type OpenLink = (task: TaskView, url: string, target: LinkTarget) => void;
 
 /** The holder fits the PTY to its pane; every other client draws it at the holder's size, cropped and scrollable. */
-function Term(props: { at: TaskRef; panel: Panel; visible: boolean; resumable: boolean; openLink: OpenUrl }) {
+function Term(props: { at: TaskRef; panel: PanelView; visible: boolean; resumable: boolean; openLink: OpenUrl }) {
   let host!: HTMLDivElement;
   const session = terminalSession({ at: props.at, panel: () => props.panel, shown: () => props.visible });
   const { xterm, mine } = session;
@@ -138,7 +138,7 @@ function Stack(props: { key: string; openLink: OpenLink }) {
   const task = () => model.tasks[props.key];
   const shown = () => ui.prefs.open === props.key && ui.prefs.view === "task";
   const choose = (panel: PtyId | null) => setChosen(props.key, panel);
-  const panels = () => task()?.task.panels ?? [];
+  const panels = () => task()?.panels ?? [];
   const agent = () => panels().find((panel) => panel.name === AGENT_PANEL);
   const shells = () => panels().filter((panel) => panel.name !== AGENT_PANEL);
   const selected = () => shells().find((panel) => panel.id === chosen[props.key]) ?? agent();

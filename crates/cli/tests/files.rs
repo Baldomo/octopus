@@ -7,7 +7,7 @@ use octopus_client::CallError;
 use octopus_proto::ops::{
     Entry, EntryKind, FileCopy, FileCreate, FileDelete, FileList, FileMove, FileSearch, FileWrite, Match, TaskFocus,
 };
-use octopus_proto::types::{Checkout, Stream};
+use octopus_proto::types::{CheckoutKind, Stream};
 use octopus_proto::{Error, Event, Outcome};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -19,7 +19,7 @@ async fn a_client_works_on_a_tasks_files_through_its_server() {
     let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, &checkout).await;
-    let task = create(&laptop, &workspace, Checkout::Root, "none").await;
+    let task = create(&laptop, &workspace, CheckoutKind::Root, "none").await;
     let mut pushes = laptop.pushes();
     laptop.call(&TaskFocus { task: task.clone(), args: vec![] }).await.expect("focus");
 
@@ -67,7 +67,7 @@ async fn a_client_rearranges_a_checkout_without_reaching_past_it() {
     let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, &checkout).await;
-    let task = create(&laptop, &workspace, Checkout::Root, "none").await;
+    let task = create(&laptop, &workspace, CheckoutKind::Root, "none").await;
     let (create, rename, copy) = (
         |path: &str, kind| FileCreate { task: task.clone(), path: path.into(), kind },
         |from: &str, to: &str| FileMove { task: task.clone(), from: from.into(), to: to.into() },

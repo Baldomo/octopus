@@ -3,10 +3,10 @@ import { type ITheme, Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { backend, Channel } from "./backend";
-import { type Panel, type TaskRef, TERM_HISTORY_LINES, type TermScreen } from "./generated";
+import { type PanelView, type TaskRef, TERM_HISTORY_LINES, type TermScreen } from "./generated";
 import { lockClaim } from "./lockClaim";
 import { sgrMouse } from "./mouseReports";
-import { act, holds, report, serverView } from "./state";
+import { act, report, serverView } from "./state";
 import { colors, px, type Scheme, scheme, token } from "./tokens";
 
 const themes: Partial<Record<Scheme, ITheme>> = {};
@@ -52,7 +52,7 @@ export const [windowShown, setWindowShown] = createSignal(true);
 const [windowFocuses, setWindowFocuses] = createSignal(0);
 export const windowFocused = () => setWindowFocuses((count) => count + 1);
 
-export const readOnlyLabel = (panel: Panel) =>
+export const readOnlyLabel = (panel: PanelView) =>
   panel.lock_holder === null ? "read-only · lock free" : `read-only · held by ${panel.lock_holder.name}`;
 
 type Cells = { cols: number; rows: number };
@@ -69,7 +69,7 @@ export function cellSize(xterm: Terminal): Size {
   return core._renderService.dimensions.css.cell;
 }
 
-export type TerminalSession = {
+type TerminalSession = {
   xterm: Terminal;
   mine: () => boolean;
   shown: () => boolean;
@@ -92,8 +92,8 @@ export type TerminalSession = {
  * The server sends the whole screen at the PTY's size on attaching and on every resize, and every client redraws it at
  * that size.
  */
-export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown: () => boolean }): TerminalSession {
-  const mine = createMemo(() => holds(props.at.server, props.panel().lock_holder));
+export function terminalSession(props: { at: TaskRef; panel: () => PanelView; shown: () => boolean }): TerminalSession {
+  const mine = createMemo(() => props.panel().held_here);
   const shown = createMemo(props.shown);
   const xterm = new Terminal({
     fontFamily: token("--mono-terminal"),
@@ -183,8 +183,8 @@ export function terminalSession(props: { at: TaskRef; panel: () => Panel; shown:
     else report(`the terminal's pane has no size to ${what} the terminal at yet`);
   };
   const takenByOther = () => {
-    const holder = props.panel().lock_holder;
-    return holder !== null && !holds(props.at.server, holder);
+    const { lock_holder, held_here } = props.panel();
+    return lock_holder !== null && !held_here;
   };
   const claimUnlessTaken = () => {
     const { id, running } = props.panel();

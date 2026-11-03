@@ -19,7 +19,7 @@ const LIVE_PIECES: usize = 1024;
 const READ_BYTES: usize = 8192;
 const KILL_GRACE: Duration = Duration::from_secs(5);
 /// Every terminal starts at this size, and a restarted server puts every terminal it adopts back to it.
-pub const INITIAL_SIZE: (u16, u16) = (80, 24);
+pub(crate) const INITIAL_SIZE: (u16, u16) = (80, 24);
 
 /// The terminal's screen and the pieces it sends each attached client, kept in step under one lock.
 struct Output {
@@ -51,7 +51,7 @@ impl Output {
     }
 }
 
-pub struct Attachment {
+pub(crate) struct Attachment {
     pub screen: Screen,
     /// `None` once the terminal's output has ended.
     pub live: Option<broadcast::Receiver<Piece>>,
@@ -73,7 +73,7 @@ pub struct Pty {
 /// What tells whether a terminal's program is still at work.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Activity {
+pub(crate) struct Activity {
     pub output_at: i64,
     /// Whether a process descending from the program runs outside the program's process group, as a shell an agent
     /// starts for a command does; the processes of the agent itself, such as its MCP servers, stay in its group.
@@ -142,7 +142,7 @@ impl Pty {
     }
 
     /// Reads the process table, so it blocks.
-    pub fn activity(&self) -> Result<Activity, Error> {
+    pub(crate) fn activity(&self) -> Result<Activity, Error> {
         let program = (*lock(&self.process)).ok_or_else(|| Error::conflict("the terminal has exited"))?;
         let table = std::process::Command::new("ps")
             .args(["-A", "-o", "pid=,ppid=,pgid="])
@@ -193,7 +193,7 @@ impl Pty {
         Ok(())
     }
 
-    pub async fn terminate(self: Arc<Self>) {
+    pub(crate) async fn terminate(self: Arc<Self>) {
         self.signal(nix::sys::signal::Signal::SIGTERM);
         if tokio::time::timeout(KILL_GRACE, self.exit()).await.is_err() {
             self.kill();

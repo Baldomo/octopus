@@ -13,24 +13,24 @@ name = "octopus_mobile"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
-anyhow = "1.0.104"
-serde = { version = "1.0.229", features = ["derive"] }
+anyhow.workspace = true
+serde.workspace = true
 octopus-client.workspace = true
 octopus-proto.workspace = true
 octopus-shell.workspace = true
-tauri = { version = "2.12.5", features = [] }
-tokio = { version = "1.54.1", features = ["sync"] }
+tauri.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 
 [target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
 tauri-plugin-barcode-scanner = "2.5.3"
 tauri-plugin-clipboard-manager = "2.5.0"
-tauri-plugin-opener = "2.7.2"
+tauri-plugin-opener.workspace = true
 
 [target.'cfg(target_os = "ios")'.dependencies]
 # Exact, and so for the whole workspace, which resolves one libc: from 0.2.190 libc declares the route and `in6_ifreq`
 # items iroh's netwatch and netdev read on iOS for macOS alone.
 libc = "=0.2.189"
-objc2 = "0.6.5"
+objc2.workspace = true
 objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
   "std",
   "block2",
@@ -49,10 +49,9 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
   "UIWindow",
   "objc2-core-foundation",
 ] }
-block2 = "0.6.2"
-objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = [
-  "std",
+block2.workspace = true
+objc2-core-foundation = { workspace = true, features = ["CFCGTypes"] }
+objc2-foundation = { workspace = true, features = [
   "block2",
   "NSDictionary",
   "NSNotification",
@@ -74,4 +73,4 @@ security-framework = "3.7.0"
 base64 = "0.22.1"
 
 [build-dependencies]
-tauri-build = { version = "2.7.4", features = [] }
+tauri-build.workspace = true

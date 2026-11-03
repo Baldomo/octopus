@@ -102,29 +102,16 @@ pub fn create_parent(path: &std::path::Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))
 }
 
-/// Rewrites each `quic` entry to `remote` on n0's relay and strips `addresses` from each `remote` entry, keeping the
-/// pinned keys. Returns whether any entry changed.
-pub(crate) fn migrate_entries(listed: &mut serde_json::Value) -> anyhow::Result<bool> {
-    let Some(servers) = listed.get_mut("servers").and_then(serde_json::Value::as_array_mut) else { return Ok(false) };
-    let mut migrated = false;
-    for server in servers.iter_mut() {
-        let name = server.get("name").and_then(serde_json::Value::as_str).unwrap_or("a server").to_string();
-        let Some(address) = server.get_mut("address") else { continue };
-        match address.get("path").and_then(serde_json::Value::as_str) {
-            Some("quic") => {
-                let Some(key) = address.get("key") else {
-                    bail!("{name} is listed over QUIC without a key; pair it again with an invite");
-                };
-                *address = serde_json::json!({"path": "remote", "key": key, "relay": remote::N0_EU_RELAY});
-                migrated = true;
-            }
-            Some("remote") => {
-                migrated |= address.as_object_mut().and_then(|fields| fields.remove("addresses")).is_some();
-            }
-            _ => {}
+/// Strips `addresses` from each `remote` entry, keeping its pinned key and relay. Returns whether any entry changed.
+pub(crate) fn strip_addresses(listed: &mut serde_json::Value) -> bool {
+    let Some(servers) = listed.get_mut("servers").and_then(serde_json::Value::as_array_mut) else { return false };
+    let mut stripped = false;
+    for address in servers.iter_mut().filter_map(|server| server.get_mut("address")) {
+        if address.get("path").and_then(serde_json::Value::as_str) == Some("remote") {
+            stripped |= address.as_object_mut().and_then(|fields| fields.remove("addresses")).is_some();
         }
     }
-    Ok(migrated)
+    stripped
 }
 
 impl Servers {
@@ -134,7 +121,7 @@ impl Servers {
             Ok(text) => {
                 let mut listed: serde_json::Value =
                     serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
-                let migrated = migrate_entries(&mut listed).with_context(|| format!("migrate {}", path.display()))?;
+                let stripped = strip_addresses(&mut listed);
                 let servers: Self =
                     serde_json::from_value(listed).with_context(|| format!("parse {}", path.display()))?;
                 servers
@@ -142,7 +129,7 @@ impl Servers {
                     .iter()
                     .try_for_each(Server::validate)
                     .with_context(|| format!("check {}", path.display()))?;
-                if migrated {
+                if stripped {
                     servers.save(config)?;
                 }
                 Ok(servers)

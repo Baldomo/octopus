@@ -350,22 +350,10 @@ pub struct UiStore {
 fn load_prefs(config: &Config) -> anyhow::Result<Prefs> {
     let path = config.file(PREFS_FILE);
     match std::fs::read_to_string(&path) {
-        Ok(text) => parse_prefs(&text).with_context(|| format!("parse {}", path.display())),
+        Ok(text) => serde_json::from_str(&text).with_context(|| format!("parse {}", path.display())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Prefs::default()),
         Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
     }
-}
-
-/// A pref the file lacks, as one written before that pref existed does, takes its default.
-fn parse_prefs(text: &str) -> anyhow::Result<Prefs> {
-    let serde_json::Value::Object(saved) = serde_json::from_str(text)? else {
-        anyhow::bail!("prefs are not a JSON object");
-    };
-    let serde_json::Value::Object(mut prefs) = serde_json::to_value(Prefs::default())? else {
-        unreachable!("Prefs serializes as an object");
-    };
-    prefs.extend(saved);
-    Ok(serde_json::from_value(serde_json::Value::Object(prefs))?)
 }
 
 fn save_prefs(config: &Config, prefs: &Prefs) -> anyhow::Result<()> {
@@ -475,21 +463,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prefs_saved_before_a_pref_existed_keep_theirs_and_take_its_default() {
-        let saved = r#"{"pinned":true,"collapsed":["octopus"],"surface":"files","view":"task","open":"local/tsk_1","board":null}"#;
-        let prefs = parse_prefs(saved).expect("parses");
-        assert_eq!((prefs.pinned, prefs.open.as_deref()), (true, Some("local/tsk_1")));
-        assert_eq!(
-            (prefs.appearance, prefs.zoom, prefs.split),
-            (Appearance::System, Zoom::default(), Split::default())
-        );
-        assert!(prefs.section_order.is_empty());
-        assert_eq!(
-            parse_prefs(r#"{"section_order":["willow","acme"]}"#).expect("parses").section_order,
-            ["willow", "acme"]
-        );
-        assert!(parse_prefs(r#"{"pinned":true,"retired":1}"#).is_err());
-        assert!(parse_prefs(r#"{"split":1.5}"#).is_err());
+    fn saved_prefs_parse_only_with_every_pref_and_no_other() {
+        let prefs = Prefs { pinned: true, section_order: vec!["willow".into(), "acme".into()], ..Prefs::default() };
+        let saved = serde_json::to_value(&prefs).expect("prefs serialize");
+        assert_eq!(serde_json::from_value::<Prefs>(saved.clone()).expect("parses"), prefs);
+        let mut lacking = saved.clone();
+        lacking.as_object_mut().expect("an object").remove("zoom");
+        assert!(serde_json::from_value::<Prefs>(lacking).is_err());
+        let mut extra = saved;
+        extra.as_object_mut().expect("an object").insert("retired".into(), 1.into());
+        assert!(serde_json::from_value::<Prefs>(extra).is_err());
     }
 
     #[test]

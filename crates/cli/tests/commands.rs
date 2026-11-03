@@ -16,22 +16,20 @@ fn a_call_missing_flags_names_all_of_them_at_once() {
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        "error: missing required flags: --parent (pass none for a root task), --state, --checkout, --harness, --session (pass none for a fresh session)\n"
+        "error: missing required flags: --parent (pass none for a root task), --state, --checkout, --harness, --session (pass fresh for a fresh session)\n"
     );
 }
 
 #[test]
 fn a_home_other_than_the_accounts_registers_no_service() {
     let home = tempfile::tempdir().expect("tempdir");
-    for verb in ["uninstall", "upgrade"] {
-        let output = Command::new(OCTOPUS)
-            .env("HOME", home.path())
-            .args(["server", verb, "--name", "foreign-home"])
-            .output()
-            .expect("run octopus");
-        assert!(!output.status.success(), "{verb}");
-        assert!(String::from_utf8_lossy(&output.stderr).contains("not this account's home"), "{output:?}");
-    }
+    let output = Command::new(OCTOPUS)
+        .env("HOME", home.path())
+        .args(["server", "uninstall", "--name", "foreign-home"])
+        .output()
+        .expect("run octopus");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not this account's home"), "{output:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

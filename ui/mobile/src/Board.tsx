@@ -6,7 +6,7 @@ import { keepInView } from "@octopus/shared/keepInView.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
 import { animateList } from "@octopus/shared/flip.ts";
-import { dropTarget, isAway, isLanding, isLifted, isNesting, lift } from "@octopus/shared/lift.ts";
+import { dropTarget, isAway, isLanding, isLifted, isNesting, lift } from "@octopus/shared/liftTasks.ts";
 import { animate, FADE, give, play, PROJECT_S, reduced, type Running } from "@octopus/shared/motion.ts";
 import { PUSH } from "./motion";
 import { back, openSheet, openTask, screen } from "./nav";

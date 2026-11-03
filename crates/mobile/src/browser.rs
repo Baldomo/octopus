@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use octopus_client::tunnel::{Tunnel, listen_on_localhost, loopback_port};
+use octopus_client::tunnel::Tunnel;
 use octopus_proto::types::web_page;
 use octopus_shell::hub::Hub;
 use octopus_shell::pages::Pages;
@@ -24,7 +24,7 @@ pub struct Page {
 
 /// Shows `url`, a page of `server`'s task, holding the tunnel to its port and letting go of any other.
 #[tauri::command]
-pub async fn phone_browse(
+pub(crate) async fn phone_browse(
     hub: State<'_, Arc<Hub>>,
     shown: State<'_, Shown>,
     pages: State<'_, Arc<Pages>>,
@@ -33,15 +33,14 @@ pub async fn phone_browse(
 ) -> Result<Page, String> {
     let page = web_page(&url)?;
     let loaded = pages.loaded_from(&server, &page)?.to_string();
-    let port = loopback_port(&page).filter(|_| hub.is_another_machine(&server));
+    let port = hub.tunneled_port(&server, &page);
     let mut held = shown.0.lock().await;
     let kept = matches!((&*held, port), (Some((at, to, _)), Some(port)) if *at == port && *to == server);
     if !kept {
         *held = None;
         if let Some(port) = port {
-            let listeners = listen_on_localhost(port).await.map_err(|error| error.to_string())?;
-            let (hub, dialed) = (Arc::clone(&hub), server.clone());
-            held.replace((port, server, Tunnel::new(port, listeners, Arc::new(move || hub.connection(&dialed)))));
+            let tunnel = hub.tunnel(&server, port).await?;
+            held.replace((port, server, tunnel));
         }
     }
     Ok(Page { url: loaded, tunneled: port.is_some() })
@@ -49,7 +48,7 @@ pub async fn phone_browse(
 
 /// Lets go of the shown page's tunnel once the Browser screen closes.
 #[tauri::command]
-pub async fn phone_unbrowse(shown: State<'_, Shown>) -> Result<(), String> {
+pub(crate) async fn phone_unbrowse(shown: State<'_, Shown>) -> Result<(), String> {
     *shown.0.lock().await = None;
     Ok(())
 }

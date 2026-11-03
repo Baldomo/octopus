@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createMemo, createRoot, createSignal, onCleanup } from "solid-js";
-import type { Panel } from "./generated.ts";
+import type { PanelView } from "./generated.ts";
 import { EachPanel } from "./panels.ts";
 
-const shell = (id: string, holder: string | null = null): Panel => ({
+const shell = (id: string, holder: string | null = null): PanelView => ({
   id,
   name: id,
   running: true,
@@ -12,9 +12,10 @@ const shell = (id: string, holder: string | null = null): Panel => ({
   cols: 80,
   rows: 24,
   listening: false,
+  held_here: false,
 });
 
-function mounted(panels: Panel[]) {
+function mounted(panels: PanelView[]) {
   const [list, setList] = createSignal(panels);
   const mounts: string[] = [];
   const unmounts: string[] = [];

@@ -17,7 +17,7 @@ type Inputs = Arc<Mutex<HashMap<u64, mpsc::UnboundedSender<Vec<u8>>>>>;
 
 /// Opens a screen: the UI resets its terminal to cols×rows, then draws the bytes that follow.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
-pub struct TermScreen {
+pub(crate) struct TermScreen {
     pub cols: u16,
     pub rows: u16,
 }

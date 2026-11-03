@@ -44,50 +44,19 @@ pub fn emit(app: &AppHandle, event: &str, payload: impl Serialize + Clone) {
     }
 }
 
-/// The plugin's commands, before it manages what they act on.
-pub fn commands<R: Runtime>() -> tauri::plugin::Builder<R> {
-    tauri::plugin::Builder::new("octopus").invoke_handler(tauri::generate_handler![
-        commands::boot,
-        commands::ready,
-        commands::ui_act,
-        commands::quit,
-        commands::server_pair,
-        commands::server_offer,
-        commands::server_clients,
-        commands::server_revoke,
-        commands::servers_refresh,
-        commands::server_rename,
-        commands::server_forget,
-        commands::workspace_add,
-        commands::workspace_remove,
-        commands::section_rename,
-        commands::section_color,
-        commands::auto_color,
-        commands::task_focus,
-        commands::task_move,
-        commands::task_set_parent,
-        commands::task_rename,
-        commands::task_archive,
-        commands::task_create,
-        commands::term_attach,
-        commands::term_input,
-        commands::term_detach,
-        commands::term_open,
-        commands::term_close,
-        commands::term_claim,
-        commands::term_take_lock,
-        commands::term_resize,
-        commands::file_list,
-        commands::file_read,
-        commands::file_write,
-        commands::file_create,
-        commands::file_move,
-        commands::file_copy,
-        commands::file_delete,
-        commands::file_upload,
-        commands::file_search,
-    ])
+macro_rules! plugin_commands {
+    ($($command:ident),* $(,)?) => {
+        /// The plugin's command names, which the UI invokes.
+        pub(crate) const COMMANDS: &[&str] = &[$(stringify!($command)),*];
+
+        /// The plugin's commands, before it manages what they act on.
+        pub fn commands<R: Runtime>() -> tauri::plugin::Builder<R> {
+            tauri::plugin::Builder::new("octopus").invoke_handler(tauri::generate_handler![$(commands::$command),*])
+        }
+    };
 }
+
+include!("../plugin_commands.rs");
 
 /// The core's commands, the terminals they attach and the file pages it serves, timing launch from the call.
 pub fn plugin() -> TauriPlugin<Wry> {

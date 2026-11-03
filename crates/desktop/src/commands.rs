@@ -18,7 +18,7 @@ type Browsing<'a> = State<'a, Browsers>;
 /// Shows `url` in a browser panel of the task on its server, which pushes the panel to every client; resolves to
 /// the panel's id.
 #[tauri::command]
-pub async fn browser_open(
+pub(crate) async fn browser_open(
     hub: Hubbed<'_>,
     at: TaskRef,
     panel: BrowserTarget,
@@ -29,19 +29,19 @@ pub async fn browser_open(
 
 /// Removes a browser panel of the task on its server, which every client then stops rendering.
 #[tauri::command]
-pub async fn browser_close(hub: Hubbed<'_>, at: TaskRef, panel: BrowserId) -> Result<(), String> {
+pub(crate) async fn browser_close(hub: Hubbed<'_>, at: TaskRef, panel: BrowserId) -> Result<(), String> {
     hub.call(&at.server, &BrowserClose { task: at.task, panel }).await.map(drop)
 }
 
 /// Moves a browser panel of the task on its server to index `to` among the task's panels, on every client.
 #[tauri::command]
-pub async fn browser_move(hub: Hubbed<'_>, at: TaskRef, panel: BrowserId, to: u16) -> Result<(), String> {
+pub(crate) async fn browser_move(hub: Hubbed<'_>, at: TaskRef, panel: BrowserId, to: u16) -> Result<(), String> {
     hub.call(&at.server, &BrowserMove { task: at.task, panel, to }).await.map(drop)
 }
 
 /// Loads the panel's `url` on this client unless its webview already loaded this `load` of the panel.
 #[tauri::command]
-pub async fn browser_load(
+pub(crate) async fn browser_load(
     app: AppHandle,
     hub: Hubbed<'_>,
     browsers: Browsing<'_>,
@@ -54,17 +54,17 @@ pub async fn browser_load(
 }
 
 #[tauri::command]
-pub async fn browser_show_page(browsers: Browsing<'_>, on_screen: Option<OnScreen>) -> Result<(), String> {
+pub(crate) async fn browser_show_page(browsers: Browsing<'_>, on_screen: Option<OnScreen>) -> Result<(), String> {
     browsers.show_page(on_screen)
 }
 
 #[tauri::command]
-pub async fn browser_go(browsers: Browsing<'_>, at: TaskRef, panel: BrowserId, go: Go) -> Result<(), String> {
+pub(crate) async fn browser_go(browsers: Browsing<'_>, at: TaskRef, panel: BrowserId, go: Go) -> Result<(), String> {
     browsers.go(&at, &panel, go)
 }
 
 #[tauri::command]
-pub async fn browser_find(
+pub(crate) async fn browser_find(
     browsers: Browsing<'_>,
     at: TaskRef,
     panel: BrowserId,
@@ -76,20 +76,20 @@ pub async fn browser_find(
 
 /// Lists the UI's commands in the macOS menu bar.
 #[tauri::command]
-pub fn app_menu(app: AppHandle, groups: Vec<MenuGroup>) -> Result<(), String> {
+pub(crate) fn app_menu(app: AppHandle, groups: Vec<MenuGroup>) -> Result<(), String> {
     crate::menu::set(&app, &groups).map_err(|error| error.to_string())
 }
 
 /// Closes the panel's webview on this client; the panel stays on its server.
 #[tauri::command]
-pub async fn browser_forget(browsers: Browsing<'_>, at: TaskRef, panel: BrowserId) -> Result<(), String> {
+pub(crate) async fn browser_forget(browsers: Browsing<'_>, at: TaskRef, panel: BrowserId) -> Result<(), String> {
     browsers.forget(&at, &panel).await
 }
 
 /// What this machine does with an entry of a task whose server runs here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
-pub enum Outside {
+pub(crate) enum Outside {
     /// Shows it in the system's file manager.
     Reveal,
     /// Opens it in its default app.
@@ -98,7 +98,7 @@ pub enum Outside {
 
 /// Acts on a checkout entry through this machine's own apps, which reach it only when its server runs here.
 #[tauri::command]
-pub fn file_outside(hub: Hubbed<'_>, at: TaskRef, path: String, how: Outside) -> Result<(), String> {
+pub(crate) fn file_outside(hub: Hubbed<'_>, at: TaskRef, path: String, how: Outside) -> Result<(), String> {
     if hub.is_another_machine(&at.server) {
         return Err(format!("{} runs on another machine", hub.label(&at.server)));
     }
@@ -130,7 +130,7 @@ fn title_bar_action() -> &'static str {
 }
 
 #[tauri::command]
-pub fn title_bar_double_click(window: tauri::Window) -> Result<(), String> {
+pub(crate) fn title_bar_double_click(window: tauri::Window) -> Result<(), String> {
     let done = match title_bar_action() {
         "Minimize" => window.minimize(),
         "None" => Ok(()),
@@ -142,7 +142,7 @@ pub fn title_bar_double_click(window: tauri::Window) -> Result<(), String> {
 
 /// Taps the trackpad the way macOS marks a dragged item lining up; elsewhere does nothing.
 #[tauri::command]
-pub fn haptic_alignment() {
+pub(crate) fn haptic_alignment() {
     #[cfg(target_os = "macos")]
     {
         use objc2_app_kit::{

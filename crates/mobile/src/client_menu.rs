@@ -11,7 +11,7 @@ use tauri::State;
 
 const NAME_FILE: &str = "name";
 
-pub struct Phone {
+pub(crate) struct Phone {
     config: Config,
     named: AtomicBool,
 }
@@ -46,14 +46,14 @@ impl Phone {
 
 /// Whether the phone has its name, which it takes on its first pairing.
 #[tauri::command]
-pub fn phone_named(phone: State<Phone>) -> bool {
+pub(crate) fn phone_named(phone: State<Phone>) -> bool {
     phone.named.load(Ordering::Relaxed)
 }
 
 /// Reads the key, in hex, of the server an invite pairs, shown before pairing spends it, naming the part of the
 /// invite that is wrong.
 #[tauri::command]
-pub fn phone_invite_key(invite: String) -> Result<String, String> {
+pub(crate) fn phone_invite_key(invite: String) -> Result<String, String> {
     let invite: Invite = invite.trim().parse()?;
     Ok(invite.server.hex())
 }
@@ -61,7 +61,7 @@ pub fn phone_invite_key(invite: String) -> Result<String, String> {
 /// Pairs with the server `invite` names and resolves to its name. A phone that has never paired names itself `name`
 /// first; a named phone passes none.
 #[tauri::command]
-pub async fn phone_pair(
+pub(crate) async fn phone_pair(
     hub: State<'_, Arc<Hub>>,
     phone: State<'_, Phone>,
     invite: String,

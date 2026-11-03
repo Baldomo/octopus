@@ -4306,7 +4306,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "block2",
- "cpal",
  "gtk",
  "objc2",
  "objc2-app-kit",
@@ -4373,7 +4372,6 @@ version = "0.0.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
- "fastrand",
  "ignore",
  "nix 0.31.3",
  "notify",

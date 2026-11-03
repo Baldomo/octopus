@@ -6,8 +6,8 @@ use crate::frames::Op;
 use crate::pairing::{Invite, Proof};
 use crate::schema::{Field, record};
 use crate::types::{
-    AgentStatus, BrowserId, BrowserTarget, Checkout, Color, Hooks, PtyId, SessionId, Task, TaskId, TaskState,
-    Workspace, WorkspaceId,
+    AgentStatus, BrowserId, BrowserTarget, CheckoutKind, Color, Hooks, PtyId, SessionId, SessionStart, Task, TaskId,
+    TaskState, Workspace, WorkspaceId,
 };
 
 /// Declares an op: its args as a `record!`, its wire name, and the type of its result.
@@ -229,11 +229,11 @@ op!(
         /// The task's state.
         state: TaskState,
         /// Where the task's files live: the workspace root, or a worktree of its own.
-        checkout: Checkout,
+        checkout: CheckoutKind,
         /// The harness that runs the task's agent.
         harness: String,
-        /// An existing session for the agent to resume.
-        session: Option<SessionId>,
+        /// An existing session's id for the agent to resume.
+        session: SessionStart,
     }
 );
 op!(

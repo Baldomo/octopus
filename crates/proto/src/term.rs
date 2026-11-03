@@ -8,7 +8,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWr
 
 use crate::line;
 
-pub type Bytes = Arc<[u8]>;
+pub(crate) type Bytes = Arc<[u8]>;
 
 /// The lines a terminal keeps above its screen, on the server and in every client.
 pub const HISTORY_LINES: usize = 10_000;

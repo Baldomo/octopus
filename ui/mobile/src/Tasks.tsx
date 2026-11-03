@@ -17,9 +17,8 @@ import {
   lift,
   liftSection,
   liftsIn,
-  type Point,
-  type Start,
-} from "@octopus/shared/lift.ts";
+} from "@octopus/shared/liftTasks.ts";
+import { type Point, type Start } from "@octopus/shared/lift.ts";
 import { feel } from "./feel";
 import { go, openSheet, openTask } from "./nav";
 import { Circle, Glyph, Id, ServerDot, Slot } from "./parts";

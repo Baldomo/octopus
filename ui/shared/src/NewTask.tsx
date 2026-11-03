@@ -1,56 +1,29 @@
 import { createSignal, For, Show } from "solid-js";
 import { backend } from "./backend";
 import { Actions, Field, Segments, TextField } from "./Dialog";
-import { CHECKOUTS, TASK_STATES, type Checkout, type TaskState, type WorkspaceRef } from "./generated";
-import {
-  newTaskSection,
-  openTask,
-  openView,
-  report,
-  serverLabel,
-  serverView,
-  setNewTaskSection,
-  showModal,
-  workspaces,
-} from "./state";
+import { CHECKOUTS, FRESH_SESSION, TASK_STATES } from "./generated";
+import { newTaskDraft, workspaceKey } from "./newTaskDraft";
+import { newTaskSection, openTask, report, serverLabel, setNewTaskSection, showModal, workspaces } from "./state";
 
 const PARENTS = ["none", "open task"] as const;
-const workspaceKey = (workspace: WorkspaceRef) => `${workspace.server}/${workspace.workspace}`;
 
 /** The new-task form: every op field is on screen, prefilled from the open task where it has one. */
 export function NewTask() {
-  const current = openView();
-  const section = newTaskSection();
+  const draft = newTaskDraft(newTaskSection());
   setNewTaskSection(null);
-  const initial =
-    section === null
-      ? workspaces().find((workspace) => workspace.server === current?.at.server && workspace.name === current.section)
-      : workspaces().find((workspace) => workspace.name === section && serverView(workspace.server)?.reachable);
-  const [workspace, setWorkspace] = createSignal(initial === undefined ? "" : workspaceKey(initial));
-  const [title, setTitle] = createSignal("");
+  const { current, workspace, setWorkspace, title, setTitle, state, setState, checkout, setCheckout } = draft;
+  const { harness, setHarness, chosen, complete } = draft;
   const [parent, setParent] = createSignal<(typeof PARENTS)[number]>("none");
-  const [state, setState] = createSignal<TaskState>("pinned");
-  const [checkout, setCheckout] = createSignal<Checkout>("worktree");
-  const [harness, setHarness] = createSignal(current?.task.harness ?? "");
-  const chosen = () => workspaces().find((candidate) => workspaceKey(candidate) === workspace());
   const underOpen = () => current !== undefined && chosen()?.server === current.at.server;
-  const complete = () => chosen() !== undefined && title().trim() !== "" && harness().trim() !== "";
 
   const create = (event: SubmitEvent) => {
     event.preventDefault();
     const target = chosen();
     if (target === undefined || !complete()) return;
     backend
-      .taskCreate({
-        server: target.server,
-        workspace: target.workspace,
-        title: title().trim(),
-        parent: underOpen() && parent() === "open task" ? current!.task.id : null,
-        state: state(),
-        checkout: checkout(),
-        harness: harness().trim(),
-        session: null,
-      })
+      .taskCreate(
+        draft.payload(target, underOpen() && parent() === "open task" ? current!.task.id : null, FRESH_SESSION),
+      )
       .then((key) => {
         showModal(null);
         openTask(key);

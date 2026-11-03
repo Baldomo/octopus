@@ -33,7 +33,7 @@ export const phone = {
 /** A page as the phone shows it, and whether it reaches the server's port through the tunnel. */
 export type Page = { url: string; tunneled: boolean };
 
-export type Insets = { top: number; left: number; right: number; bottom: number };
+type Insets = { top: number; left: number; right: number; bottom: number };
 
 /**
  * Shows the camera behind the page, which goes transparent around its finder, and resolves to the text of the first

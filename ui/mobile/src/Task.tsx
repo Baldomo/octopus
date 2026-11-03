@@ -1,9 +1,9 @@
 import { createEffect, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { Portal } from "solid-js/web";
 import { backend } from "@octopus/shared/backend.ts";
-import { AGENT_PANEL, type Panel, type PtyId, type TaskRef, type TaskView } from "@octopus/shared/generated.ts";
-import { ago, clock, ticking } from "@octopus/shared/SidebarControls.tsx";
-import { act, holds, model, report, scale, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
+import { AGENT_PANEL, type PanelView, type PtyId, type TaskRef, type TaskView } from "@octopus/shared/generated.ts";
+import { ago, clock, ticking } from "@octopus/shared/time.ts";
+import { act, model, report, scale, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
 import { clickReport, type ScreenCell, wheelReport } from "@octopus/shared/mouseReports.ts";
 import { cellSize, type Size, terminalSession } from "@octopus/shared/terminalSession.ts";
 import { colors, scheme } from "@octopus/shared/tokens.ts";
@@ -69,7 +69,7 @@ function observeSize(element: HTMLElement, set: (size: Size) => void) {
  */
 function PhoneTerm(props: {
   at: TaskRef;
-  panel: Panel;
+  panel: PanelView;
   visible: boolean;
   reach: Reach;
   ended: boolean;
@@ -140,8 +140,8 @@ function PhoneTerm(props: {
   createEffect(
     on(
       () => {
-        const holder = props.visible && props.panel.running ? props.panel.lock_holder : null;
-        return holder === null ? null : holds(props.at.server, holder);
+        const { running, lock_holder, held_here } = props.panel;
+        return props.visible && running && lock_holder !== null ? held_here : null;
       },
       (mine, was) => {
         if (mine === null || was === null || was === undefined || mine === was) return;
@@ -517,8 +517,8 @@ function PhoneTerm(props: {
 }
 
 /** A coral microphone while the selected terminal hears this phone, or a red crossed-out one while the OS denies it. */
-function Mic(props: { at: TaskRef; panel: Panel }) {
-  const hearing = () => props.panel.running && holds(props.at.server, props.panel.lock_holder) && props.panel.listening;
+function Mic(props: { at: TaskRef; panel: PanelView }) {
+  const hearing = () => props.panel.running && props.panel.held_here && props.panel.listening;
   return (
     <Show when={hearing()}>
       <Show
@@ -585,7 +585,7 @@ function Missing(props: { open: TaskView }) {
 function TaskScreen(props: { open: TaskView }) {
   const now = ticking();
   const [chosen, setChosen] = createSignal<PtyId | null>(null);
-  const panels = () => props.open.task.panels;
+  const panels = () => props.open.panels;
   const agent = () => panels().find((panel) => panel.name === AGENT_PANEL);
   const shells = () => panels().filter((panel) => panel.name !== AGENT_PANEL);
   const selected = () => shells().find((panel) => panel.id === chosen()) ?? agent();

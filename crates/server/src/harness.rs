@@ -1,10 +1,33 @@
-//! The hooks the server installs in a harness's agent, through which the agent reports its status.
+//! The harnesses a fresh server knows, and the hooks the server installs in a harness's agent, through which the
+//! agent reports its status.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use octopus_proto::types::{AgentStatus, ENV_SERVER, ENV_TASK, Hooks, to_wire};
 use serde_json::{Value, json};
+
+use crate::store::Harness;
+
+/// Stands for the task's session id in a harness's start and resume args.
+pub(crate) const SESSION: &str = "{session}";
+
+pub(crate) fn names_session(args: &[String]) -> bool {
+    args.iter().any(|arg| arg.contains(SESSION))
+}
+
+/// The harness a fresh store runs every agent with until the user sets it otherwise.
+pub(crate) const CLAUDE_CODE: &str = "claude-code";
+
+pub(crate) fn claude_code() -> Harness {
+    Harness {
+        argv: vec!["claude".into()],
+        start: vec!["--session-id".into(), SESSION.into()],
+        resume: vec!["--resume".into(), SESSION.into()],
+        install: "npm install -g @anthropic-ai/claude-code".into(),
+        hooks: Hooks::ClaudeCode,
+    }
+}
 
 /// The tools that put a question to the user rather than act.
 macro_rules! asking_tools {
@@ -15,7 +38,7 @@ macro_rules! asking_tools {
 
 /// Each Claude Code event the agent reports on, the matcher its hook fires for, and the status it reports. The
 /// matchers of one event exclude each other, since Claude Code runs every matching hook at once.
-const CLAUDE_CODE: &[(&str, &str, AgentStatus)] = &[
+const CLAUDE_CODE_EVENTS: &[(&str, &str, AgentStatus)] = &[
     ("UserPromptSubmit", "", AgentStatus::Working),
     ("PreToolUse", concat!("^(?!(", asking_tools!(), ")$)"), AgentStatus::Working),
     ("PreToolUse", asking_tools!(), AgentStatus::Waiting),
@@ -42,7 +65,7 @@ pub fn args(hooks: Hooks, octopus: &Path) -> Vec<String> {
 /// nothing and a failed one exits 1, which Claude Code only notes.
 fn claude_code_settings(octopus: &Path) -> Value {
     let mut events: BTreeMap<&str, Vec<Value>> = BTreeMap::new();
-    for (event, matcher, status) in CLAUDE_CODE {
+    for (event, matcher, status) in CLAUDE_CODE_EVENTS {
         let command = format!(
             "{} agent report --server \"${ENV_SERVER}\" --task \"${ENV_TASK}\" --status {} >/dev/null || exit 1",
             quoted(octopus),

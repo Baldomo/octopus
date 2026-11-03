@@ -7,7 +7,7 @@ pub use os::play;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Feel {
+pub(crate) enum Feel {
     /// A choice among several changed.
     Select,
     /// A key of the key bar sent.

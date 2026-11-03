@@ -1,7 +1,8 @@
 import { createSignal, For, Show } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
-import { CHECKOUTS, TASK_STATES, type Checkout, type TaskState, type WorkspaceRef } from "@octopus/shared/generated.ts";
-import { model, openView, report, serverLabel, serverView, workspaces } from "@octopus/shared/state.ts";
+import { CHECKOUTS, FRESH_SESSION, TASK_STATES } from "@octopus/shared/generated.ts";
+import { newTaskDraft, workspaceKey } from "@octopus/shared/newTaskDraft.ts";
+import { model, report, serverLabel, serverView, workspaces } from "@octopus/shared/state.ts";
 import { keepInView } from "@octopus/shared/keepInView.ts";
 import { feel } from "./feel";
 import { Icon } from "./Icon";
@@ -9,27 +10,16 @@ import { openTask, showInSheet } from "./nav";
 import { Field, Flab, Gap, Para, Secondary, sectionColor, Seg } from "./parts";
 import { Sheet, SheetHead } from "./Sheet";
 
-const workspaceKey = (workspace: WorkspaceRef) => `${workspace.server}/${workspace.workspace}`;
-
 /**
  * Every field of `task.create` on one full sheet, with `section`'s workspace on its first reachable server chosen.
  * Create stays inert until the title, workspace and harness are set.
  */
 export function NewTask(props: { section: string | null }) {
-  const current = openView();
-  const initial = workspaces().find((workspace) =>
-    props.section === null
-      ? workspace.server === current?.at.server && workspace.name === current.section
-      : workspace.name === props.section && serverView(workspace.server)?.reachable,
-  );
-  const [workspace, setWorkspace] = createSignal(initial === undefined ? "" : workspaceKey(initial));
-  const [title, setTitle] = createSignal("");
+  const draft = newTaskDraft(props.section);
+  const { workspace, setWorkspace, title, setTitle, state, setState, checkout, setCheckout } = draft;
+  const { harness, setHarness, chosen, complete } = draft;
   const [parent, setParent] = createSignal("");
-  const [state, setState] = createSignal<TaskState>("pinned");
-  const [checkout, setCheckout] = createSignal<Checkout>("worktree");
-  const [harness, setHarness] = createSignal(current?.task.harness ?? "");
   const [session, setSession] = createSignal("");
-  const chosen = () => workspaces().find((candidate) => workspaceKey(candidate) === workspace());
   const parents = () =>
     Object.values(model.tasks).filter(
       (view) =>
@@ -38,23 +28,19 @@ export function NewTask(props: { section: string | null }) {
         view.task.workspace === chosen()?.workspace &&
         view.task.archived_at === null,
     );
-  const complete = () => chosen() !== undefined && title().trim() !== "" && harness().trim() !== "";
   const [creating, setCreating] = createSignal(false);
   const create = () => {
     const target = chosen();
     if (target === undefined || !complete() || creating()) return;
     setCreating(true);
     backend
-      .taskCreate({
-        server: target.server,
-        workspace: target.workspace,
-        title: title().trim(),
-        parent: parents().some((view) => view.task.id === parent()) ? parent() : null,
-        state: state(),
-        checkout: checkout(),
-        harness: harness().trim(),
-        session: session().trim() === "" ? null : session().trim(),
-      })
+      .taskCreate(
+        draft.payload(
+          target,
+          parents().some((view) => view.task.id === parent()) ? parent() : null,
+          session().trim() === "" ? FRESH_SESSION : session().trim(),
+        ),
+      )
       .then((key) => {
         feel("success");
         openTask(key, { server: target.server, task: key.slice(key.lastIndexOf("/") + 1) });

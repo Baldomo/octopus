@@ -5,14 +5,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use octopus_client::cache::{Cache, PushEffect};
 use octopus_client::servers::{self, Address, Config, Server, Servers};
+use octopus_client::tunnel::{Tunnel, listen_on_localhost, loopback_port};
 use octopus_client::{CallError, Connection, Identity};
 use octopus_proto::device::PublicKey;
 use octopus_proto::ops::{SessionSync, WorkspaceRename, WorkspaceSetColor};
 use octopus_proto::pairing::Invite;
-use octopus_proto::types::{Color, WorkspaceId};
+use octopus_proto::types::{Color, LockHolder, WorkspaceId};
 use octopus_proto::{Event, Op, Push};
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Url};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Notify, mpsc, oneshot};
 use ts_rs::TS;
@@ -22,9 +23,9 @@ use crate::task_lists::{Lists, TaskRef, lists};
 use crate::task_view::{TaskView, task_views};
 use crate::{emit, lock, saturate};
 
-pub const MODEL_EVENT: &str = "model";
-pub const SERVERS_EVENT: &str = "servers";
-pub const FILES_CHANGED_EVENT: &str = "files_changed";
+pub(crate) const MODEL_EVENT: &str = "model";
+pub(crate) const SERVERS_EVENT: &str = "servers";
+pub(crate) const FILES_CHANGED_EVENT: &str = "files_changed";
 
 const RECONNECT: Duration = Duration::from_secs(1);
 /// How often a server's chip and status bar pick up its connection's newest round trip.
@@ -33,7 +34,7 @@ const MODEL_FRAME: Duration = Duration::from_millis(16);
 const FILES_BATCH: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
-pub struct ServerView {
+pub(crate) struct ServerView {
     pub name: String,
     /// What the window calls the server: "local" for one on the local socket, else its name.
     pub label: String,
@@ -58,7 +59,7 @@ pub struct Model {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
-pub struct FilesChanged {
+pub(crate) struct FilesChanged {
     pub key: String,
     pub paths: Vec<String>,
 }
@@ -87,6 +88,11 @@ struct State {
 }
 
 impl State {
+    /// Whether `me` holds the lock `holder` holds on `server`.
+    fn held_here(&self, me: &Identity, server: &str, holder: &LockHolder) -> bool {
+        self.links.get(server).is_some_and(|link| me.holds(holder, &link.address))
+    }
+
     fn label<'a>(&self, server: &'a str) -> &'a str {
         match self.links.get(server).map(|link| &link.address) {
             Some(Address::Local { .. }) => "local",
@@ -303,7 +309,7 @@ impl Hub {
     }
 
     /// Lists the server under a new name and reaches it afresh under that name.
-    pub fn rename_server(self: &Arc<Self>, from: &str, to: &str) -> anyhow::Result<()> {
+    pub(crate) fn rename_server(self: &Arc<Self>, from: &str, to: &str) -> anyhow::Result<()> {
         if lock(&self.state).links.contains_key(to) {
             anyhow::bail!("a server named {to} is already in the list");
         }
@@ -315,7 +321,7 @@ impl Hub {
         Ok(())
     }
 
-    pub fn forget_server(&self, server: &str) -> anyhow::Result<()> {
+    pub(crate) fn forget_server(&self, server: &str) -> anyhow::Result<()> {
         let mut servers = Servers::load(&self.config)?;
         servers.forget(server)?;
         servers.save(&self.config)?;
@@ -325,7 +331,7 @@ impl Hub {
 
     /// Renames the section's workspace on every server of the section, refusing before any rename when a server
     /// would split the section: one that is unreachable, or one that already holds a workspace named `to`.
-    pub async fn rename_section(&self, from: &str, to: &str) -> Result<(), String> {
+    pub(crate) async fn rename_section(&self, from: &str, to: &str) -> Result<(), String> {
         let taken = |server: &str, cache: &Cache| {
             (from != to && cache.workspaces.values().any(|workspace| workspace.name == to))
                 .then(|| format!("{server} already has {to}"))
@@ -335,7 +341,7 @@ impl Hub {
     }
 
     /// Colors the section's workspace on every server of the section, refusing before any while one is unreachable.
-    pub async fn color_section(&self, section: &str, color: Color) -> Result<(), String> {
+    pub(crate) async fn color_section(&self, section: &str, color: Color) -> Result<(), String> {
         let recolor = |workspace: WorkspaceId| WorkspaceSetColor { workspace, color };
         self.across_section(section, &format!("colored {section} {}", color.name()), |_, _| None, recolor).await
     }
@@ -382,7 +388,7 @@ impl Hub {
         Ok(())
     }
 
-    pub fn harness_of(&self, at: &TaskRef) -> Result<String, String> {
+    pub(crate) fn harness_of(&self, at: &TaskRef) -> Result<String, String> {
         let state = lock(&self.state);
         let task = state.caches.get(&at.server).and_then(|cache| cache.tasks.get(&at.task));
         task.map(|task| task.harness.clone())
@@ -396,6 +402,18 @@ impl Hub {
     /// Whether the server runs on another machine, where its ports are reached through a tunnel.
     pub fn is_another_machine(&self, server: &str) -> bool {
         lock(&self.state).links.get(server).is_some_and(|link| matches!(link.address, Address::Remote { .. }))
+    }
+
+    /// The port a page reaches through a tunnel: a loopback port of a server on another machine.
+    pub fn tunneled_port(&self, server: &str, page: &Url) -> Option<u16> {
+        loopback_port(page).filter(|_| self.is_another_machine(server))
+    }
+
+    /// Carries this client's `localhost:<port>` to the same port on `server`'s machine.
+    pub async fn tunnel(self: &Arc<Self>, server: &str, port: u16) -> Result<Tunnel, String> {
+        let listeners = listen_on_localhost(port).await.map_err(|error| error.to_string())?;
+        let (hub, dialed) = (Arc::clone(self), server.to_string());
+        Ok(Tunnel::new(port, listeners, Arc::new(move || hub.connection(&dialed))))
     }
 
     pub fn connection(&self, server: &str) -> Result<Arc<Connection>, String> {
@@ -412,10 +430,11 @@ impl Hub {
     pub fn model(&self) -> Model {
         let state = lock(&self.state);
         let version = self.versions.fetch_add(1, Ordering::Relaxed);
-        Model { version, lists: lists(&state.caches), tasks: task_views(&state.caches) }
+        let tasks = task_views(&state.caches, |server, holder| state.held_here(&self.me, server, holder));
+        Model { version, lists: lists(&state.caches), tasks }
     }
 
-    pub fn servers(&self) -> Vec<ServerView> {
+    pub(crate) fn servers(&self) -> Vec<ServerView> {
         let state = lock(&self.state);
         state
             .links
@@ -448,9 +467,10 @@ impl Hub {
         let state = lock(&self.state);
         let mut listeners = BTreeMap::new();
         for (server, cache) in &state.caches {
-            let Some(Link { connection: Some(connection), address, .. }) = state.links.get(server) else { continue };
+            let Some(Link { connection: Some(connection), .. }) = state.links.get(server) else { continue };
             let held = cache.tasks.values().flat_map(|task| &task.panels).filter(|panel| {
-                panel.listening && panel.lock_holder.as_ref().is_some_and(|holder| self.me.holds(holder, address))
+                panel.listening
+                    && panel.lock_holder.as_ref().is_some_and(|holder| state.held_here(&self.me, server, holder))
             });
             for panel in held {
                 listeners.insert((server.clone(), panel.id.clone()), Arc::clone(connection));

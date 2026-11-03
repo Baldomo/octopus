@@ -32,25 +32,18 @@ mod tests {
     }
 
     #[test]
-    fn an_earlier_entry_keeps_its_key_and_is_dialled_through_a_relay_alone() {
-        use crate::servers::{Servers, migrate_entries};
-        let (key, desk) = (DeviceKey::generate().public(), DeviceKey::generate().public());
+    fn a_remote_entry_sheds_its_addresses_and_keeps_its_key_and_relay() {
+        use crate::servers::{Servers, strip_addresses};
+        let desk = DeviceKey::generate().public();
         let relay = "https://relay.example./";
         let mut listed = serde_json::json!({"servers": [
             {"name": "laptop", "address": {"path": "local", "socket": "/tmp/octopus.sock"}},
-            {"name": "mac-mini", "address": {"path": "quic", "endpoint": "127.0.0.1:7300", "key": key}},
             {"name": "desk", "address": {"path": "remote", "key": desk, "relay": relay, "addresses": ["127.0.0.1:7300"]}},
         ]});
-        assert!(migrate_entries(&mut listed).expect("migrate"));
-        let servers: Servers = serde_json::from_value(listed.clone()).expect("the migrated list parses");
-        let n0 = octopus_proto::remote::N0_EU_RELAY.parse().expect("n0's relay");
-        assert_eq!(servers.servers[1].address, Address::Remote { key, relay: n0 });
-        assert_eq!(servers.servers[2].address, Address::Remote { key: desk, relay: relay.parse().expect("a relay") });
-        assert!(!migrate_entries(&mut listed).expect("migrate again"), "a migrated list stays as it is");
-        let mut keyless = serde_json::json!({"servers": [
-            {"name": "desk", "address": {"path": "quic", "endpoint": "127.0.0.1:7300"}},
-        ]});
-        assert!(migrate_entries(&mut keyless).is_err(), "an entry with no key has nothing to pin");
+        assert!(strip_addresses(&mut listed));
+        let servers: Servers = serde_json::from_value(listed.clone()).expect("the stripped list parses");
+        assert_eq!(servers.servers[1].address, Address::Remote { key: desk, relay: relay.parse().expect("a relay") });
+        assert!(!strip_addresses(&mut listed), "a stripped list stays as it is");
     }
 
     #[test]

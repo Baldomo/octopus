@@ -5,14 +5,14 @@ use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use octopus_client::Connection;
-use octopus_proto::types::{MIC_FORMAT, PtyId, Stream};
+use octopus_proto::types::{MIC_DEVICE, MIC_FORMAT, PtyId, Stream};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::broadcast;
 
 use crate::lock;
 
 /// Whether the OS refuses this client its microphone, which the UI marks on a listening terminal it holds.
-pub const MICROPHONE_DENIED_EVENT: &str = "microphone_denied";
+pub(crate) const MICROPHONE_DENIED_EVENT: &str = "microphone_denied";
 
 /// Chunks of captured audio waiting for a slow stream; one that falls further behind skips ahead.
 const BACKLOG: usize = 64;
@@ -23,7 +23,7 @@ pub type Listener = (String, PtyId);
 pub type Chunk = Arc<[u8]>;
 
 /// Linear resampling of mono `f32` to `MIC_FORMAT`, carrying its position across calls.
-pub struct Resampler {
+pub(crate) struct Resampler {
     step: f64,
     position: f64,
     previous: f32,
@@ -35,7 +35,7 @@ impl Resampler {
     }
 
     /// Takes `frames` of `channels` interleaved samples, mixes them to mono, and returns `MIC_FORMAT` bytes.
-    pub fn convert(&mut self, frames: &[f32], channels: usize) -> Vec<u8> {
+    pub(crate) fn convert(&mut self, frames: &[f32], channels: usize) -> Vec<u8> {
         let mono: Vec<f32> =
             frames.chunks_exact(channels).map(|frame| frame.iter().sum::<f32>() / channels as f32).collect();
         let mut out = Vec::new();
@@ -64,7 +64,7 @@ pub struct Capture {
 }
 
 /// Opens the source a capture sends.
-pub type OpenCapture = Box<dyn Fn() -> Result<Capture, String> + Send + Sync>;
+pub(crate) type OpenCapture = Box<dyn Fn() -> Result<Capture, String> + Send + Sync>;
 
 impl Capture {
     /// A source whose audio comes on `audio` while `running` lives.
@@ -94,11 +94,10 @@ impl Capture {
     }
 }
 
-/// The device a remote holder makes this machine's default input, which carries a terminal's audio, not this user's.
-const OCTOPUS_MICROPHONE: &str = "Octopus Microphone";
-
+/// Whether `device` is the Octopus Microphone, which a remote holder makes this machine's default input and which
+/// carries a terminal's audio, not this user's.
 fn is_octopus(device: &cpal::Device) -> bool {
-    device.description().is_ok_and(|description| description.name() == OCTOPUS_MICROPHONE)
+    device.description().is_ok_and(|description| description.name() == MIC_DEVICE.name)
 }
 
 /// The default input, or the first other one while the default is the Octopus Microphone.
@@ -152,7 +151,7 @@ pub enum Access {
 
 /// Asks the OS whether this client may record, which may ask the user and wait for the answer; an OS that fails to
 /// answer says why.
-pub type AskAccess = Box<dyn Fn() -> Result<Access, String> + Send + Sync>;
+pub(crate) type AskAccess = Box<dyn Fn() -> Result<Access, String> + Send + Sync>;
 
 type Listeners = BTreeMap<Listener, Arc<Connection>>;
 
@@ -176,7 +175,7 @@ struct Sending {
 }
 
 /// Hears whether access is denied, each time that changes.
-pub type DeniedChanged = Box<dyn Fn(bool) + Send + Sync>;
+pub(crate) type DeniedChanged = Box<dyn Fn(bool) + Send + Sync>;
 
 pub struct Microphone {
     ask: AskAccess,

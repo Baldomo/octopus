@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { EVENTS } from "./generated";
+import { COMMANDS, EVENTS } from "./generated";
 import type {
   Boot,
   Entry,
@@ -23,7 +23,7 @@ import type {
 } from "./generated";
 
 /** Every command of the client app's core, which the app adds as its `octopus` plugin. */
-const octopus = (command: string) => `plugin:octopus|${command}`;
+const octopus = (command: (typeof COMMANDS)[number]) => `plugin:octopus|${command}`;
 
 const UTF8 = new TextDecoder("utf-8", { fatal: true });
 const asciiEscape = (char: string) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`;

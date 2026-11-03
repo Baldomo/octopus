@@ -18,6 +18,11 @@ pub enum Shape {
         value: Box<Shape>,
         none: &'static str,
     },
+    /// Text, or `word` for `means`; the wire carries either as text.
+    Keyword {
+        word: &'static str,
+        means: &'static str,
+    },
     List(Box<Shape>),
     Record(Vec<Field>),
 }
@@ -49,6 +54,15 @@ fn at(path: &str, field: &str) -> String {
 }
 
 impl Shape {
+    /// The word the CLI takes for a value spelled by no text of its own, and what it stands for.
+    pub fn keyword(&self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::Nullable { none, .. } => Some(("none", none)),
+            Self::Keyword { word, means } => Some((word, means)),
+            _ => None,
+        }
+    }
+
     /// Type mismatches are left to serde, which names the first one.
     fn check(&self, value: &Value, path: &str, found: &mut Violations) {
         match (self, value) {

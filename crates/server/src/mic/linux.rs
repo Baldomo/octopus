@@ -100,7 +100,7 @@ struct Inner {
     feeding: Mutex<HashSet<PtyId>>,
 }
 
-pub struct Platform {
+pub(crate) struct Platform {
     inner: Arc<Inner>,
 }
 
@@ -139,9 +139,9 @@ impl Platform {
 
     pub fn started(&self, _id: &PtyId) {}
 
-    pub fn remote_held(&self, _terminals: HashSet<PtyId>) {}
+    pub(crate) fn remote_held(&self, _terminals: HashSet<PtyId>) {}
 
-    pub fn streaming(&self, _id: &PtyId, _streaming: bool) {}
+    pub(crate) fn streaming(&self, _id: &PtyId, _streaming: bool) {}
 }
 
 impl Inner {

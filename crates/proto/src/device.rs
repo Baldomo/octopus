@@ -31,13 +31,13 @@ impl PublicKey {
         hex::encode(self.as_bytes())
     }
 
-    pub fn from_bytes(bytes: &[u8; 32]) -> Result<Self, String> {
+    pub(crate) fn from_bytes(bytes: &[u8; 32]) -> Result<Self, String> {
         iroh::EndpointId::from_bytes(bytes)
             .map(Self)
             .map_err(|_| format!("{} is not an ed25519 point", hex::encode(bytes)))
     }
 
-    pub fn from_hex(encoded: &str) -> Result<Self, String> {
+    pub(crate) fn from_hex(encoded: &str) -> Result<Self, String> {
         let bytes: [u8; 32] = hex::decode(encoded)
             .map_err(|error| format!("{encoded:?}: {error}"))?
             .try_into()

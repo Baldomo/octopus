@@ -1,7 +1,7 @@
 import { createSignal, For, Show } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import { LIVE_STATES, type PtyId, TASK_STATES, type TaskView } from "@octopus/shared/generated.ts";
-import { ticking } from "@octopus/shared/SidebarControls.tsx";
+import { ticking } from "@octopus/shared/time.ts";
 import { act, model, report, serverLabel, serverView } from "@octopus/shared/state.ts";
 import { feel } from "./feel";
 import { Icon } from "./Icon";
@@ -14,7 +14,7 @@ import { notify } from "./Toast";
 
 function Facts(props: { view: TaskView; panel: PtyId | null }) {
   const now = ticking();
-  const panel = () => props.view.task.panels.find((each) => each.id === props.panel);
+  const panel = () => props.view.panels.find((each) => each.id === props.panel);
   const held = () => {
     const shown = panel();
     return shown?.running && shown.lock_holder !== null ? shown : null;
@@ -37,11 +37,11 @@ function Facts(props: { view: TaskView; panel: PtyId | null }) {
           }
         </Id>
       </span>
-      <Show when={props.view.task.branch}>
-        {(branch) => (
+      <Show when={props.view.task.checkout.kind === "worktree" && props.view.task.checkout}>
+        {(worktree) => (
           <span class="chip">
             <Icon name="branch" />
-            <span class="mono">{branch()}</span>
+            <span class="mono">{worktree().branch}</span>
           </span>
         )}
       </Show>

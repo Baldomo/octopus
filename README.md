@@ -15,12 +15,12 @@ A task manager for coding agents, written in Rust. It runs on macOS and Linux, w
 |------|---------|
 | build the UI (do this before any cargo command) | `npm --prefix ui ci && npm --prefix ui run build` |
 | typecheck the UI and check its formatting | `npm --prefix ui run typecheck && npm --prefix ui run format:check` |
-| regenerate the UI's types after changing a type it uses | `cargo run -p octopus-shell --example types && cargo run -p octopus-desktop --example types` |
+| regenerate the UI's types after changing a type it uses | `cargo run -p octopus-desktop --example types` |
 | regenerate the skill after changing an op or a command | `cargo run -p octopus-cli --example skill` |
-| regenerate the app icons after changing `logo/` (this strips the iOS icons' alpha channel, which App Store validation rejects, and cuts the desktop icon to the macOS rounded square, since the Dock draws it unmasked) | `(cd crates/mobile && cargo tauri icon ../../logo/icon.json) && git clean -fdq crates/mobile/icons && swift logo/flatten.swift crates/mobile/gen/apple/Assets.xcassets/AppIcon.appiconset/*.png && swift logo/macos.swift logo/octopus.png crates/desktop/icons/icon.png` |
+| regenerate the app icons after changing `logo/` (this strips the iOS icons' alpha channel, which App Store validation rejects, and cuts the desktop icon to the macOS rounded square, since the Dock draws it unmasked) | `(cd crates/mobile && cargo tauri icon ../../logo/icon.json) && git clean -fdq crates/mobile/icons crates/mobile/gen/android/app/src/main/res && swift logo/flatten.swift crates/mobile/gen/apple/Assets.xcassets/AppIcon.appiconset/*.png && swift logo/macos.swift logo/octopus.png crates/desktop/icons/icon.png` |
 | typecheck | `cargo check --workspace` |
 | check formatting | `cargo fmt --all --check` |
-| lint | `cargo clippy --workspace --all-targets -- -D warnings` |
+| lint | `cargo clippy --workspace --all-targets -- -D warnings && cargo clippy -p octopus-cli --no-default-features -- -D warnings` |
 | run all tests | `cargo nextest run --workspace && npm --prefix ui test` |
 | install the phone app's tooling (once) | `cargo install tauri-cli --version '^2' --locked && rustup target add aarch64-apple-ios-sim aarch64-linux-android` |
 | run the phone app on the Android emulator (after building the UI, with `JAVA_HOME`, `ANDROID_HOME` and `NDK_HOME` set) | `(cd crates/mobile && cargo tauri android build --debug --target aarch64 --apk) && adb install -r crates/mobile/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk && adb shell am start -n com.noi.octopus/.MainActivity` |

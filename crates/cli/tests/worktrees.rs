@@ -9,7 +9,9 @@ use octopus_proto::ops::{
     SessionSync, TaskArchive, TaskCreate, TaskMove, TaskRename, TaskSetParent, WorkspaceAdd, WorkspaceList,
     WorkspaceRemove, WorkspaceRename, WorkspaceSetColor,
 };
-use octopus_proto::types::{Checkout, Color, Hue, Swatch, TaskId, TaskState, Tone, WorkspaceId};
+use octopus_proto::types::{
+    Checkout, CheckoutKind, Color, Hue, SessionStart, Swatch, TaskId, TaskState, Tone, WorkspaceId,
+};
 use octopus_proto::{Error, Event, Op, Outcome};
 use octopus_server::WORKTREE_LIFETIME_MS;
 use serde_json::json;
@@ -31,11 +33,11 @@ async fn a_worktree_lives_on_its_branch_until_its_lifetime_after_the_task_ends()
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, &repo).await;
 
-    let id = create(&laptop, &workspace, Checkout::Worktree, "none").await;
+    let id = create(&laptop, &workspace, CheckoutKind::Worktree, "none").await;
     let view = task(&laptop, &id).await;
     let directory = dir.path().join("worktrees").join("octopus").join(&id.0);
     assert_eq!(Path::new(&view.directory), directory);
-    assert_eq!(view.branch.as_deref(), Some("task/strict-serde"));
+    assert_eq!(view.checkout, Checkout::Worktree { branch: "task/strict-serde".into() });
     assert_eq!(git(&directory, &["branch", "--show-current"]), "task/strict-serde");
 
     laptop.call(&TaskMove { task: id.clone(), state: TaskState::Completed }).await.expect("complete");
@@ -94,18 +96,21 @@ async fn a_workspace_renames_and_recolors_in_place_and_goes_with_its_tasks_once_
     let plaid = laptop.call_raw(WorkspaceSetColor::NAME, json!({"workspace": doomed, "color": "plaid"})).await;
     assert!(matches!(plaid.expect("call"), Outcome::Err(Error::InvalidArgs { .. })));
 
-    let id = create(&laptop, &doomed, Checkout::Worktree, "none").await;
+    let id = create(&laptop, &doomed, CheckoutKind::Worktree, "none").await;
     laptop.call(&TaskRename { task: id.clone(), title: "Renamed".into() }).await.expect("task.rename");
     let view = task(&laptop, &id).await;
-    assert_eq!((view.title.as_str(), view.branch.as_deref()), ("Renamed", Some("task/strict-serde")));
+    assert_eq!(
+        (view.title.as_str(), view.checkout),
+        ("Renamed", Checkout::Worktree { branch: "task/strict-serde".into() })
+    );
     let child = TaskCreate {
         workspace: other,
         title: "child".into(),
         parent: Some(id.clone()),
         state: TaskState::Pinned,
-        checkout: Checkout::Root,
+        checkout: CheckoutKind::Root,
         harness: "none".into(),
-        session: None,
+        session: SessionStart::Fresh,
     };
     let child = laptop.call(&child).await.expect("task.create").task;
 
@@ -126,7 +131,7 @@ async fn only_an_ended_task_archives_and_a_move_unarchives_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let running = start(dir.path(), "server.sock", "host.sock").await;
     let laptop = connect(&running, "laptop").await;
-    let id = create(&laptop, &workspace(&laptop, dir.path()).await, Checkout::Root, "none").await;
+    let id = create(&laptop, &workspace(&laptop, dir.path()).await, CheckoutKind::Root, "none").await;
     let archive = TaskArchive { task: id.clone() };
     assert!(matches!(refused(laptop.call(&archive).await), Error::Conflict { .. }));
     let empty = TaskRename { task: id.clone(), title: "".into() };
@@ -157,9 +162,9 @@ async fn a_task_nests_under_another_task_of_its_workspace_outside_its_own_subtre
             title: "t".into(),
             parent: parent.cloned(),
             state,
-            checkout: Checkout::Root,
+            checkout: CheckoutKind::Root,
             harness: "none".into(),
-            session: None,
+            session: SessionStart::Fresh,
         };
         laptop.call(&create).await.expect("task.create").task
     };

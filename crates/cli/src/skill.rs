@@ -68,7 +68,7 @@ pub fn render(tree: &Command) -> String {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop"))]
 mod tests {
     #[test]
     fn the_skill_documents_the_current_commands() {

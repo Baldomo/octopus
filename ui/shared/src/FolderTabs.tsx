@@ -2,7 +2,8 @@ import { createSignal, For, Show } from "solid-js";
 import { animateList } from "./flip";
 import { Glyph } from "./Glyph";
 import { keepInView } from "./keepInView";
-import { liftTab, type LiftOnDrag, type Within } from "./lift";
+import type { LiftOnDrag, Within } from "./lift";
+import { liftTab } from "./liftTab";
 import { inOrder } from "./sectionOrder";
 
 /**
@@ -19,7 +20,7 @@ export type FolderTab = {
 };
 
 /** A tab that adds a page: + after the last tab, raised while the page it adds is the selected one. */
-export type AddTab = { title: string; selected: boolean; run: () => void };
+type AddTab = { title: string; selected: boolean; run: () => void };
 
 const IN_TABS: Within = { stage: ".ftabs", list: ".etabs", free: false };
 

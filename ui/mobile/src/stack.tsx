@@ -16,7 +16,7 @@ const THROW = 0.5;
 const PREDICTIVE_REACH = 0.4;
 
 /** A gesture that can carry the top sheet back, which the sheet up registers while it shows. */
-export type BackDrive = { start: () => void; move: (progress: number) => void; cancel: () => void };
+type BackDrive = { start: () => void; move: (progress: number) => void; cancel: () => void };
 let sheetDrive: BackDrive | null = null;
 export const driveSheetBack = (drive: BackDrive) => (sheetDrive = drive);
 export const releaseSheetBack = (drive: BackDrive) => sheetDrive === drive && (sheetDrive = null);

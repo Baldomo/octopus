@@ -14,7 +14,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWrite
 use tokio::sync::{Semaphore, broadcast, mpsc};
 
 use crate::client::Client;
-use crate::service::{Refusal, Terminal};
+use crate::terminals::{Refusal, Terminal};
 use crate::{Server, report};
 
 const WORKTREE_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);

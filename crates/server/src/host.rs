@@ -5,12 +5,10 @@
 //! bytes to it.
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -24,16 +22,14 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
 
-use crate::client::Client;
-use crate::pty::{Activity, Attachment, INITIAL_SIZE, Pty};
-use crate::{lock, now, report};
+use crate::pty::{Activity, Attachment, Pty};
+use crate::{lock, report};
 
 /// Bumped whenever an existing request or reply changes shape; a server refuses a host that speaks another. A host
 /// older than a request added since refuses that request.
 const PROTOCOL: u32 = 3;
 const HOST_START: Duration = Duration::from_secs(5);
 const HOST_START_POLL: Duration = Duration::from_millis(5);
-const WAIT_RETRY: Duration = Duration::from_secs(1);
 const INPUT_BYTES: usize = 4096;
 
 #[derive(Debug, Clone)]
@@ -66,7 +62,7 @@ struct Listing {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Hosted {
+pub(crate) struct Hosted {
     pub id: PtyId,
     pub running: bool,
 }
@@ -242,7 +238,7 @@ async fn forward_input<R: AsyncRead + Unpin>(pty: Arc<Pty>, mut read: R) {
     }
 }
 
-pub struct HostClient {
+pub(crate) struct HostClient {
     address: PathBuf,
 }
 
@@ -251,7 +247,7 @@ fn host_error(address: &Path, error: impl std::fmt::Display) -> Error {
 }
 
 impl HostClient {
-    pub fn reach_or_start(host: &TerminalHost) -> Result<Self, Error> {
+    pub(crate) fn reach_or_start(host: &TerminalHost) -> Result<Self, Error> {
         let address = host.address.clone();
         if local::connect_blocking(&address).is_ok() {
             return Ok(Self { address });
@@ -311,7 +307,7 @@ impl HostClient {
     }
 
     /// Whether anything still answers at the host's address.
-    fn reachable(&self) -> bool {
+    pub(crate) fn reachable(&self) -> bool {
         local::connect_blocking(&self.address).is_ok()
     }
 
@@ -322,240 +318,24 @@ impl HostClient {
     pub fn forget(&self, id: &PtyId) -> Result<(), Error> {
         self.call(&HostRequest::Forget { id: id.clone() })
     }
-}
 
-/// The server's handle on a hosted terminal: the server holds the client write lock, the host holds the process
-/// and its output.
-pub struct Terminal {
-    pub id: PtyId,
-    host: Arc<HostClient>,
-    running: AtomicBool,
-    screen: Mutex<Screen>,
-    input: Mutex<Option<BlockingStream>>,
-}
-
-/// The lock holder and the size it set change together, so every client sees a size its holder chose. `viewers`
-/// counts each client's open data streams of the terminal, and `shows` how many it ever opened, so a grace that
-/// started before a client showed the terminal again frees nothing. `unshown_at` is when the last viewer left, or
-/// when the server took the terminal.
-#[derive(Clone)]
-pub struct Screen {
-    pub holder: Option<Client>,
-    pub cols: u16,
-    pub rows: u16,
-    viewers: HashMap<Client, usize>,
-    shows: HashMap<Client, u64>,
-    unshown_at: i64,
-}
-
-/// Why a client may not act through a terminal's lock: another client holds it, no client does, or the act failed.
-#[derive(Debug)]
-pub enum Refusal {
-    HeldBy(Client),
-    Free,
-    Failed(Error),
-}
-
-impl From<Error> for Refusal {
-    fn from(error: Error) -> Self {
-        Self::Failed(error)
-    }
-}
-
-impl Screen {
-    fn check_holder(&self, client: &Client) -> Result<(), Refusal> {
-        match &self.holder {
-            Some(holder) if holder == client => Ok(()),
-            Some(holder) => Err(Refusal::HeldBy(holder.clone())),
-            None => Err(Refusal::Free),
-        }
-    }
-}
-
-impl Terminal {
-    pub fn new(id: PtyId, host: Arc<HostClient>, running: bool) -> Self {
-        let (cols, rows) = INITIAL_SIZE;
-        let screen = Mutex::new(Screen {
-            holder: None,
-            cols,
-            rows,
-            viewers: HashMap::new(),
-            shows: HashMap::new(),
-            unshown_at: now(),
-        });
-        Self { id, host, running: AtomicBool::new(running), screen, input: Mutex::new(None) }
+    pub(crate) fn wait_exit(&self, id: &PtyId) -> Result<(), Error> {
+        self.call(&HostRequest::WaitExit { id: id.clone() })
     }
 
-    pub fn running(&self) -> bool {
-        self.running.load(Ordering::Relaxed)
+    pub(crate) fn input(&self, id: &PtyId) -> Result<BlockingStream, Error> {
+        Ok(self.open(&HostRequest::Input { id: id.clone() })?.0)
     }
 
-    /// Blocks until the host reports the exit or stops answering; a failed wait on a host that still answers is
-    /// asked again, so a passing failure never marks a live agent exited.
-    pub fn wait_exit(&self) -> Result<(), Error> {
-        let waited = loop {
-            match self.host.call(&HostRequest::WaitExit { id: self.id.clone() }) {
-                Err(error) if !matches!(error, Error::NotFound { .. }) && self.host.reachable() => {
-                    report!("waiting on {}: {error}; asking again", self.id);
-                    std::thread::sleep(WAIT_RETRY);
-                }
-                waited => break waited,
-            }
-        };
-        self.running.store(false, Ordering::Relaxed);
-        waited
+    pub(crate) fn resize(&self, id: &PtyId, cols: u16, rows: u16) -> Result<(), Error> {
+        self.call(&HostRequest::Resize { id: id.clone(), cols, rows })
     }
 
-    pub fn screen(&self) -> Screen {
-        lock(&self.screen).clone()
+    pub(crate) fn activity(&self, id: &PtyId) -> Result<Activity, Error> {
+        self.call(&HostRequest::Activity { id: id.clone() })
     }
 
-    /// Gives `client` a free lock sized to `cols`×`rows`, or resizes the one it holds; reports whether the screen
-    /// changed.
-    pub fn claim(&self, client: &Client, cols: u16, rows: u16) -> Result<bool, Refusal> {
-        let mut screen = lock(&self.screen);
-        if let Some(other) = screen.holder.as_ref().filter(|holder| *holder != client) {
-            return Err(Refusal::HeldBy(other.clone()));
-        }
-        let resized = self.set_size(&mut screen, cols, rows)?;
-        let moved = screen.holder.is_none();
-        screen.holder = Some(client.clone());
-        Ok(resized || moved)
-    }
-
-    pub fn show(&self, client: &Client) {
-        let mut screen = lock(&self.screen);
-        *screen.viewers.entry(client.clone()).or_default() += 1;
-        *screen.shows.entry(client.clone()).or_default() += 1;
-    }
-
-    /// How many times `client` has shown the terminal: a grace checks it is still the count it started at.
-    pub fn shows(&self, client: &Client) -> u64 {
-        lock(&self.screen).shows.get(client).copied().unwrap_or(0)
-    }
-
-    pub fn unshow(&self, client: &Client) {
-        let mut screen = lock(&self.screen);
-        if let Some(count) = screen.viewers.get_mut(client) {
-            *count -= 1;
-            if *count == 0 {
-                screen.viewers.remove(client);
-            }
-        }
-        if screen.viewers.is_empty() {
-            screen.unshown_at = now();
-        }
-    }
-
-    /// Since when no client shows the terminal, or `None` while one does.
-    pub fn unshown_since(&self) -> Option<i64> {
-        let screen = lock(&self.screen);
-        screen.viewers.is_empty().then_some(screen.unshown_at)
-    }
-
-    pub fn holds(&self, client: &Client) -> bool {
-        lock(&self.screen).holder.as_ref() == Some(client)
-    }
-
-    /// Whether `client` holds the lock and shows the terminal nowhere.
-    pub fn held_unshown(&self, client: &Client) -> bool {
-        let screen = lock(&self.screen);
-        screen.holder.as_ref() == Some(client) && !screen.viewers.contains_key(client)
-    }
-
-    /// Frees the lock when `client` holds it, shows the terminal nowhere, and has not shown it again since `shows`
-    /// was read; reports whether it did.
-    pub fn free_if_unshown(&self, client: &Client, shows: u64) -> bool {
-        let mut screen = lock(&self.screen);
-        let unshown = screen.holder.as_ref() == Some(client)
-            && !screen.viewers.contains_key(client)
-            && screen.shows.get(client).copied().unwrap_or(0) == shows;
-        if unshown {
-            screen.holder = None;
-        }
-        unshown
-    }
-
-    /// Frees the lock when `client` holds it, however it shows the terminal; reports whether it did.
-    pub fn free(&self, client: &Client) -> bool {
-        let mut screen = lock(&self.screen);
-        let held = screen.holder.as_ref() == Some(client);
-        if held {
-            screen.holder = None;
-        }
-        held
-    }
-
-    /// Gives `client` the lock from whoever holds it, sized to `cols`×`rows`; reports whether the screen changed.
-    pub fn take(&self, client: &Client, cols: u16, rows: u16) -> Result<bool, Refusal> {
-        let mut screen = lock(&self.screen);
-        let resized = self.set_size(&mut screen, cols, rows)?;
-        let moved = screen.holder.as_ref() != Some(client);
-        screen.holder = Some(client.clone());
-        Ok(resized || moved)
-    }
-
-    fn set_size(&self, screen: &mut Screen, cols: u16, rows: u16) -> Result<bool, Error> {
-        if cols == 0 || rows == 0 {
-            return Err(Error::invalid(format!("a terminal is at least 1×1, not {cols}×{rows}")));
-        }
-        if (screen.cols, screen.rows) == (cols, rows) {
-            return Ok(false);
-        }
-        self.host.call::<()>(&HostRequest::Resize { id: self.id.clone(), cols, rows })?;
-        (screen.cols, screen.rows) = (cols, rows);
-        Ok(true)
-    }
-
-    pub fn check_holder(&self, client: &Client) -> Result<(), Refusal> {
-        lock(&self.screen).check_holder(client)
-    }
-
-    /// Writes only while `client` still holds the lock it claimed earlier.
-    pub fn write_as(&self, client: &Client, bytes: &[u8]) -> Result<(), Refusal> {
-        self.check_holder(client)?;
-        if !self.running() {
-            return Err(Error::conflict(format!("{} has exited", self.id)).into());
-        }
-        let mut input = lock(&self.input);
-        let mut stream = match input.take() {
-            Some(stream) => stream,
-            None => self.host.open(&HostRequest::Input { id: self.id.clone() })?.0,
-        };
-        stream.write_all(bytes).map_err(|error| Error::internal(format!("input to {}: {error}", self.id)))?;
-        *input = Some(stream);
-        Ok(())
-    }
-
-    /// Resizes for the holder alone; reports whether the size changed.
-    pub fn resize(&self, client: &Client, cols: u16, rows: u16) -> Result<bool, Refusal> {
-        let mut screen = lock(&self.screen);
-        screen.check_holder(client)?;
-        Ok(self.set_size(&mut screen, cols, rows)?)
-    }
-
-    pub fn reset_size(&self) -> Result<(), Error> {
-        let (cols, rows) = INITIAL_SIZE;
-        self.host.call(&HostRequest::Resize { id: self.id.clone(), cols, rows })
-    }
-
-    pub fn activity(&self) -> Result<Activity, Error> {
-        self.host.call(&HostRequest::Activity { id: self.id.clone() })
-    }
-
-    pub fn terminate(&self) -> Result<(), Error> {
-        self.host.call(&HostRequest::Terminate { id: self.id.clone() })
-    }
-
-    /// Ends the terminal and drops its scrollback; a terminal the host no longer has is already gone.
-    pub fn forget(&self) -> Result<(), Error> {
-        match self.host.forget(&self.id) {
-            Err(Error::NotFound { .. }) => Ok(()),
-            forgot => forgot,
-        }
-    }
-
-    pub async fn attach(&self) -> Result<local::Stream, Error> {
-        self.host.attach(&self.id).await
+    pub(crate) fn terminate(&self, id: &PtyId) -> Result<(), Error> {
+        self.call(&HostRequest::Terminate { id: id.clone() })
     }
 }
