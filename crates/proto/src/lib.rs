@@ -9,8 +9,8 @@ pub mod term;
 pub mod types;
 
 pub use frames::{
-    Error, Event, Op, Outcome, Push, Request, Response, ServerFrame, StreamHeader, line, parse_args, parse_request,
-    request_from,
+    Error, Event, FileSize, Op, Outcome, Push, Request, Response, ServerFrame, StreamHeader, line, parse_args,
+    parse_request, request_from,
 };
 
 #[cfg(test)]
@@ -67,16 +67,18 @@ mod tests {
     }
 
     #[test]
-    fn a_stream_name_round_trips() {
-        use types::{PtyId, Stream, TaskId};
-        let file = Stream::File { task: TaskId("tsk_1".into()), path: "src/main.rs".into() };
-        assert_eq!(file.name(), "file:tsk_1/src/main.rs");
-        assert_eq!(Stream::parse(&file.name()), Some(file));
-        let upload = Stream::Upload { task: TaskId("tsk_1".into()), bytes: 4, path: "logo.png".into() };
-        assert_eq!(Stream::parse(&upload.name()), Some(upload));
-        assert_eq!(Stream::parse("pty:pty_2"), Some(Stream::Pty(PtyId("pty_2".into()))));
-        assert_eq!(Stream::parse(&Stream::Tunnel(5173).name()), Some(Stream::Tunnel(5173)));
-        assert_eq!(Stream::parse("tunnel:http"), None);
+    fn a_stream_header_names_its_stream_as_json() {
+        use types::{PtyId, ReadDir, Stream, TaskId};
+        let read =
+            Stream::Read { dir: ReadDir::Checkout(TaskId("tsk_1".into())), path: "a.mp4".into(), start: 2, len: 3 };
+        let header = StreamHeader { open: read, client: "laptop".into() };
+        let wire = serde_json::to_value(&header).unwrap();
+        let expected = json!({"read": {"dir": {"checkout": "tsk_1"}, "path": "a.mp4", "start": 2, "len": 3}});
+        assert_eq!(wire, json!({"open": expected, "client": "laptop"}));
+        assert_eq!(serde_json::from_value::<StreamHeader>(wire).unwrap(), header);
+        assert_eq!(serde_json::to_value(Stream::Pty(PtyId("pty_2".into()))).unwrap(), json!({"pty": "pty_2"}));
+        let stray = json!({"open": {"tunnel": 5173}, "client": "laptop", "zoom": 1});
+        assert!(serde_json::from_value::<StreamHeader>(stray).is_err());
     }
 
     #[test]

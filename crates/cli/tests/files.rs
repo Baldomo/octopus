@@ -7,9 +7,9 @@ use octopus_client::CallError;
 use octopus_proto::ops::{
     Entry, EntryKind, FileCopy, FileCreate, FileDelete, FileList, FileMove, FileSearch, FileWrite, Match, TaskFocus,
 };
-use octopus_proto::types::{CheckoutKind, Stream};
+use octopus_proto::types::{CheckoutKind, ReadDir, Stream};
 use octopus_proto::{Error, Event, Outcome};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_client_works_on_a_tasks_files_through_its_server() {
@@ -25,12 +25,12 @@ async fn a_client_works_on_a_tasks_files_through_its_server() {
 
     let write = FileWrite { task: task.clone(), path: "src/main.rs".into(), content: "fn main() {}\n".into() };
     assert_eq!(laptop.call(&write).await.expect("file.write").bytes, 13);
-    let main = Stream::File { task: task.clone(), path: "src/main.rs".into() };
-    let mut bytes = Vec::new();
-    laptop.open_data_stream(&main).await.expect("open").read_to_end(&mut bytes).await.expect("read");
-    assert_eq!(bytes, b"fn main() {}\n");
-    let absent = Stream::File { task: task.clone(), path: "absent.rs".into() };
-    assert!(matches!(laptop.open_data_stream(&absent).await, Err(CallError::Server(Error::NotFound { .. }))));
+    let read = |path, start, len| common::read(&laptop, ReadDir::Checkout(task.clone()), path, start, len);
+    assert_eq!(read("src/main.rs", 0, Stream::TO_END).await.expect("read"), (13, b"fn main() {}\n".to_vec()));
+    assert_eq!(read("src/main.rs", 3, 4).await.expect("a range"), (13, b"main".to_vec()));
+    assert_eq!(read("src/main.rs", 13, 4).await.expect("a range at the end"), (13, vec![]));
+    assert!(matches!(read("absent.rs", 0, 1).await, Err(CallError::Server(Error::NotFound { .. }))));
+    assert!(matches!(read("src", 0, 1).await, Err(CallError::Server(Error::NotFound { .. }))));
 
     let entries = laptop.call(&FileList { task: task.clone(), path: ".".into() }).await.expect("file.list").entries;
     assert_eq!(entries, vec![Entry { name: "src".into(), kind: EntryKind::Directory }]);

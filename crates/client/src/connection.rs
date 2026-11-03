@@ -10,8 +10,8 @@ use anyhow::{Context, anyhow};
 use octopus_proto::device::DeviceKey;
 use octopus_proto::ops::{SessionHello, SessionPing};
 use octopus_proto::remote::{Connection as RemoteConnection, Dialer};
-use octopus_proto::types::{LockHolder, Stream, TaskId};
-use octopus_proto::{Error, Op, Outcome, Push, Request, ServerFrame, StreamHeader, line, local};
+use octopus_proto::types::{LockHolder, ReadDir, Stream, TaskId};
+use octopus_proto::{Error, FileSize, Op, Outcome, Push, Request, ServerFrame, StreamHeader, line, local};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::sync::{OnceCell, broadcast, oneshot, watch};
@@ -250,10 +250,21 @@ impl Connection {
     }
 
     pub async fn open_data_stream(&self, stream: &Stream) -> Result<DataStream, CallError> {
-        let header = StreamHeader { open: stream.name(), client: self.client.clone() };
+        self.open(stream).await.map(|(_, opened)| opened)
+    }
+
+    /// Up to `len` bytes of the file `path` names under `dir` from byte `start`, beside the file's size.
+    pub async fn read(&self, dir: ReadDir, path: String, start: u64, len: u64) -> Result<(u64, DataStream), CallError> {
+        let (reply, opened) = self.open(&Stream::Read { dir, path, start, len }).await?;
+        let size: FileSize = serde_json::from_value(reply).context("hear the file's size")?;
+        Ok((size.size, opened))
+    }
+
+    async fn open(&self, stream: &Stream) -> Result<(Value, DataStream), CallError> {
+        let header = StreamHeader { open: stream.clone(), client: self.client.clone() };
         let mut opened = self.link.open().await.context("open the stream")?;
         match octopus_proto::frames::open(&mut opened, &header).await.context("open the stream")? {
-            Outcome::Ok(_) => Ok(opened),
+            Outcome::Ok(reply) => Ok((reply, opened)),
             Outcome::Err(error) => Err(CallError::Server(error)),
         }
     }

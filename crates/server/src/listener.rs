@@ -7,7 +7,8 @@ use octopus_proto::ops::{Done, Paired, PairingPair, SessionHello, SessionPing};
 use octopus_proto::remote::{self, Connection, Endpoint};
 use octopus_proto::types::{PtyId, Stream};
 use octopus_proto::{
-    Error, Op, Outcome, Request, Response, ServerFrame, StreamHeader, line, parse_args, parse_request, request_from,
+    Error, FileSize, Op, Outcome, Request, Response, ServerFrame, StreamHeader, line, parse_args, parse_request,
+    request_from,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -221,11 +222,11 @@ async fn serve_stream<S: AsyncRead + AsyncWrite + Send + 'static>(server: Arc<Se
         return;
     }
     let reply = match serde_json::from_str::<Value>(&first) {
-        Ok(value) if value.get("open").is_some() => match parse_args::<StreamHeader>(&value) {
+        Ok(value) if value.get("open").is_some() => match serde_json::from_value::<StreamHeader>(value) {
             Ok(header) => {
                 return serve_data_stream(server, header.open, peer.stream(header.client), lines, write).await;
             }
-            Err(error) => line(&Outcome::Err(error)),
+            Err(error) => line(&Outcome::Err(Error::invalid(error))),
         },
         Ok(value) => match (request_from(value), peer) {
             (Ok(request), Peer::Paired(key)) if request.op == PairingPair::NAME => {
@@ -324,7 +325,7 @@ where
 }
 
 enum Opened {
-    File(Vec<u8>),
+    Read(u64, tokio::io::Take<tokio::fs::File>),
     Upload(crate::files::Upload),
     Pty(Arc<Terminal>, local::Stream),
     Tunnel(tokio::net::TcpStream),
@@ -335,10 +336,23 @@ fn find_terminal(server: &Server, id: &PtyId) -> Result<Arc<Terminal>, Error> {
     server.terminal(id).ok_or_else(|| Error::not_found(id))
 }
 
-async fn open(server: &Arc<Server>, name: &str, client: &Client) -> Result<Opened, Error> {
-    match Stream::parse(name).ok_or_else(|| Error::invalid(format!("no stream named {name}")))? {
-        Stream::File { task, path } => {
-            Ok(Opened::File(blocking(server, move |server| server.read_file(&task, &path)).await?))
+impl Opened {
+    /// What the open reply carries beside success: a read's file size, and nothing for any other stream.
+    fn reply(&self) -> Option<FileSize> {
+        match self {
+            Self::Read(size, _) => Some(FileSize { size: *size }),
+            Self::Upload(_) | Self::Pty(..) | Self::Tunnel(_) | Self::Mic(_) => None,
+        }
+    }
+}
+
+async fn open(server: &Arc<Server>, stream: Stream, client: &Client) -> Result<Opened, Error> {
+    match stream {
+        Stream::Read { dir, path, start, len } => {
+            let opened =
+                blocking(server, move |server| crate::files::open_read(&server.read_dir(&dir)?, &path, start, len));
+            let (size, bytes) = opened.await?;
+            Ok(Opened::Read(size, bytes))
         }
         Stream::Upload { task, bytes, path } => {
             Ok(Opened::Upload(blocking(server, move |server| server.upload_file(&task, &path, bytes)).await?))
@@ -358,27 +372,21 @@ async fn open(server: &Arc<Server>, name: &str, client: &Client) -> Result<Opene
             Ok(Opened::Mic(terminal))
         }
         Stream::Tunnel(port) => Ok(Opened::Tunnel(crate::browser::dial(port).await?)),
-        Stream::Page { root, path } => Ok(Opened::File(crate::browser::read_page(&root, &path).await?)),
     }
 }
 
-async fn serve_data_stream<R, W>(
-    server: Arc<Server>,
-    open_name: String,
-    client: Client,
-    input: BufReader<R>,
-    mut write: W,
-) where
+async fn serve_data_stream<R, W>(server: Arc<Server>, stream: Stream, client: Client, input: BufReader<R>, mut write: W)
+where
     R: AsyncRead + Unpin + Send,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    let opened = open(&server, &open_name, &client).await;
+    let opened = open(&server, stream, &client).await;
     // The client counts as showing a terminal before it hears the stream opened, so a claim it sends next always
     // finds it showing.
     if let Ok(Opened::Pty(terminal, _)) = &opened {
         terminal.show(&client);
     }
-    let reply = line(&Outcome::from(opened.as_ref().map(drop).map_err(Error::clone)));
+    let reply = line(&Outcome::from(opened.as_ref().map(Opened::reply).map_err(Error::clone)));
     if write.write_all(reply.as_bytes()).await.is_err() {
         if let Ok(Opened::Pty(terminal, _)) = opened {
             blocking(&server, move |server| server.stopped_showing(&client, terminal, true)).await;
@@ -387,8 +395,8 @@ async fn serve_data_stream<R, W>(
     }
     let Ok(opened) = opened else { return };
     match opened {
-        Opened::File(bytes) => {
-            if write.write_all(&bytes).await.is_ok() {
+        Opened::Read(_, mut bytes) => {
+            if tokio::io::copy(&mut bytes, &mut write).await.is_ok() {
                 let _peer_gone = write.shutdown().await;
             }
         }

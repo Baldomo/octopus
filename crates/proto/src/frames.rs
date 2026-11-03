@@ -6,7 +6,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
 use crate::schema::{self, Fields};
-use crate::types::{Task, TaskId, Workspace, WorkspaceId};
+use crate::types::{Stream, Task, TaskId, Workspace, WorkspaceId};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -79,15 +79,21 @@ pub enum ServerFrame {
     Push(Push),
 }
 
-schema::record!(
-    /// The first line of a data stream. The server answers with one `Outcome` line, then the stream's bytes.
-    StreamHeader {
-        /// The data stream's name, `<kind>:<key>`.
-        open: String,
-        /// The client's name, as on its control connection.
-        client: String,
-    }
-);
+/// The first line of a data stream. The server answers with one `Outcome` line, then the stream's bytes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StreamHeader {
+    pub open: Stream,
+    /// The client's name, as on its control connection.
+    pub client: String,
+}
+
+/// What the open reply of a `Stream::Read` carries.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileSize {
+    pub size: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, thiserror::Error)]
 #[serde(tag = "code", rename_all = "snake_case", deny_unknown_fields)]
@@ -145,7 +151,7 @@ pub fn line(frame: &impl Serialize) -> String {
     line
 }
 
-/// Parses an op's args or a stream header, reporting every absent field at every depth at once and rejecting any
+/// Parses an op's args, reporting every absent field at every depth at once and rejecting any
 /// undeclared one.
 pub fn parse_args<T: Fields + DeserializeOwned>(args: &Value) -> Result<T, Error> {
     schema::check(T::fields(), args)?;

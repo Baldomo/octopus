@@ -6,12 +6,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use octopus_client::servers::Address;
-use octopus_client::{Connection, Identity};
+use octopus_client::{CallError, Connection, Identity};
 use octopus_proto::device::DeviceKey;
 use octopus_proto::local::Listener;
 use octopus_proto::ops::{TaskCreate, TaskGet, WorkspaceAdd};
 use octopus_proto::remote::{self, RelayUrl};
-use octopus_proto::types::{CheckoutKind, Color, Panel, SessionStart, Task, TaskId, TaskState, WorkspaceId};
+use octopus_proto::types::{CheckoutKind, Color, Panel, ReadDir, SessionStart, Task, TaskId, TaskState, WorkspaceId};
 use octopus_server::{Server, TerminalHost, serve};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -159,6 +159,20 @@ pub async fn task(connection: &Connection, task: &TaskId) -> Task {
 /// The label of the panel's lock holder, the way every client shows it.
 pub fn holder_name(panel: &Panel) -> Option<&str> {
     panel.lock_holder.as_ref().map(|holder| holder.name.as_str())
+}
+
+/// A read's file size and the bytes it sent.
+pub async fn read(
+    connection: &Connection,
+    dir: ReadDir,
+    path: &str,
+    start: u64,
+    len: u64,
+) -> Result<(u64, Vec<u8>), CallError> {
+    let (size, mut opened) = connection.read(dir, path.into(), start, len).await?;
+    let mut bytes = Vec::new();
+    opened.read_to_end(&mut bytes).await.expect("read the file");
+    Ok((size, bytes))
 }
 
 /// Everything the stream sent until `needle` arrived.

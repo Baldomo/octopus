@@ -161,7 +161,7 @@ impl Microphones {
         }
     }
 
-    /// Whether the terminal's holder has its `mic:` stream open.
+    /// Whether the terminal's holder has its `Stream::Mic` open.
     pub(crate) fn streaming(&self, id: &PtyId, streaming: bool) {
         if let Some(platform) = &self.platform {
             platform.streaming(id, streaming);

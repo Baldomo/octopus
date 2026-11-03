@@ -11,7 +11,7 @@ use octopus_proto::local::Listener;
 use octopus_proto::ops::{TaskGet, TermTakeLock};
 use octopus_proto::pairing::Invite;
 use octopus_proto::remote;
-use octopus_proto::types::{Stream, TaskId};
+use octopus_proto::types::{ReadDir, Stream, TaskId};
 use octopus_server::TerminalHost;
 use tokio::io::AsyncReadExt;
 
@@ -188,10 +188,10 @@ impl FileVerb {
         match self {
             Self::Read { server, task, path } => {
                 let connection = connect(&server).await?;
-                let stream = Stream::File { task: TaskId(task), path };
-                let mut opened = connection.open_data_stream(&stream).await.map_err(call_error)?;
+                let dir = ReadDir::Checkout(TaskId(task));
+                let read = connection.read(dir, path.clone(), 0, Stream::TO_END).await;
                 let mut bytes = Vec::new();
-                opened.read_to_end(&mut bytes).await.with_context(|| format!("read {}", stream.name()))?;
+                read.map_err(call_error)?.1.read_to_end(&mut bytes).await.with_context(|| format!("read {path}"))?;
                 std::io::stdout().write_all(&bytes).context("write stdout")
             }
             Self::Upload { server, task, path } => {

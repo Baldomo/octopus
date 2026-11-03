@@ -1,8 +1,6 @@
-//! A task's browser panels, and what the server reaches on its machine for them: a port through a tunnel, and the
-//! files of a file page.
+//! A task's browser panels, and the port on this machine a browser panel reaches through a tunnel.
 
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::path::{Component, Path};
 
 use octopus_proto::Error;
 use octopus_proto::ops::{BrowserClose, BrowserMove, BrowserOpen, BrowserReport, Revised, Shown};
@@ -57,28 +55,6 @@ pub async fn dial(port: u16) -> Result<TcpStream, Error> {
         }
         dialed => dialed.map_err(|error| Error::internal(format!("dial 127.0.0.1:{port}: {error}"))),
     }
-}
-
-fn missing(path: &Path, error: &std::io::Error) -> Error {
-    match error.kind() {
-        std::io::ErrorKind::NotFound | std::io::ErrorKind::IsADirectory => Error::not_found(path.display()),
-        _ => Error::internal(format!("read {}: {error}", path.display())),
-    }
-}
-
-/// The bytes of the file `path` names under a file page's `root`, which neither `..` nor a symlink leads out of.
-pub(crate) async fn read_page(root: &str, path: &str) -> Result<Vec<u8>, Error> {
-    let (root, relative) = (Path::new(root), Path::new(path));
-    if !root.is_absolute() || !relative.components().all(|part| matches!(part, Component::Normal(_))) {
-        return Err(Error::invalid(format!("{path} is no path under the absolute directory {}", root.display())));
-    }
-    let root = tokio::fs::canonicalize(root).await.map_err(|error| missing(root, &error))?;
-    let wanted = root.join(relative);
-    let file = tokio::fs::canonicalize(&wanted).await.map_err(|error| missing(&wanted, &error))?;
-    if !file.starts_with(&root) {
-        return Err(Error::invalid(format!("{} leads out of {}", wanted.display(), root.display())));
-    }
-    tokio::fs::read(&file).await.map_err(|error| missing(&wanted, &error))
 }
 
 impl State {

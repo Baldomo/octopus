@@ -34,7 +34,7 @@ export type Agent = { "kind": "not_started" } | { "kind": "running", status: Age
 
 export type Panel = { id: PtyId, name: string, running: boolean, lock_holder: LockHolder | null, cols: number, rows: number, 
 /**
- * A program of the terminal records from its virtual microphone, so the holder sends its own on `mic:<pty>`.
+ * A program of the terminal records from its virtual microphone, so the holder sends its own on `Stream::Mic`.
  */
 listening: boolean, };
 
@@ -132,7 +132,7 @@ export type PanelView = {
  */
 held_here: boolean, id: PtyId, name: string, running: boolean, lock_holder: LockHolder | null, cols: number, rows: number, 
 /**
- * A program of the terminal records from its virtual microphone, so the holder sends its own on `mic:<pty>`.
+ * A program of the terminal records from its virtual microphone, so the holder sends its own on `Stream::Mic`.
  */
 listening: boolean, };
 

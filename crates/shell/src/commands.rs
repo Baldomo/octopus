@@ -10,7 +10,9 @@ use octopus_proto::ops::{
     TaskSetParent, TermClaim, TermClose, TermOpen, TermResize, TermTakeLock, WorkspaceAdd, WorkspaceRemove,
 };
 use octopus_proto::pairing::Invite;
-use octopus_proto::types::{CheckoutKind, Color, PtyId, SessionStart, Stream, Swatch, TaskId, TaskState, WorkspaceId};
+use octopus_proto::types::{
+    CheckoutKind, Color, PtyId, ReadDir, SessionStart, Stream, Swatch, TaskId, TaskState, WorkspaceId,
+};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeBody, InvokeResponseBody, Response};
 use tauri::{Runtime, State};
@@ -257,8 +259,8 @@ pub async fn file_list(hub: Hubbed<'_>, at: TaskRef, path: String) -> Result<Vec
 #[tauri::command]
 pub async fn file_read(hub: Hubbed<'_>, at: TaskRef, path: String) -> Result<Response, String> {
     let connection = hub.connection(&at.server)?;
-    let stream = Stream::File { task: at.task, path: path.clone() };
-    let mut opened = connection.open_data_stream(&stream).await.map_err(|error| hub.failure(&at.server, error))?;
+    let read = connection.read(ReadDir::Checkout(at.task), path.clone(), 0, Stream::TO_END).await;
+    let (_, mut opened) = read.map_err(|error| hub.failure(&at.server, error))?;
     let mut bytes = Vec::new();
     opened.read_to_end(&mut bytes).await.map_err(|error| format!("read {path}: {error}"))?;
     Ok(Response::new(bytes))

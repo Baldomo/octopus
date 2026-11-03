@@ -1,5 +1,5 @@
 //! A browser panel's tunnel: this client listens on its own `localhost:<port>` and carries each connection to the
-//! server over data stream `tunnel:<port>`, and the server dials the same port on its machine. The page keeps its
+//! server over data stream `Stream::Tunnel`, and the server dials the same port on its machine. The page keeps its
 //! origin, so cookies, websockets and devtools behave as they would against a dev server on this machine.
 
 use std::io;

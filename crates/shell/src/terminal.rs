@@ -22,7 +22,7 @@ pub(crate) struct TermScreen {
     pub rows: u16,
 }
 
-/// The terminals on screen, each attached over its own `pty:<id>` data stream. A terminal off screen
+/// The terminals on screen, each attached over its own `Stream::Pty`. A terminal off screen
 /// holds no attachment.
 #[derive(Default)]
 pub struct Terminals {

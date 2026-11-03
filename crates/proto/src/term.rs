@@ -1,4 +1,4 @@
-//! A terminal's data stream, `pty:<id>`, as typed pieces: each is one JSON line naming it, then the bytes it carries.
+//! A terminal's data stream, `Stream::Pty`, as typed pieces: each is one JSON line naming it, then the bytes it carries.
 
 use std::io;
 use std::sync::Arc;

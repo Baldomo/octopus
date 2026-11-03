@@ -16,7 +16,9 @@ use octopus_proto::ops::{
     TaskFocus, TaskGet, TermClaim, TermSend,
 };
 use octopus_proto::pairing::Invite;
-use octopus_proto::types::{BrowserId, BrowserPanel, BrowserTarget, CheckoutKind, Hooks, Stream, Task, TaskId};
+use octopus_proto::types::{
+    BrowserId, BrowserPanel, BrowserTarget, CheckoutKind, Hooks, ReadDir, Stream, Task, TaskId,
+};
 use octopus_proto::{Error, Event};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -112,7 +114,7 @@ async fn a_task_runs_over_iroh_and_a_stalled_file_transfer_never_blocks_its_term
 
     let large = vec![b'x'; 8 << 20];
     std::fs::write(dir.path().join("large.bin"), &large).expect("write a large file");
-    let mut transfer = laptop.open_data_stream(&Stream::File { task: id.clone(), path: "large.bin".into() }).await;
+    let mut transfer = laptop.read(ReadDir::Checkout(id.clone()), "large.bin".into(), 0, Stream::TO_END).await;
     let mut terminal = laptop.open_data_stream(&agent).await.expect("attach");
     read_until(&mut terminal, "agent:up").await;
     let send = TermSend { task: id, panel: "agent".into(), text: "over-iroh".into(), enter: true, take_lock: true };
@@ -120,7 +122,7 @@ async fn a_task_runs_over_iroh_and_a_stalled_file_transfer_never_blocks_its_term
     read_until(&mut terminal, "over-iroh").await;
 
     let mut received = Vec::new();
-    transfer.as_mut().expect("open the transfer").read_to_end(&mut received).await.expect("read the transfer");
+    transfer.as_mut().expect("open the transfer").1.read_to_end(&mut received).await.expect("read the transfer");
     assert_eq!(received.len(), large.len());
 }
 
@@ -272,22 +274,18 @@ async fn a_browser_panel_is_task_state_and_its_localhost_page_tunnels_to_the_ser
     std::fs::write(dir.path().join("secret"), "key").expect("write a secret beside the site");
     std::os::unix::fs::symlink(dir.path().join("secret"), site.join("leak")).expect("link out of the site");
     let file = laptop.call(&open(&id, &format!("file://{}/index.html", site.display()), BrowserTarget::New)).await;
-    let read = |path: &str| {
-        let stream = Stream::Page { root: site.display().to_string(), path: path.into() };
-        let laptop = Arc::clone(&laptop);
-        async move {
-            let mut bytes = Vec::new();
-            laptop.open_data_stream(&stream).await?.read_to_end(&mut bytes).await.expect("read the file");
-            Ok::<_, CallError>(bytes)
-        }
-    };
-    assert_eq!(read("css/style.css").await.expect("a file of the page's root"), b"h1{}");
+    let read = |path, start, len| common::read(&laptop, ReadDir::Page(site.display().to_string()), path, start, len);
+    assert_eq!(
+        read("css/style.css", 0, Stream::TO_END).await.expect("a file of the page's root"),
+        (4, b"h1{}".to_vec())
+    );
+    assert_eq!(read("css/style.css", 1, 2).await.expect("a range of it"), (4, b"1{".to_vec()));
     let secret = dir.path().join("secret").display().to_string();
     for outside in ["../secret", "css/../../secret", "leak", secret.as_str()] {
-        let refused = read(outside).await;
+        let refused = read(outside, 0, Stream::TO_END).await;
         assert!(matches!(refused, Err(CallError::Server(Error::InvalidArgs { .. }))), "{outside}: {refused:?}");
     }
-    let missing = read("css").await;
+    let missing = read("css", 0, Stream::TO_END).await;
     assert!(matches!(missing, Err(CallError::Server(Error::NotFound { .. }))), "a directory is no page");
     let file = file.expect("a file page").panel;
     let order = |task: Task| task.browsers.into_iter().map(|panel| panel.panel).collect::<Vec<_>>();

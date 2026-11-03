@@ -2,13 +2,14 @@
 //! directory of the file a page loads from on its server, gets an `<origin>` of its own: a random name this client
 //! keeps for as long as it runs. A page is then the same origin as its root's other files alone, and no page names
 //! another root's or another server's files, since it cannot guess their origin. This client answers each request
-//! with the bytes its server reads at `<path>` under the root, which the server keeps the path inside.
+//! with the bytes its server reads at `<path>` under the root, which the server keeps the path inside: the range a
+//! `Range` header asks for, so a video plays and seeks, or else the whole file.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use octopus_proto::types::Stream;
+use octopus_proto::types::{ReadDir, Stream};
 use percent_encoding::percent_decode_str;
 use tauri::http::{Request, Response, StatusCode, header};
 use tauri::{Manager, Runtime, Url};
@@ -86,13 +87,16 @@ impl Pages {
         Some((root, path))
     }
 
-    async fn read(&self, hub: &Hub, loaded: &Url) -> Response<Vec<u8>> {
+    /// The bytes of the file `loaded` names that a request's `Range` header asks for, the whole file without one.
+    async fn read(&self, hub: &Hub, loaded: &Url, range: Option<&str>) -> Response<Vec<u8>> {
         let Some((root, path)) = self.served(loaded) else {
             return respond(StatusCode::NOT_FOUND, "text/plain", format!("no page root at {loaded}").into_bytes());
         };
-        let stream = Stream::Page { root: root.dir.display().to_string(), path: path.clone() };
-        let opened = match hub.connection(&root.server) {
-            Ok(connection) => connection.open_data_stream(&stream).await.map_err(|error| {
+        let wanted = wanted(range);
+        let (start, len) = wanted.unwrap_or((0, Stream::TO_END));
+        let dir = ReadDir::Page(root.dir.display().to_string());
+        let read = match hub.connection(&root.server) {
+            Ok(connection) => connection.read(dir, path.clone(), start, len).await.map_err(|error| {
                 let status = match &error {
                     octopus_client::CallError::Server(octopus_proto::Error::NotFound { .. }) => StatusCode::NOT_FOUND,
                     octopus_client::CallError::Server(octopus_proto::Error::InvalidArgs { .. }) => {
@@ -106,17 +110,43 @@ impl Pages {
             }),
             Err(unreachable) => Err((StatusCode::BAD_GATEWAY, unreachable)),
         };
+        let (size, mut stream) = match read {
+            Ok(read) => read,
+            Err((status, problem)) => return respond(status, "text/plain", problem.into_bytes()),
+        };
         let mut bytes = Vec::new();
-        match opened {
-            Ok(mut stream) => match stream.read_to_end(&mut bytes).await {
-                Ok(_) => respond(StatusCode::OK, content_type(&path), bytes),
-                Err(error) => {
-                    respond(StatusCode::BAD_GATEWAY, "text/plain", format!("read {path}: {error}").into_bytes())
-                }
-            },
-            Err((status, problem)) => respond(status, "text/plain", problem.into_bytes()),
+        if let Err(error) = stream.read_to_end(&mut bytes).await {
+            return respond(StatusCode::BAD_GATEWAY, "text/plain", format!("read {path}: {error}").into_bytes());
         }
+        let (status, range) = match (wanted, bytes.len() as u64) {
+            (None, _) => (StatusCode::OK, None),
+            (Some(_), 0) => (StatusCode::RANGE_NOT_SATISFIABLE, Some(format!("bytes */{size}"))),
+            (Some(_), sent) => {
+                (StatusCode::PARTIAL_CONTENT, Some(format!("bytes {start}-{}/{size}", start + sent - 1)))
+            }
+        };
+        let reply = response(status, content_type(&path)).header(header::ACCEPT_RANGES, "bytes");
+        let reply = match range {
+            Some(range) => reply.header(header::CONTENT_RANGE, range),
+            None => reply,
+        };
+        reply.body(bytes).expect("a status, its headers and a body make a response")
     }
+}
+
+/// The most bytes one ranged reply carries; the webview asks again for the rest.
+const RANGE_BYTES: u64 = 2 << 20;
+
+/// The first byte and the byte count a `Range` header asks for, at most `RANGE_BYTES`. A suffix, several ranges, or a
+/// header that parses as none of them reads as no header, which asks for the whole file.
+fn wanted(range: Option<&str>) -> Option<(u64, u64)> {
+    let (first, last) = range?.strip_prefix("bytes=")?.split_once('-')?;
+    let start: u64 = first.trim().parse().ok()?;
+    let len = match last.trim() {
+        "" => RANGE_BYTES,
+        last => last.parse::<u64>().ok()?.checked_sub(start)?.saturating_add(1).min(RANGE_BYTES),
+    };
+    Some((start, len))
 }
 
 fn content_type(path: &str) -> &'static str {
@@ -141,20 +171,24 @@ fn content_type(path: &str) -> &'static str {
         Some("pdf") => "application/pdf",
         Some("xml") => "application/xml",
         Some("mp4") => "video/mp4",
+        Some("m4v") => "video/x-m4v",
+        Some("mov") => "video/quicktime",
         Some("webm") => "video/webm",
         Some("mp3") => "audio/mpeg",
+        Some("m4a") => "audio/mp4",
+        Some("aac") => "audio/aac",
+        Some("flac") => "audio/flac",
         Some("wav") => "audio/wav",
         _ => "text/plain; charset=utf-8",
     }
 }
 
+fn response(status: StatusCode, kind: &str) -> tauri::http::response::Builder {
+    Response::builder().status(status).header(header::CONTENT_TYPE, kind).header(header::CACHE_CONTROL, "no-store")
+}
+
 fn respond(status: StatusCode, kind: &str, body: Vec<u8>) -> Response<Vec<u8>> {
-    Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, kind)
-        .header(header::CACHE_CONTROL, "no-store")
-        .body(body)
-        .expect("a status, two headers and a body make a response")
+    response(status, kind).body(body).expect("a status, two headers and a body make a response")
 }
 
 /// Answers the webviews' `octopus-page` requests.
@@ -163,9 +197,10 @@ pub fn protocol<R: Runtime>(builder: tauri::plugin::Builder<R>) -> tauri::plugin
         let app = context.app_handle();
         let (hub, pages) = (Arc::clone(app.state::<Arc<Hub>>().inner()), Arc::clone(app.state::<Arc<Pages>>().inner()));
         let loaded = Url::parse(&request.uri().to_string());
+        let range = request.headers().get(header::RANGE).and_then(|range| range.to_str().ok()).map(str::to_owned);
         tauri::async_runtime::spawn(async move {
             responder.respond(match loaded {
-                Ok(loaded) => pages.read(&hub, &loaded).await,
+                Ok(loaded) => pages.read(&hub, &loaded, range.as_deref()).await,
                 Err(error) => respond(StatusCode::BAD_REQUEST, "text/plain", error.to_string().into_bytes()),
             });
         });
@@ -175,6 +210,17 @@ pub fn protocol<R: Runtime>(builder: tauri::plugin::Builder<R>) -> tauri::plugin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_range_header_asks_for_a_bounded_run_of_bytes() {
+        assert_eq!(wanted(Some("bytes=0-1")), Some((0, 2)));
+        assert_eq!(wanted(Some("bytes=100-")), Some((100, RANGE_BYTES)));
+        assert_eq!(wanted(Some("bytes=0-99999999")), Some((0, RANGE_BYTES)));
+        assert_eq!(wanted(Some("bytes=0-18446744073709551615")), Some((0, RANGE_BYTES)));
+        for whole in [None, Some("bytes=-500"), Some("bytes=0-1,4-5"), Some("bytes=9-3"), Some("items=0-1")] {
+            assert_eq!(wanted(whole), None, "{whole:?}");
+        }
+    }
 
     fn url(text: &str) -> Url {
         Url::parse(text).expect("a URL")

@@ -354,7 +354,7 @@ pub struct Panel {
     pub lock_holder: Option<LockHolder>,
     pub cols: u16,
     pub rows: u16,
-    /// A program of the terminal records from its virtual microphone, so the holder sends its own on `mic:<pty>`.
+    /// A program of the terminal records from its virtual microphone, so the holder sends its own on `Stream::Mic`.
     pub listening: bool,
 }
 
@@ -463,12 +463,18 @@ pub struct Task {
     pub browsers: Vec<BrowserPanel>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A data stream, which a client opens by naming it in its `StreamHeader`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Stream {
     Pty(PtyId),
-    File {
-        task: TaskId,
+    /// Up to `len` bytes of the file `path` names under `dir`, from byte `start`: fewer where the file ends first, and
+    /// none from a `start` at or past its end. The open reply carries the file's `FileSize`.
+    Read {
+        dir: ReadDir,
         path: String,
+        start: u64,
+        len: u64,
     },
     /// A new file's `bytes`, which the client sends and finishes; the server then answers with one outcome line. The
     /// count tells a finished upload from one whose sender died.
@@ -479,17 +485,26 @@ pub enum Stream {
     },
     /// A TCP connection to a port on the server's machine.
     Tunnel(u16),
-    /// The bytes of a file of a browser panel's file page: `path`, relative to the page's `root` directory, an
-    /// absolute path on the server's machine, and never leading out of it.
-    Page {
-        root: String,
-        path: String,
-    },
     /// The lock holder's microphone, as `MIC_FORMAT`, into the terminal's virtual microphone.
     Mic(PtyId),
 }
 
-/// The audio on a `mic:<pty>` stream.
+/// The directory a `Stream::Read` path is relative to and never leads out of.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum ReadDir {
+    /// A task's checkout.
+    Checkout(TaskId),
+    /// A file page's root: the directory, an absolute path on the server's machine, of the file the page loads from.
+    Page(String),
+}
+
+impl Stream {
+    /// The `len` that reads a file to its end.
+    pub const TO_END: u64 = u64::MAX;
+}
+
+/// The audio on a `Stream::Mic`.
 pub struct PcmFormat {
     pub rate: u32,
     pub channels: u16,
@@ -512,42 +527,3 @@ pub struct MicDevice {
 }
 
 pub const MIC_DEVICE: MicDevice = MicDevice { name: "Octopus Microphone", uid: "octopus-microphone" };
-
-impl Stream {
-    pub fn name(&self) -> String {
-        match self {
-            Self::Pty(pty) => format!("pty:{pty}"),
-            Self::File { task, path } => format!("file:{task}/{path}"),
-            Self::Upload { task, bytes, path } => format!("upload:{task}/{bytes}/{path}"),
-            Self::Tunnel(port) => format!("tunnel:{port}"),
-            Self::Page { root, path } => format!("page:{root}\0{path}"),
-            Self::Mic(pty) => format!("mic:{pty}"),
-        }
-    }
-
-    pub fn parse(name: &str) -> Option<Self> {
-        match name.split_once(':')? {
-            ("pty", pty) => Some(Self::Pty(PtyId(pty.to_string()))),
-            ("file", rest) => {
-                let (task, path) = rest.split_once('/')?;
-                Some(Self::File { task: TaskId(task.to_string()), path: path.to_string() })
-            }
-            ("upload", rest) => {
-                let (task, rest) = rest.split_once('/')?;
-                let (bytes, path) = rest.split_once('/')?;
-                Some(Self::Upload {
-                    task: TaskId(task.to_string()),
-                    bytes: bytes.parse().ok()?,
-                    path: path.to_string(),
-                })
-            }
-            ("tunnel", port) => Some(Self::Tunnel(port.parse().ok()?)),
-            ("page", rest) => {
-                let (root, path) = rest.split_once('\0')?;
-                Some(Self::Page { root: root.to_string(), path: path.to_string() })
-            }
-            ("mic", pty) => Some(Self::Mic(PtyId(pty.to_string()))),
-            _ => None,
-        }
-    }
-}

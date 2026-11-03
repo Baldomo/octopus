@@ -1,12 +1,14 @@
-//! A task's files as a client reaches them, kept inside the checkout no path leaves.
+//! A task's files as a client reaches them, kept inside the checkout no path leaves, and the files a file page reads
+//! under its root.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 
 use octopus_proto::Error;
 use octopus_proto::ops::{Entry, EntryKind, Match};
 
-use octopus_proto::types::TaskId;
+use octopus_proto::types::{ReadDir, TaskId};
+use tokio::io::{AsyncReadExt, Take};
 
 use crate::{Server, lock};
 
@@ -26,8 +28,8 @@ pub(crate) fn wire_path(relative: &Path) -> String {
     components.join("/")
 }
 
-fn outside(path: &str) -> Error {
-    Error::invalid(format!("{path} is not a path inside the checkout"))
+fn outside(path: &str, dir: &Path) -> Error {
+    Error::invalid(format!("{path} is not a path inside {}", dir.display()))
 }
 
 fn canonical(path: &Path) -> Result<PathBuf, Error> {
@@ -39,7 +41,7 @@ fn canonical(path: &Path) -> Result<PathBuf, Error> {
 fn entry(checkout: &Path, path: &str) -> Result<PathBuf, Error> {
     let relative = Path::new(path);
     if relative.components().any(|component| !matches!(component, Component::Normal(_) | Component::CurDir)) {
-        return Err(outside(path));
+        return Err(outside(path, checkout));
     }
     let inside: PathBuf = relative.components().filter(|component| matches!(component, Component::Normal(_))).collect();
     if inside.as_os_str().is_empty() {
@@ -48,7 +50,7 @@ fn entry(checkout: &Path, path: &str) -> Result<PathBuf, Error> {
     let joined = checkout.join(inside);
     let parent = joined.parent().expect("a path inside the checkout has a parent");
     if !resolves_within(nearest(parent), &canonical(checkout)?) {
-        return Err(outside(path));
+        return Err(outside(path, checkout));
     }
     Ok(joined)
 }
@@ -67,7 +69,7 @@ fn resolves_within(path: &Path, root: &Path) -> bool {
 fn followed(checkout: &Path, path: &str) -> Result<PathBuf, Error> {
     let joined = entry(checkout, path)?;
     if joined.symlink_metadata().is_ok() && !resolves_within(&joined, &canonical(checkout)?) {
-        return Err(outside(path));
+        return Err(outside(path, checkout));
     }
     Ok(joined)
 }
@@ -120,9 +122,18 @@ pub fn directory(checkout: &Path, path: &str) -> Result<PathBuf, Error> {
     Ok(directory)
 }
 
-pub fn read(checkout: &Path, path: &str) -> Result<Vec<u8>, Error> {
-    let file = followed(checkout, path)?;
-    std::fs::read(&file).map_err(|error| io(&file, error))
+/// The file `path` names under `dir`, positioned at byte `start` and ending `len` bytes later or at its end, and its
+/// size.
+pub fn open_read(dir: &Path, path: &str, start: u64, len: u64) -> Result<(u64, Take<tokio::fs::File>), Error> {
+    let file = followed(dir, path)?;
+    let mut opened = std::fs::File::open(&file).map_err(|error| io(&file, error))?;
+    let metadata = opened.metadata().map_err(|error| io(&file, error))?;
+    if metadata.is_dir() {
+        return Err(Error::not_found(format!("a file at {}", file.display())));
+    }
+    let size = metadata.len();
+    opened.seek(SeekFrom::Start(start.min(size))).map_err(|error| io(&file, error))?;
+    Ok((size, tokio::fs::File::from_std(opened).take(len.min(size.saturating_sub(start)))))
 }
 
 pub fn write(checkout: &Path, path: &str, content: &[u8]) -> Result<u64, Error> {
@@ -268,8 +279,13 @@ impl Server {
         Ok(PathBuf::from(lock(&self.state).store.task(task)?.directory))
     }
 
-    pub(crate) fn read_file(&self, task: &TaskId, path: &str) -> Result<Vec<u8>, Error> {
-        read(&self.checkout_dir(task)?, path)
+    /// The directory a read's paths are relative to: a task's checkout, or a file page's root.
+    pub(crate) fn read_dir(&self, dir: &ReadDir) -> Result<PathBuf, Error> {
+        match dir {
+            ReadDir::Checkout(task) => self.checkout_dir(task),
+            ReadDir::Page(root) if Path::new(root).is_absolute() => Ok(PathBuf::from(root)),
+            ReadDir::Page(root) => Err(Error::invalid(format!("{root} is no absolute directory"))),
+        }
     }
 
     pub(crate) fn upload_file(&self, task: &TaskId, path: &str, bytes: u64) -> Result<Upload, Error> {
