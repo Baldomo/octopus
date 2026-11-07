@@ -1,16 +1,15 @@
-//! Who may connect: the one-time codes a server offers, the clients pinned by proving one, and forgetting them. A
+//! Who may connect: the one-time codes a server offers, the accounts trusted by proving one, and forgetting them. A
 //! code pairs the first client that proves it, then is spent.
 
 use octopus_proto::Error;
 use octopus_proto::device::PublicKey;
-use octopus_proto::ops::{Clients, Done, Offer, Paired, PairedClient, PairingForget, PairingPair};
+use octopus_proto::ops::{Accounts, Done, Offer, Paired, PairedAccount, PairedClient, PairingForget, PairingPair};
 use octopus_proto::pairing::{Code, Invite, Proof, Side};
-use octopus_proto::remote::{self, Connection};
+use octopus_proto::remote::Connection;
 
 use crate::client::{self, Client};
 use crate::{Server, State, lock, now};
 
-const FORGOTTEN: &[u8] = b"this client was forgotten; pair it again with a fresh invite";
 const CODE_LIFETIME_MS: i64 = 10 * 60 * 1000;
 
 /// Kept in memory only: a server restart spends every code.
@@ -50,19 +49,21 @@ impl Server {
         Offer { invite: Invite { code, server, relay }, expires_at }
     }
 
-    /// Whether an unspent code is on offer, the one time an unpaired client gets past the handshake.
+    /// Whether a code or a link is on offer, the one time an unpaired device gets past the handshake.
     pub(crate) fn offering(&self) -> bool {
-        lock(&self.offers).offering(now())
+        let offering = lock(&self.offers).offering(now());
+        offering || lock(&self.state).inviting(now())
     }
 
-    /// Keeps `connection` among the open connections of `key` while the key is pinned, so forgetting it closes them.
-    pub(crate) fn track(&self, key: PublicKey, connection: &Connection) -> Result<bool, Error> {
+    /// Keeps `connection` among the open connections of `key` while a trusted account holds the key, so a removal or
+    /// a forget closes them.
+    pub(crate) fn track(&self, key: PublicKey, connection: &Connection) -> bool {
         let state = lock(&self.state);
-        let pinned = state.store.client_pinned_to(&key)?.is_some();
-        if pinned {
+        let member = state.is_member(&key);
+        if member {
             lock(&self.connections).entry(key).or_default().push(connection.clone());
         }
-        Ok(pinned)
+        member
     }
 
     pub(crate) fn untrack(&self, key: &PublicKey, connection: &Connection) {
@@ -75,64 +76,88 @@ impl Server {
         }
     }
 
-    /// A paired client goes by the name its `session.hello` gives; a key no longer pinned says hello to nobody.
+    /// A member device goes by the name its `session.hello` gives; a device no trusted account holds says hello to
+    /// nobody.
     pub(crate) fn hello_paired(&self, key: PublicKey, name: &str) -> Result<Client, Error> {
         let mut state = lock(&self.state);
-        let pinned = state.store.client_pinned_to(&key)?.ok_or(Error::Unpaired)?;
-        if pinned != name {
-            client::check_name(name)?;
-            state.store.refuse_claim(name, &key)?;
-            state.store.rename_client(&key, name)?;
-            self.touch_held(&mut state, &Client::Paired(key))?;
+        if !state.is_member(&key) {
+            return Err(Error::Unpaired);
         }
+        self.name_device(&mut state, &key, name)?;
         Ok(Client::Paired(key))
     }
 
-    /// Pins the client's key under its name once it proves an unspent code.
+    /// Records the device's name, republishing the tasks whose lock it holds, as their label, when the name changed.
+    fn name_device(&self, state: &mut State, key: &PublicKey, name: &str) -> Result<(), Error> {
+        let named = state.store.device_name(key)?;
+        if named.as_deref() != Some(name) {
+            client::check_name(name)?;
+            state.store.refuse_claim(name, key)?;
+            state.store.name_device(name, key)?;
+            if named.is_some() {
+                let holder = Client::Paired(*key);
+                self.touch_terminals(state, |terminal| terminal.holds(&holder))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Trusts the device's account once it proves an unspent code.
     pub(crate) fn pair(&self, client: &PublicKey, op: PairingPair) -> Result<Paired, Error> {
         client::check_name(&op.client)?;
         let server = self.device.public();
         let mut state = lock(&self.state);
         state.store.refuse_claim(&op.client, client)?;
         let code = lock(&self.offers).redeem(now(), &op.proof, &server, client).ok_or(Error::CodeRefused)?;
-        let renamed = state.store.client_pinned_to(client)?.is_some_and(|pinned| pinned != op.client);
-        state.store.pin_client(&op.client, client)?;
-        if renamed {
-            self.touch_held(&mut state, &Client::Paired(*client))?;
+        let merged = self.merged(&state, &op.account)?;
+        if !merged.state.is_member(client) {
+            return Err(Error::invalid("pairing.pair carries an account the pairing device is a member of"));
         }
+        self.keep(&mut state, merged)?;
+        self.name_device(&mut state, client, &op.client)?;
+        self.evict(&mut state)?;
         Ok(Paired { server: self.name.clone(), proof: code.prove(Side::Server, &server, client) })
     }
 
-    /// Unpins the named client, closes its open connections and frees every lock it holds.
+    /// Stops trusting the account, closing its devices' connections and freeing every lock they hold.
     pub(crate) fn pairing_forget(&self, op: PairingForget) -> Result<Done, Error> {
         let mut state = lock(&self.state);
-        let key = state.store.forget_client(&op.client)?;
-        for connection in lock(&self.connections).remove(&key).into_iter().flatten() {
-            connection.close(remote::REFUSED, FORGOTTEN);
+        if !self.untrust(&mut state, &op.account)? {
+            return Err(Error::not_found(format!("a trusted account {}", op.account)));
         }
-        let forgotten = Client::Paired(key);
-        self.touch_terminals(&mut state, |terminal| terminal.free(&forgotten))?;
+        self.evict(&mut state)?;
         Ok(Done {})
     }
 
-    pub(crate) fn pairing_list(&self) -> Result<Clients, Error> {
-        let pinned = lock(&self.state).store.clients()?;
+    pub(crate) fn pairing_list(&self) -> Result<Accounts, Error> {
+        let state = lock(&self.state);
+        let recorded = state.store.devices()?;
         let connected = lock(&self.clients);
-        let clients = pinned
-            .into_iter()
-            .map(|(key, name, seen_at)| PairedClient {
-                connected: connected.contains_key(&Client::Paired(key)),
-                name,
-                key,
-                seen_at,
+        let mut accounts: Vec<PairedAccount> = state
+            .trusted
+            .iter()
+            .filter(|(_, trusted)| !trusted.state.members.is_empty())
+            .map(|(id, trusted)| PairedAccount {
+                account: *id,
+                devices: trusted
+                    .state
+                    .members
+                    .iter()
+                    .map(|member| {
+                        let (name, seen_at) = recorded.get(&member.key).cloned().unwrap_or((member.name.clone(), None));
+                        let connected = connected.contains_key(&Client::Paired(member.key));
+                        let hosts = trusted
+                            .state
+                            .servers
+                            .iter()
+                            .any(|listed| listed.key == self.device.public() && listed.host == Some(member.key));
+                        PairedClient { name, key: member.key, hosts, connected, seen_at }
+                    })
+                    .collect(),
             })
             .collect();
-        Ok(Clients { clients })
-    }
-
-    /// Republishes each task whose lock `client` holds, as its label changed.
-    fn touch_held(&self, state: &mut State, client: &Client) -> Result<(), Error> {
-        self.touch_terminals(state, |terminal| terminal.holds(client))
+        accounts.sort_by_key(|paired| paired.account);
+        Ok(Accounts { accounts })
     }
 }
 

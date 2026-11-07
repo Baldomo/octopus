@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use octopus_proto::device::PublicKey;
 use octopus_proto::local::{self, Listener};
-use octopus_proto::ops::{Done, Paired, PairingPair, SessionHello, SessionPing};
+use octopus_proto::ops::{AccountJoin, Done, PairingPair, SessionHello, SessionPing};
 use octopus_proto::remote::{self, Connection, Endpoint};
 use octopus_proto::types::{PtyId, Stream};
 use octopus_proto::{
@@ -23,10 +23,9 @@ const RECLAIM_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 const INPUT_BYTES: usize = 4096;
 /// How long each step of pairing may take: the request arriving, and the reply being acknowledged.
 const PAIRING_PATIENCE: Duration = Duration::from_secs(10);
-/// A `pairing.pair` request line is far shorter; an unpaired peer gets no more of the server's memory.
-const PAIRING_LINE_BYTES: u64 = 4096;
-/// A stream's first line, a request or a data stream's header, is far shorter; a longer one fails to parse.
-const FIRST_LINE_BYTES: u64 = 16 * 1024;
+/// A stream's first line carries at most an account, in a `pairing.pair`; an unpaired peer gets no more of the
+/// server's memory, and a longer line fails to parse.
+const FIRST_LINE_BYTES: u64 = 4 << 20;
 /// Requests of one control connection waiting their turn; a client that sends faster waits on its stream.
 const QUEUED_REQUESTS: usize = 64;
 /// Connections at once whose client is not yet known to be paired.
@@ -35,11 +34,11 @@ const UNPAIRED_CONNECTIONS: usize = 16;
 const UNPROVEN_CONNECTIONS: usize = 64;
 
 const NO_PROOF: &[u8] = b"no valid device proof";
-const NO_CODE_ON_OFFER: &[u8] = b"unpaired, and no pairing code is on offer: offer a fresh invite";
+const NOTHING_ON_OFFER: &[u8] =
+    b"unpaired, and no pairing code or link is on offer: each expires or is spent, so make a fresh one";
 const UNPAIRED: &[u8] = b"unpaired";
 const TOO_MANY_UNPROVEN: &[u8] = b"too many connections awaiting their device proof";
 const TOO_MANY_UNPAIRED: &[u8] = b"too many unpaired connections";
-const INTERNAL: &[u8] = b"internal error";
 
 /// Who a stream comes from: the local socket admits only the server's own OS user, and a paired device is the key
 /// it proved.
@@ -106,28 +105,15 @@ async fn serve_remote_connection(
         return connection.close(remote::REFUSED, NO_PROOF);
     };
     drop(proving);
-    match track(&server, key, &connection).await {
-        Ok(true) => {}
-        Ok(false) if !server.offering() => return connection.close(remote::REFUSED, NO_CODE_ON_OFFER),
-        Ok(false) => {
-            let Ok(_pairing) = unpaired.try_acquire() else {
-                return connection.close(remote::REFUSED, TOO_MANY_UNPAIRED);
-            };
-            if !pair(&server, &connection, key).await {
-                return connection.close(remote::REFUSED, UNPAIRED);
-            }
-            match track(&server, key, &connection).await {
-                Ok(true) => {}
-                Ok(false) => return connection.close(remote::REFUSED, UNPAIRED),
-                Err(error) => {
-                    report!("look up the pin of {key}: {error}");
-                    return connection.close(remote::REFUSED, INTERNAL);
-                }
-            }
+    if !track(&server, key, &connection).await {
+        if !blocking(&server, Server::offering).await {
+            return connection.close(remote::REFUSED, NOTHING_ON_OFFER);
         }
-        Err(error) => {
-            report!("look up the pin of {key}: {error}");
-            return connection.close(remote::REFUSED, INTERNAL);
+        let Ok(_pairing) = unpaired.try_acquire() else {
+            return connection.close(remote::REFUSED, TOO_MANY_UNPAIRED);
+        };
+        if !pair(&server, &connection, key).await || !track(&server, key, &connection).await {
+            return connection.close(remote::REFUSED, UNPAIRED);
         }
     }
     remote::admit(&connection);
@@ -137,19 +123,20 @@ async fn serve_remote_connection(
     blocking(&server, move |server| server.untrack(&key, &connection)).await;
 }
 
-/// Whether `key` is pinned, keeping `connection` among its open ones if it is, so forgetting the key closes it.
-async fn track(server: &Arc<Server>, key: PublicKey, connection: &Connection) -> Result<bool, Error> {
+/// Whether a trusted account holds `key`, keeping `connection` among its open ones if one does, so a removal or a
+/// forget closes it.
+async fn track(server: &Arc<Server>, key: PublicKey, connection: &Connection) -> bool {
     let connection = connection.clone();
     blocking(server, move |server| server.track(key, &connection)).await
 }
 
-/// An unpaired client's first stream carries one `pairing.pair`; the client is paired once it proves a code.
+/// An unpaired device's first stream carries one `pairing.pair` or `account.join`; it is in once either succeeds.
 async fn pair(server: &Arc<Server>, connection: &Connection, key: PublicKey) -> bool {
     let Ok(Ok((mut send, receive))) = tokio::time::timeout(PAIRING_PATIENCE, connection.accept_bi()).await else {
         return false;
     };
     let mut first = String::new();
-    let mut bounded = BufReader::new(receive.take(PAIRING_LINE_BYTES));
+    let mut bounded = BufReader::new(receive.take(FIRST_LINE_BYTES));
     let Ok(Ok(_)) = tokio::time::timeout(PAIRING_PATIENCE, bounded.read_line(&mut first)).await else {
         return false;
     };
@@ -165,14 +152,23 @@ async fn pair(server: &Arc<Server>, connection: &Connection, key: PublicKey) -> 
     paired
 }
 
-/// Pins the client proving `key` once its request proves a code. A paired client may pair again, to pin the
-/// server's key anew.
-async fn claim(server: &Arc<Server>, key: PublicKey, request: &Request) -> Result<Paired, Error> {
-    if request.op != PairingPair::NAME {
-        return Err(Error::Unpaired);
+/// Trusts the account of the device proving `key` once its request proves a code, or takes its join on a link. A
+/// paired device may pair again, to pin the server's key anew.
+async fn claim(server: &Arc<Server>, key: PublicKey, request: &Request) -> Result<Value, Error> {
+    fn encode(value: impl serde::Serialize) -> Result<Value, Error> {
+        serde_json::to_value(value).map_err(Error::internal)
     }
-    let op = parse_args::<PairingPair>(&request.args)?;
-    blocking(server, move |server| server.pair(&key, op)).await
+    match request.op.as_str() {
+        PairingPair::NAME => {
+            let op = parse_args::<PairingPair>(&request.args)?;
+            encode(blocking(server, move |server| server.pair(&key, op)).await?)
+        }
+        AccountJoin::NAME => {
+            let op = parse_args::<AccountJoin>(&request.args)?;
+            encode(blocking(server, move |server| server.account_join(&key, op)).await?)
+        }
+        _ => Err(Error::Unpaired),
+    }
 }
 
 async fn remove_expired_worktrees(server: Arc<Server>) {
@@ -229,7 +225,9 @@ async fn serve_stream<S: AsyncRead + AsyncWrite + Send + 'static>(server: Arc<Se
             Err(error) => line(&Outcome::Err(Error::invalid(error))),
         },
         Ok(value) => match (request_from(value), peer) {
-            (Ok(request), Peer::Paired(key)) if request.op == PairingPair::NAME => {
+            (Ok(request), Peer::Paired(key))
+                if [PairingPair::NAME, AccountJoin::NAME].contains(&request.op.as_str()) =>
+            {
                 respond(request.id, Outcome::from(claim(&server, key, &request).await))
             }
             (Ok(request), _) => match hello(&server, &request, peer).await {
@@ -485,13 +483,13 @@ async fn receive<R: AsyncRead + Unpin>(
 
 /// Takes the holder's audio until it closes the stream or the lock leaves it, which closes the stream.
 async fn hear<R: AsyncRead + Unpin>(server: &Server, client: &Client, terminal: &Terminal, mut input: BufReader<R>) {
-    server.sending(terminal, true);
+    server.mic.streaming(&terminal.id, true);
     let mut buffer = [0u8; INPUT_BYTES];
     while let Ok(read) = input.read(&mut buffer).await
         && read > 0
         && server.hear(client, terminal, &buffer[..read]).is_ok()
     {}
-    server.sending(terminal, false);
+    server.mic.streaming(&terminal.id, false);
 }
 
 async fn blocking<T: Send + 'static>(server: &Arc<Server>, work: impl FnOnce(&Server) -> T + Send + 'static) -> T {

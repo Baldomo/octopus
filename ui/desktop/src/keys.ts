@@ -17,7 +17,6 @@ const CODES: Record<string, string> = {
 };
 const codeOf = (key: string) => CODES[key] ?? (/\d/.test(key) ? `Digit${key}` : `Key${key}`);
 
-/** A press as its held modifiers and physical key. */
 const chord = (control: boolean, command: boolean, shift: boolean, code: string) =>
   `${control ? "⌃" : ""}${command ? "⌘" : ""}${shift ? "⇧" : ""}${code}`;
 

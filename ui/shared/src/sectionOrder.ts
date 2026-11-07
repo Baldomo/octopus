@@ -13,7 +13,6 @@ export function inOrder<T>(items: readonly T[], order: readonly string[], keyOf:
 export const inSectionOrder = <T extends { name: string }>(items: readonly T[], order: readonly string[]) =>
   inOrder(items, order, (item) => item.name);
 
-/** `names` with `moved` taken out and put back at index `to`. */
 export function moveTo(names: readonly string[], moved: string, to: number): string[] {
   const rest = names.filter((name) => name !== moved);
   return [...rest.slice(0, to), moved, ...rest.slice(to)];

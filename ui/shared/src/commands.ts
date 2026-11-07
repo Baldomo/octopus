@@ -29,13 +29,9 @@ const selectedRenders = () => {
   return active !== null && active !== undefined && renderable(active);
 };
 
-/** What the Browser surface does on its keys, on a client that has one. */
 type BrowserKeys = {
-  /** Whether Browser shows a page. */
   shows: () => boolean;
-  /** Whether Browser shows its tabs. */
   showsTabs: () => boolean;
-  /** Whether this client closed a tab of the open task that it can reopen. */
   reopens: () => boolean;
   locate: () => void;
   find: () => void;
@@ -56,7 +52,7 @@ const inBrowserSurface = (run: () => void) => () => {
   run();
 };
 
-/** Every action a key or the palette runs. Where two commands share a key, the first that applies takes it. */
+/** Where two commands share a key, the first that applies takes it. */
 export const commands = {
   taskView: { label: "Task view", keys: ["⌘E"], run: () => showView("task") },
   newTab: { label: "New browser tab", keys: ["⌘T"], applies: inBrowser, run: inBrowserSurface(() => browser?.add()) },
@@ -111,7 +107,6 @@ export const commands = {
   quit: { label: "Quit octopus", keys: ["⌘Q"], run: () => act(backend.quit()) },
 } satisfies Record<string, Command>;
 
-/** A key's modifiers and the key they hold. */
 export const parseKey = (written: string) => ({
   command: written.includes("⌘"),
   control: written.includes("⌃"),
@@ -119,7 +114,7 @@ export const parseKey = (written: string) => ({
   key: written.replace(/[⌘⌃⇧]/g, ""),
 });
 
-/** A key as this platform writes it. On Linux, ⌘ is Ctrl+Shift and ⌃ is Ctrl. */
+/** On Linux, ⌘ is Ctrl+Shift and ⌃ is Ctrl. */
 const written = (key: string) => {
   if (mac) return key;
   const { command, control, shift, key: held } = parseKey(key);

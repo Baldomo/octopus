@@ -103,29 +103,39 @@ pub fn check(fields: Vec<Field>, args: &Value) -> Result<(), Error> {
     Ok(())
 }
 
-impl Arg for String {
-    fn shape() -> Shape {
-        Shape::Text
-    }
+/// Gives each type the arg shape `$shape`, an expression that may name `Self`.
+macro_rules! arg_shape {
+    ($shape:expr => $($ty:ty),+ $(,)?) => {$(
+        impl $crate::schema::Arg for $ty {
+            fn shape() -> $crate::schema::Shape {
+                $shape
+            }
+        }
+    )+};
 }
+pub(crate) use arg_shape;
 
-impl Arg for bool {
-    fn shape() -> Shape {
-        Shape::Boolean
-    }
-}
+/// Spells each type on the wire as its `Display` text, read back through its `FromStr`.
+macro_rules! spelled {
+    ($($ty:ty),+ $(,)?) => {$(
+        impl serde::Serialize for $ty {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.collect_str(self)
+            }
+        }
 
-impl Arg for u16 {
-    fn shape() -> Shape {
-        Shape::Integer
-    }
+        impl<'de> serde::Deserialize<'de> for $ty {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                <String as serde::Deserialize>::deserialize(deserializer)?.parse().map_err(serde::de::Error::custom)
+            }
+        }
+    )+};
 }
+pub(crate) use spelled;
 
-impl Arg for u64 {
-    fn shape() -> Shape {
-        Shape::Integer
-    }
-}
+arg_shape!(Shape::Text => String);
+arg_shape!(Shape::Boolean => bool);
+arg_shape!(Shape::Integer => u16, u64);
 
 impl<T: Arg> Arg for Vec<T> {
     fn shape() -> Shape {

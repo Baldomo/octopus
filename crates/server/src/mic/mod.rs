@@ -112,8 +112,7 @@ pub(crate) struct Microphones {
 }
 
 impl Microphones {
-    /// `dir` holds whatever files the platform needs. A platform that cannot start leaves every terminal on the
-    /// machine's own input.
+    /// A platform that cannot start leaves every terminal on the machine's own input.
     pub fn start(enabled: bool, terminal_host: &Path, changed: impl Fn(&PtyId, bool) + Send + Sync + 'static) -> Self {
         let shared =
             Arc::new(Shared { listening: Mutex::default(), audio: Mutex::default(), changed: Box::new(changed) });
@@ -133,44 +132,35 @@ impl Microphones {
         })
     }
 
-    /// Keeps the virtual microphones of the running terminals a restarted server adopts, and drops the rest.
-    pub fn adopt(&self, terminals: &[PtyId]) {
+    fn on_platform(&self, act: impl FnOnce(&platform::Platform)) {
         if let Some(platform) = &self.platform {
-            platform.adopt(terminals);
+            act(platform);
         }
     }
 
+    /// Keeps the virtual microphones of the running terminals a restarted server adopts, and drops the rest.
+    pub fn adopt(&self, terminals: &[PtyId]) {
+        self.on_platform(|platform| platform.adopt(terminals));
+    }
+
     pub fn remove(&self, id: &PtyId) {
-        if let Some(platform) = &self.platform {
-            platform.remove(id);
-        }
+        self.on_platform(|platform| platform.remove(id));
         let others = lock(&self.shared.listening).iter().filter(|known| *known != id).cloned().collect();
         self.shared.set_listening(others);
     }
 
     pub fn started(&self, id: &PtyId) {
-        if let Some(platform) = &self.platform {
-            platform.started(id);
-        }
+        self.on_platform(|platform| platform.started(id));
     }
 
     /// The terminals whose lock a client connected over QUIC holds.
     pub(crate) fn remote_held(&self, terminals: HashSet<PtyId>) {
-        if let Some(platform) = &self.platform {
-            platform.remote_held(terminals);
-        }
+        self.on_platform(|platform| platform.remote_held(terminals));
     }
 
     /// Whether the terminal's holder has its `Stream::Mic` open.
     pub(crate) fn streaming(&self, id: &PtyId, streaming: bool) {
-        if let Some(platform) = &self.platform {
-            platform.streaming(id, streaming);
-        }
-    }
-
-    /// Audio from the terminal's lock holder, as `MIC_FORMAT`.
-    pub(crate) fn feed(&self, id: &PtyId, bytes: &[u8]) {
-        self.shared.push(id, bytes);
+        self.on_platform(|platform| platform.streaming(id, streaming));
     }
 }
 
@@ -189,12 +179,8 @@ impl Server {
     /// Audio from `client` for the terminal's virtual microphone, taken only while `client` holds the lock.
     pub(crate) fn hear(&self, client: &Client, terminal: &Terminal, bytes: &[u8]) -> Result<(), Error> {
         self.check_holder(client, terminal)?;
-        self.mic.feed(&terminal.id, bytes);
+        self.mic.shared.push(&terminal.id, bytes);
         Ok(())
-    }
-
-    pub(crate) fn sending(&self, terminal: &Terminal, sending: bool) {
-        self.mic.streaming(&terminal.id, sending);
     }
 }
 

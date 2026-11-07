@@ -17,7 +17,6 @@ const MIME: Record<string, string> = {
   ico: "image/x-icon",
 };
 
-/** The checkout path a reference in `from` names, or null for a URL, a fragment, data or a malformed escape. */
 function checkoutPath(from: string, reference: string) {
   if (reference === "" || /^([a-z][a-z\d+.-]*:|\/\/|#)/i.test(reference)) return null;
   const parts = reference.startsWith("/") ? [] : from.split("/").slice(0, -1);
@@ -121,7 +120,6 @@ async function page(text: string, from: string, assets: Assets) {
   return `<!doctype html>${parsed.documentElement.outerHTML}`;
 }
 
-/** Holds the focus the editor beneath it would, its page's frame included, and hands it back on leaving. */
 export function Rendered(props: { files: TaskFiles; path: string; handBack: () => void }) {
   let view!: HTMLDivElement;
   onMount(() => Boolean(document.activeElement?.closest(".files")) && view.focus());

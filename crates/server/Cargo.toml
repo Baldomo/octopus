@@ -12,7 +12,7 @@ workspace = true
 alacritty_terminal = { version = "0.26.0", default-features = false }
 anyhow.workspace = true
 ignore = "0.4.33"
-nix = { workspace = true, features = ["fs", "process", "signal", "socket", "user"] }
+nix = { workspace = true, features = ["fs", "process", "signal", "user"] }
 notify = "8.2.0"
 octopus-proto.workspace = true
 portable-pty = "0.9.0"

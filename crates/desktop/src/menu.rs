@@ -20,7 +20,6 @@ pub(crate) struct MenuCommand {
     pub accelerator: String,
 }
 
-/// A menu of the menu bar.
 #[derive(Debug, Clone, PartialEq, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MenuGroup {

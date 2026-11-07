@@ -68,7 +68,6 @@ function urlsOn(xterm: Terminal, y: number) {
   });
 }
 
-/** URLs the terminal prints, and its OSC 8 hyperlinks, open on a click with the link key held. */
 export function openLinks(xterm: Terminal, open: OpenUrl) {
   const activate = (event: MouseEvent, url: string) => {
     if (linkKey(event)) open(url, event.shiftKey ? "system" : "task");

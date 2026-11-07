@@ -12,7 +12,6 @@ const [renaming, setRenaming] = createSignal<Renamed | null>(null);
 export const startRename = (kind: Renamed["kind"], key: string) => setRenaming({ kind, key });
 export const isRenaming = (kind: Renamed["kind"], key: string) => renaming()?.kind === kind && renaming()?.key === key;
 
-/** Edits a name in place: Enter applies a changed, non-empty name, and Esc or leaving the field cancels. */
 export function RenameInput(props: { value: string; apply: (name: string) => Promise<unknown> }) {
   const stop = (event: Event) => event.stopPropagation();
   return (
@@ -42,7 +41,6 @@ export function RenameInput(props: { value: string; apply: (name: string) => Pro
   );
 }
 
-/** The color matrix, `current` ringed and `auto` dotted; picking `auto` picks null, the auto color. */
 export function Matrix(props: { current: Swatch; auto: Swatch; pick: (swatch: Swatch | null) => void }) {
   return (
     <div class="matrix">
@@ -64,7 +62,6 @@ export function Matrix(props: { current: Swatch; auto: Swatch; pick: (swatch: Sw
 
 const [adding, setAdding] = createSignal(false);
 
-/** The sidebar holds the keyboard while one of its menus or editors is open. */
 export const holdsKeyboard = () => anyMenuOpen() || renaming() !== null || adding();
 
 export function AddWorkspace() {

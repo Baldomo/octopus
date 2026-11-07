@@ -1,4 +1,5 @@
 import { batch, createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
+import { mac } from "./commands";
 import { showClientMenu, ui } from "./state";
 
 type Point = { x: number; y: number };
@@ -22,13 +23,11 @@ export const closing = (action: () => void) => () =>
     action();
   });
 
-/** Toggles menu `id` below `anchor`, or opens it at `point` for a right-click. */
 export function openMenu(id: string, anchor: HTMLElement, body: () => JSX.Element, point: Point | null = null) {
   if (ui.client_menu) showClientMenu(false);
   setOpened(point === null && isMenuOpen(id) ? null : { id, anchor, point, body });
 }
 
-/** What opens a menu: a click on its trigger, and a right-click anywhere on the anchor. */
 export const menuTrigger = (id: string, anchor: () => HTMLElement, body: () => JSX.Element) => ({
   onClick: (event: MouseEvent) => {
     event.stopPropagation();
@@ -44,7 +43,6 @@ export const onRightClick = (id: string, anchor: () => HTMLElement, body: () => 
   openMenu(id, anchor(), body, { x: event.clientX, y: event.clientY });
 };
 
-/** Keeps a margin from its host's edges, flipping above the anchor when there is no room below. */
 function place(menu: HTMLElement, within: HTMLElement, { anchor, point }: Opened) {
   const s = within.getBoundingClientRect();
   const a = anchor.getBoundingClientRect();
@@ -58,7 +56,6 @@ function place(menu: HTMLElement, within: HTMLElement, { anchor, point }: Opened
 
 const BLUR_SETTLES_MS = 150;
 
-/** Runs `close` on Esc, on a press outside `element` and every trigger, and when the layer loses the keyboard. */
 export function dismissible(element: HTMLElement, close: () => void) {
   const outside = (event: PointerEvent) => {
     const target = event.target as Element;
@@ -97,7 +94,6 @@ function Popover(props: { menu: Opened }) {
   );
 }
 
-/** Renders the open menu, placed within the element that holds the host; a host that goes takes its menu along. */
 export function MenuHost() {
   onCleanup(closePopover);
   return (
@@ -107,7 +103,6 @@ export function MenuHost() {
   );
 }
 
-/** A section's menu leads its title with a dot of the section's `color`. */
 export function Head(props: { title: string; lines: string[]; color?: string }) {
   return (
     <div class="mh">
@@ -122,7 +117,6 @@ export function Head(props: { title: string; lines: string[]; color?: string }) 
 
 export const Sep = () => <div class="sep" />;
 
-/** A disabled item says `why` in place of its key. */
 export function Item(props: {
   children: JSX.Element;
   run: () => void;
@@ -149,4 +143,34 @@ export function Item(props: {
       </Show>
     </button>
   );
+}
+
+export function Confirm(props: { children: JSX.Element; act: string; run: () => void; cancel: () => void }) {
+  return (
+    <div class="confirm">
+      <span>{props.children}</span>
+      <div class="row">
+        <button class="btn" onClick={props.cancel}>
+          Cancel
+        </button>
+        <button class="btn danger" onClick={props.run}>
+          {props.act}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export const copyKey = mac ? "⌘C" : "Ctrl+C";
+
+/** While the menu shows something to copy, the copy shortcut copies it. */
+export function copyOnShortcut<T>(shown: () => T | null, copy: (shown: T) => void) {
+  const onKey = (event: KeyboardEvent) => {
+    const showing = shown();
+    if (showing === null || event.key !== "c" || !(mac ? event.metaKey : event.ctrlKey)) return;
+    event.preventDefault();
+    copy(showing);
+  };
+  document.addEventListener("keydown", onKey);
+  onCleanup(() => document.removeEventListener("keydown", onKey));
 }

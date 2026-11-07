@@ -1,0 +1,19 @@
+#!/bin/sh
+# Links as usual, then signs a release `octopus` with this machine's code-signing identity first by name, so macOS keeps
+# its privacy grants across builds. With no identity, or no answer to the keychain's dialog within 20 s, the binary keeps
+# its ad-hoc signature, and macOS asks again after each update.
+cc "$@" || exit
+# The embedded Info.plist tells the binary from its test harness, which shares its name.
+while [ $# -gt 0 ]; do
+  [ "$1" = -o ] && out=$2
+  case "$1" in *__info_plist*) app=1 ;; esac
+  shift
+done
+case "$out" in
+*/release/deps/octopus-*) [ -n "$app" ] || exit 0 ;;
+*) exit 0 ;;
+esac
+identity=$(security find-identity -v -p codesigning | sed -n 's/^ *[0-9]*) \([0-9A-F]*\) "\(.*\)"$/\2	\1/p' | LC_ALL=C sort | head -1 | cut -f2)
+[ -n "$identity" ] || exit 0
+perl -e 'alarm 20; exec @ARGV' codesign --force --sign "$identity" "$out" 2>/dev/null ||
+  echo "octopus: $out keeps its ad-hoc signature; change a source file and install again to retry" >&2

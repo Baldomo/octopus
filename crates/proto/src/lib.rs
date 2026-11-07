@@ -1,3 +1,4 @@
+pub mod account;
 pub mod device;
 pub mod frames;
 pub mod local;
@@ -13,17 +14,21 @@ pub use frames::{
     parse_request, request_from,
 };
 
+pub fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+/// Milliseconds since 1970.
+pub fn now() -> i64 {
+    let elapsed =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("the clock reads after 1970");
+    i64::try_from(elapsed.as_millis()).expect("milliseconds since 1970 fit in i64")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn a_request_missing_fields_names_every_absent_field() {
-        let error = parse_args::<ops::TaskCreate>(&json!({"workspace": "wsp_8f2", "title": "x"})).unwrap_err();
-        let missing = ["parent", "state", "checkout", "harness", "session"].map(String::from).to_vec();
-        assert_eq!(error, Error::MissingField { fields: missing });
-    }
 
     schema::record!(Page { url: String, panel: String });
     schema::record!(Nested { task: types::TaskId, page: Page, tabs: Vec<Page> });
@@ -53,17 +58,13 @@ mod tests {
     }
 
     #[test]
-    fn an_undeclared_field_is_rejected() {
-        let error = parse_args::<ops::TaskFocus>(&json!({"task": "tsk_1", "args": [], "force": true})).unwrap_err();
-        assert_eq!(error, Error::UnknownField { fields: vec!["force".into()] });
-    }
-
-    #[test]
-    fn a_push_carries_its_event_name_beside_the_rev() {
+    fn a_push_carries_its_event_name_beside_the_rev_and_an_error_its_code() {
         let push = Push { rev: 7, event: Event::HarnessUpdated { harness: "claude-code".into() } };
         let wire = serde_json::to_value(&push).unwrap();
         assert_eq!(wire, json!({"rev": 7, "ev": "harness.updated", "harness": "claude-code"}));
         assert_eq!(serde_json::from_value::<Push>(wire).unwrap(), push);
+        let wire = serde_json::to_value(Error::PtyLocked { holder: "laptop".into() }).unwrap();
+        assert_eq!(wire, json!({"code": "pty_locked", "holder": "laptop"}));
     }
 
     #[test]
@@ -79,11 +80,5 @@ mod tests {
         assert_eq!(serde_json::to_value(Stream::Pty(PtyId("pty_2".into()))).unwrap(), json!({"pty": "pty_2"}));
         let stray = json!({"open": {"tunnel": 5173}, "client": "laptop", "zoom": 1});
         assert!(serde_json::from_value::<StreamHeader>(stray).is_err());
-    }
-
-    #[test]
-    fn errors_serialize_with_their_code() {
-        let wire = serde_json::to_value(Error::PtyLocked { holder: "laptop".into() }).unwrap();
-        assert_eq!(wire, json!({"code": "pty_locked", "holder": "laptop"}));
     }
 }

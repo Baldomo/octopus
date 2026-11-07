@@ -22,14 +22,11 @@ const chord = (event: KeyboardEvent) =>
     .filter(Boolean)
     .join("+");
 
-/** Per task key, the shell tab chosen over the agent's. */
 const [chosen, setChosen] = createStore<Record<string, PtyId | null>>({});
 
-/** Opens a shell panel in a directory of the task's checkout and selects its tab. */
 export const openShell = (at: TaskRef, key: string, directory: string) =>
   backend.termOpen(at, directory).then((panel) => setChosen(key, panel));
 
-/** Opens a link one of the task's terminals shows. */
 export type OpenLink = (task: TaskView, url: string, target: LinkTarget) => void;
 
 /** The holder fits the PTY to its pane; every other client draws it at the holder's size, cropped and scrollable. */
@@ -93,7 +90,7 @@ function Term(props: { at: TaskRef; panel: PanelView; visible: boolean; resumabl
   );
 }
 
-export function Missing(props: { open: TaskView }) {
+function Missing(props: { open: TaskView }) {
   const install = () => {
     const agent = props.open.task.agent;
     return agent.kind === "harness_not_installed" ? agent.install : null;
@@ -117,7 +114,6 @@ export function Missing(props: { open: TaskView }) {
   );
 }
 
-/** The agent's tab carries the task's glyph and names the harness it runs. */
 function AgentTab(props: { open: TaskView; on: boolean; shown: boolean; choose: () => void }) {
   return (
     <button
@@ -133,7 +129,6 @@ function AgentTab(props: { open: TaskView; on: boolean; shown: boolean; choose: 
   );
 }
 
-/** The agent tab comes first and is selected unless a shell tab is chosen. */
 function Stack(props: { key: string; openLink: OpenLink }) {
   const task = () => model.tasks[props.key];
   const shown = () => ui.prefs.open === props.key && ui.prefs.view === "task";
@@ -214,7 +209,6 @@ function Stack(props: { key: string; openLink: OpenLink }) {
   );
 }
 
-/** The right side: one stack per recently opened task, the open one shown. */
 export function TerminalStacks(props: { openLink: OpenLink }) {
   return (
     <>

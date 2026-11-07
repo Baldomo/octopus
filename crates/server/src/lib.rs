@@ -1,3 +1,4 @@
+mod accounts;
 mod agents;
 mod browser;
 mod checkouts;
@@ -18,15 +19,17 @@ mod workspaces;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, Weak, mpsc};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, Weak, mpsc};
 
+use octopus_proto::account::AccountId;
 use octopus_proto::device::{DeviceKey, PublicKey};
+pub(crate) use octopus_proto::lock;
+pub use octopus_proto::now;
 use octopus_proto::ops::{
-    AgentReport, BrowserClose, BrowserMove, BrowserOpen, BrowserReport, Done, Entries, FileCopy, FileCreate,
-    FileDelete, FileList, FileMove, FileSearch, FileWrite, HarnessSet, Matches, Offer, PairingForget, PairingList,
-    PairingOffer, SessionHello, SessionPing, SessionSync, Snapshot, TaskArchive, TaskCreate, TaskFocus, TaskGet,
-    TaskMove, TaskRename, TaskSetParent, TaskSetSession, TermClaim, TermClose, TermOpen, TermResize, TermSend,
+    AccountSync, AgentReport, BrowserClose, BrowserMove, BrowserOpen, BrowserReport, Done, Entries, FileCopy,
+    FileCreate, FileDelete, FileList, FileMove, FileSearch, FileWrite, HarnessSet, Matches, Offer, PairingForget,
+    PairingList, PairingOffer, SessionHello, SessionPing, SessionSync, Snapshot, TaskArchive, TaskCreate, TaskFocus,
+    TaskGet, TaskMove, TaskRename, TaskSetParent, TaskSetSession, TermClaim, TermClose, TermOpen, TermResize, TermSend,
     TermTakeLock, Welcome, WorkspaceAdd, WorkspaceList, WorkspaceRemove, WorkspaceRename, WorkspaceSetColor,
     Workspaces, Written,
 };
@@ -61,6 +64,7 @@ struct State {
     watchers: HashMap<TaskId, notify::RecommendedWatcher>,
     /// The terminals a program records from the virtual microphone of.
     listening: HashSet<PtyId>,
+    trusted: HashMap<AccountId, accounts::Trusted>,
 }
 
 pub struct Server {
@@ -75,20 +79,10 @@ pub struct Server {
     host: Arc<HostClient>,
     state: Mutex<State>,
     clients: Mutex<HashMap<Client, usize>>,
-    /// Each paired device's open connections over iroh.
     connections: Mutex<HashMap<PublicKey, Vec<Connection>>>,
     mic: Microphones,
     pushes: broadcast::Sender<Push>,
     file_changes: mpsc::Sender<(TaskId, String)>,
-}
-
-pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
-}
-
-pub fn now() -> i64 {
-    let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).expect("the clock reads after 1970");
-    i64::try_from(elapsed.as_millis()).expect("milliseconds since 1970 fit in i64")
 }
 
 /// Writes one diagnostic line. The terminal host outlives the shell that launched it, and `eprintln!` panics once
@@ -123,6 +117,7 @@ impl Server {
         let mut store = Store::open(store)?;
         let device = store.device_key()?;
         let browsers = store.browsers()?;
+        let trusted = accounts::load(store.accounts()?);
         let (host_program, host_address) = (host.program.clone(), host.address.clone());
         let host = Arc::new(HostClient::reach_or_start(host)?);
         let mut hosted: HashMap<PtyId, bool> =
@@ -150,6 +145,7 @@ impl Server {
                 browsers,
                 watchers: HashMap::new(),
                 listening: HashSet::new(),
+                trusted,
             }),
             clients: Mutex::new(HashMap::new()),
             connections: Mutex::new(HashMap::new()),
@@ -198,12 +194,10 @@ impl Server {
         Ok(server)
     }
 
-    /// The key this server proves to every client over iroh.
     pub fn device(&self) -> &DeviceKey {
         &self.device
     }
 
-    /// The relay this server is homed on, which its invites name.
     pub fn relay(&self) -> &RelayUrl {
         &self.relay
     }
@@ -221,6 +215,7 @@ impl Server {
             PairingForget::NAME => call::<PairingForget>(args, |op| self.pairing_forget(op)),
             PairingOffer::NAME => call::<PairingOffer>(args, |_| Ok::<Offer, Error>(self.offer())),
             PairingList::NAME => call::<PairingList>(args, |_| self.pairing_list()),
+            AccountSync::NAME => call::<AccountSync>(args, |op| self.account_sync(client, op)),
             WorkspaceAdd::NAME => call::<WorkspaceAdd>(args, |op| self.workspace_add(op)),
             WorkspaceList::NAME => {
                 call::<WorkspaceList>(args, |_| Ok(Workspaces { workspaces: lock(&self.state).store.workspaces()? }))

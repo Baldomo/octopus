@@ -3774,7 +3774,6 @@ dependencies = [
  "cfg-if",
  "cfg_aliases 0.2.2",
  "libc",
- "memoffset",
 ]
 
 [[package]]
@@ -4291,6 +4290,7 @@ dependencies = [
  "anyhow",
  "dirs",
  "gethostname",
+ "nix 0.31.3",
  "octopus-proto",
  "qrcode",
  "serde",

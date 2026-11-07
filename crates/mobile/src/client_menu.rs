@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
-use octopus_client::servers::{Config, create_parent};
+use octopus_client::servers::{self, Config};
+use octopus_proto::account::Link;
 use octopus_proto::pairing::Invite;
 use octopus_shell::hub::Hub;
 use tauri::State;
@@ -20,18 +21,15 @@ impl Phone {
     /// The phone and the name it is known by: the one kept at its first pairing, else the one the OS reports.
     pub fn load(config: Config, reported: impl FnOnce() -> anyhow::Result<String>) -> anyhow::Result<(Self, String)> {
         let path = config.file(NAME_FILE);
-        let (named, name) = match std::fs::read_to_string(&path) {
-            Ok(name) => (true, name),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (false, reported()?),
-            Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+        let (named, name) = match servers::read_text(&path)? {
+            Some(name) => (true, name),
+            None => (false, reported()?),
         };
         Ok((Self { config, named: AtomicBool::new(named) }, name))
     }
 
     fn keep_name(&self, name: &str) -> anyhow::Result<()> {
-        let path = self.config.file(NAME_FILE);
-        create_parent(&path)?;
-        std::fs::write(&path, name).with_context(|| format!("write {}", path.display()))?;
+        servers::write_text(&self.config.file(NAME_FILE), name)?;
         self.named.store(true, Ordering::Relaxed);
         Ok(())
     }
@@ -58,6 +56,14 @@ pub(crate) fn phone_invite_key(invite: String) -> Result<String, String> {
     Ok(invite.server.hex())
 }
 
+/// Reads the first eight hex digits of the account a link joins, shown before joining spends it, naming the part of
+/// the link that is wrong.
+#[tauri::command]
+pub(crate) fn phone_link_account(link: String) -> Result<String, String> {
+    let link: Link = link.trim().parse()?;
+    Ok(link.account.short())
+}
+
 /// Pairs with the server `invite` names and resolves to its name. A phone that has never paired names itself `name`
 /// first; a named phone passes none.
 #[tauri::command]
@@ -71,18 +77,41 @@ pub(crate) async fn phone_pair(
     if let Some(listed) = hub.listed_as(&invite.server) {
         return Err(format!("Already paired as {listed}."));
     }
+    named(&hub, &phone, name, async || hub.pair(&invite).await).await
+}
+
+/// Joins the account `link` names. A phone that has never paired names itself `name` first; a named phone passes
+/// none.
+#[tauri::command]
+pub(crate) async fn phone_join(
+    hub: State<'_, Arc<Hub>>,
+    phone: State<'_, Phone>,
+    link: String,
+    name: Option<String>,
+) -> Result<(), String> {
+    let link: Link = link.trim().parse()?;
+    named(&hub, &phone, name, async || servers::join(&link, &hub.me).await).await
+}
+
+/// Runs `act` under the name a phone that has never paired takes, which it gives back if `act` fails.
+async fn named<T>(
+    hub: &Hub,
+    phone: &Phone,
+    name: Option<String>,
+    act: impl AsyncFnOnce() -> anyhow::Result<T>,
+) -> Result<T, String> {
     let naming = !phone.named.load(Ordering::Relaxed);
     match (naming, name.as_deref().map(str::trim)) {
         (true, Some("") | None) => return Err("name this phone before its first pairing".into()),
         (true, Some(name)) => {
             phone.keep_name(name).map_err(|error| format!("{error:#}"))?;
-            hub.me.rename(name.to_string());
+            hub.me.rename(name.to_string()).map_err(|error| format!("{error:#}"))?;
         }
         (false, Some(_)) => return Err("this phone keeps the name it first paired with".into()),
         (false, None) => {}
     }
-    match hub.pair(&invite).await {
-        Ok(paired) => Ok(paired),
+    match act().await {
+        Ok(done) => Ok(done),
         Err(error) if naming => Err(match phone.drop_name() {
             Ok(()) => format!("{error:#}"),
             Err(dropping) => format!("{error:#}; and {dropping:#}"),

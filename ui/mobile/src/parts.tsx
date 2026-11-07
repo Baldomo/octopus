@@ -6,6 +6,7 @@ import { swatchColor } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
 import { Icon, type IconName } from "./Icon";
 import { onPainted } from "./motion";
+import { back } from "./nav";
 import { slidingThumb } from "./thumb";
 
 /** The color of the section named `name`, faint while the model lists none by that name. */
@@ -190,6 +191,43 @@ export const Secondary = (props: { children: JSX.Element; tap: () => void }) => 
     {props.children}
   </button>
 );
+
+export const Trail = (props: { parts: string[] }) => (
+  <For each={props.parts}>
+    {(part, nth) => (
+      <>
+        <Show when={nth() > 0}>
+          <span class="sep">/</span>
+        </Show>
+        {part}
+      </>
+    )}
+  </For>
+);
+
+/** A screen's top bar over a crumb in its section's color, back to the screen named `up`. */
+export function CrumbBar(props: {
+  up: string;
+  color: string;
+  crumb: JSX.Element;
+  title: JSX.Element;
+  end?: JSX.Element;
+  slim?: boolean;
+}) {
+  return (
+    <div class="bar" classList={{ slim: props.slim }}>
+      <Circle icon="back" label={props.up} tap={back} />
+      <div class="ttl" style={{ "--ws": props.color }}>
+        <span class="crumb">
+          <i />
+          {props.crumb}
+        </span>
+        <b class="name">{props.title}</b>
+      </div>
+      {props.end}
+    </div>
+  );
+}
 
 /** A screen's 56pt top bar: back when the screen has one, then its title or crumbs over the title, then actions. */
 export function Bar(props: { back?: () => void; children: JSX.Element; end?: JSX.Element }) {

@@ -4,13 +4,9 @@ import type { Match, TaskRef } from "./generated";
 import { report } from "./state";
 
 const SEARCH_DELAY_MS = 150;
-/** File search starts at this many characters; shorter patterns match nearly every line. */
+/** Shorter patterns match nearly every line. */
 const MIN_QUERY = 2;
 
-/**
- * The lines of a task's files that hold `query`, searched a moment after the typing stops and only from MIN_QUERY
- * characters on.
- */
 export function fileMatches(at: () => TaskRef | undefined, query: () => string, most: number) {
   const [matches, setMatches] = createSignal<Match[]>([]);
   createEffect(

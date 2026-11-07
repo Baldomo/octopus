@@ -8,7 +8,6 @@ import { act, model, report, serverLabel, serverView, setNewTaskSection, showBoa
 import { swatchColor } from "./tokens";
 import { copy, toast } from "./Toast";
 
-/** Opens the new-task form on the section's workspace. */
 export function newTaskIn(section: string) {
   setNewTaskSection(section);
   showModal("new_task");

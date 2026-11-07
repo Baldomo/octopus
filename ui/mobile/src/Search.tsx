@@ -20,7 +20,6 @@ const APPEARANCE: [Appearance, string][] = [
   ["dark", "Dark"],
 ];
 
-/** Tasks by title, the last opened task's files by their content, and the app's commands, in one field. */
 export function Search() {
   const [query, setQuery] = createSignal("");
   const needle = () => query().trim().toLowerCase();
@@ -58,7 +57,7 @@ export function Search() {
   const commands = (): Result[] =>
     [
       { slot: <Icon name="plus" />, label: "New task", run: () => openSheet({ is: "newtask", section: null }) },
-      { slot: <Icon name="qr" />, label: "Pair a server…", run: () => go({ at: "scan" }) },
+      { slot: <Icon name="qr" />, label: "Pair a server…", run: () => go({ at: "scan", reading: "invite" }) },
       ...APPEARANCE.map(([appearance, name]) => ({
         slot: <Icon name="sun" />,
         label: `Appearance: ${name}`,

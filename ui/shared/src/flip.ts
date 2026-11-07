@@ -4,13 +4,11 @@ import { moves, shownAt, slideFrom, type Box } from "./slide";
 type Spot = Box & { element: HTMLElement; ws: string };
 type Mover = { spot: Spot; dx: number; dy: number };
 
-/** Rows a drop waits for where it put them, each told where it arrived before its list measures. */
 const arrivals = new Map<
   string,
   { arrived: (element: HTMLElement) => boolean; arrive: (element: HTMLElement) => void }
 >();
 
-/** Waits for the row keyed `key` to show where `arrived` holds; the returned function stops waiting. */
 export function awaitArrival(
   key: string,
   arrived: (element: HTMLElement) => boolean,
@@ -85,7 +83,6 @@ export function animateList(
       return { x, y };
     };
 
-    /** Slides an item laid out at `from` onto its place `to`, on from wherever a slide still running shows it. */
     const move = (element: HTMLElement, from: Box, to: Box) => {
       const stretching = stretches(element);
       if (reduced() || !moves(from, to, stretching)) return null;

@@ -1,13 +1,13 @@
 import inter from "@fontsource-variable/inter/files/inter-latin-opsz-normal.woff2?url";
-import { createEffect, createSignal, For, Match, on, Switch } from "solid-js";
+import { createEffect, createSignal, For, Match, on, Show, Switch } from "solid-js";
 import "virtual:design.css";
 import "./app.css";
 import { backend, events } from "@octopus/shared/backend.ts";
 import { loadFonts } from "@octopus/shared/fonts.ts";
 import { mount } from "@octopus/shared/mount.ts";
 import type { Appearance } from "@octopus/shared/generated.ts";
-import { applyBoot, applyModel, applyUi, report, servers, setServers, ui } from "@octopus/shared/state.ts";
-import { setWindowShown } from "@octopus/shared/terminalSession.ts";
+import { applyBoot, applyModel, applyUi, report, servers, setAccount, setServers, ui } from "@octopus/shared/state.ts";
+import { setWindowShown, windowShown } from "@octopus/shared/terminalSession.ts";
 import { applyFilesChanged, forgetFilesExcept } from "@octopus/shared/taskFiles.ts";
 import { Board } from "./Board";
 import { Browser } from "./Browser";
@@ -18,9 +18,10 @@ import { loadSymbols } from "./symbols";
 import { setMicDenied, sheetEntry, type Screen, type Sheet, type Toward } from "./nav";
 import { NewTask } from "./NewTask";
 import { PairSheet, Scan, scanning, Welcome } from "./Pairing";
+import { phone } from "./phone";
 import { Search } from "./Search";
 import { SheetPresence } from "./Sheet";
-import { Stack } from "./stack";
+import { Stack, sliding } from "./stack";
 import { Task } from "./Task";
 import { Reopen, TaskMenu } from "./TaskMenu";
 import { Tasks } from "./Tasks";
@@ -36,15 +37,11 @@ function Shown(props: { screen: Screen }) {
   return (
     <Switch>
       <Match when={props.screen.at === "tasks"}>
-        <Switch fallback={<Tasks />}>
-          <Match when={servers().length === 0}>
-            <Welcome />
-          </Match>
-        </Switch>
+        <Show when={servers().length > 0} fallback={<Welcome />}>
+          <Tasks />
+        </Show>
       </Match>
-      <Match when={props.screen.at === "scan"}>
-        <Scan />
-      </Match>
+      <Match when={props.screen.at === "scan" && props.screen}>{(scan) => <Scan reading={scan().reading} />}</Match>
       <Match when={props.screen.at === "task" && props.screen.key} keyed>
         {(key) => <Task taskKey={key} />}
       </Match>
@@ -75,7 +72,9 @@ function SheetPage(props: { sheet: Sheet }) {
         <ClientMenu />
       </Match>
       <Match when={shown.is === "server" && shown.name}>{(name) => <ServerMenu name={name()} />}</Match>
-      <Match when={shown.is === "pair" && shown.invite}>{(invite) => <PairSheet invite={invite()} />}</Match>
+      <Match when={shown.is === "pair" && shown}>
+        {(read) => <PairSheet invite={read().invite} reading={read().reading} />}
+      </Match>
       <Match when={shown.is === "task" && shown}>
         {(menu) => <TaskMenu taskKey={menu().key} open={menu().open} />}
       </Match>
@@ -118,11 +117,37 @@ function Sheets() {
   );
 }
 
+const redial = () => phone.redial().catch(report);
+
+/** One network change fires several events, and each redial ends the dials under way. */
+const REDIAL_SETTLE_MS = 1000;
+let settling: ReturnType<typeof setTimeout> | undefined;
+const redialOnceSettled = () => {
+  clearTimeout(settling);
+  settling = setTimeout(redial, REDIAL_SETTLE_MS);
+};
+
+/**
+ * The network can change with the app in front too. Android's webview reports the connection's type, whose `change`
+ * also fires as its speed estimates move; `online` is all iOS's reports.
+ */
+const followNetwork = () => {
+  window.addEventListener("online", redialOnceSettled);
+  const connection = (navigator as Navigator & { connection?: EventTarget & { type: string } }).connection;
+  if (connection === undefined) return;
+  let type = connection.type;
+  connection.addEventListener("change", () => {
+    if (connection.type !== type) redialOnceSettled();
+    type = connection.type;
+  });
+};
+
 /** Every pushed screen stays mounted under the one on top, so going back finds it as it was left. */
 function App() {
   createEffect(() => document.documentElement.style.setProperty("color-scheme", SCHEMES[ui.prefs.appearance]));
-  createEffect(() => document.documentElement.toggleAttribute("data-scanning", scanning()));
+  createEffect(() => document.documentElement.toggleAttribute("data-scanning", scanning() && !sliding()));
   createEffect(on(() => [...ui.recent], forgetFilesExcept));
+  createEffect(on(windowShown, (shown) => shown && redial(), { defer: true }));
   return (
     <>
       <Sprite />
@@ -150,12 +175,14 @@ const followFront = () => {
 async function start() {
   followViewport();
   followFront();
+  followNetwork();
   followTouches();
   followMotion();
   await Promise.all([loadFonts(inter), loadSymbols()]);
   await Promise.all([
     events.model(applyModel),
     events.servers(setServers),
+    events.account(setAccount),
     events.ui(applyUi),
     events.microphoneDenied(setMicDenied),
     events.filesChanged(applyFilesChanged),

@@ -5,6 +5,5 @@ export const SWATCHES: Swatch[] = TONES.flatMap((tone) => HUES.map((hue) => ({ h
 
 export const sameSwatch = (a: Swatch, b: Swatch | null | undefined) => a.hue === b?.hue && a.tone === b?.tone;
 
-/** What picking `swatch` picks: null, the auto color, for the `auto` swatch, else the swatch itself. */
 export const pickSwatch = (swatch: Swatch, auto: Swatch | null | undefined) =>
   sameSwatch(swatch, auto) ? null : swatch;

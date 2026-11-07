@@ -138,8 +138,6 @@ function targetOf(task: TaskView): Target {
   return panels.at(-1)?.panel ?? NEW_BROWSER_PANEL;
 }
 
-const currentOf = (task: TaskView) => task.task.browsers.find((panel) => panel.panel === targetOf(task));
-
 /** Shows `url` in the task's target panel, which stays the target. */
 const openPage = (task: TaskView, url: string) =>
   desktop.browserOpen(task.at, targetOf(task), url).then((panel) => setSelected(task.key, panel), report);
@@ -203,7 +201,7 @@ export function Browser(props: { visible: boolean }) {
   };
   const current = () => {
     const task = openView();
-    return task === undefined ? undefined : currentOf(task);
+    return task?.task.browsers.find((panel) => panel.panel === targetOf(task));
   };
   const shown = () => {
     const task = openView();

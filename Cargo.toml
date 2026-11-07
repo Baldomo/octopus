@@ -41,3 +41,7 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
+
+# Stripping after the link would drop the signature scripts/link-signed gives.
+[profile.release]
+strip = false

@@ -1,3 +1,4 @@
+mod account;
 mod attach;
 pub mod commands;
 #[cfg(feature = "desktop")]
@@ -19,8 +20,13 @@ const USAGE: u8 = 2;
 
 async fn connect(server: &str) -> anyhow::Result<Connection> {
     let config = Config::user()?;
-    let servers = Servers::load(&config)?;
-    Connection::connect(&servers.get(server)?.address, &Identity::load(&config)?).await
+    let me = Identity::load(&config)?;
+    connect_as(&config, &me, server).await
+}
+
+/// Connects to a server this client reaches by name: one on this machine, or one its account lists.
+async fn connect_as(config: &Config, me: &Identity, server: &str) -> anyhow::Result<Connection> {
+    Connection::connect(&Servers::load(config)?.reach(me, server)?.address, me).await
 }
 
 /// A server error prints as its JSON wire shape so scripts can match its code.

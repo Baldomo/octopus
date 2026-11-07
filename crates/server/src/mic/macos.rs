@@ -7,17 +7,15 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use anyhow::Context;
-use nix::sys::socket::{getsockopt, sockopt};
 use nix::unistd::Pid;
-use octopus_proto::local;
 use octopus_proto::types::{MIC_DEVICE, MIC_FORMAT, PtyId};
 
 use super::Shared;
+use crate::host::HostClient;
 use crate::{lock, report};
 
 /// The user's own default input while the Octopus Microphone stands in for it.
 const RESTORE_INPUT: &str = "restore-input";
-const LEADERS: &str = "leaders.json";
 /// A process's running input changes on that process's object alone, so one poll reads them all.
 const POLL: Duration = Duration::from_millis(200);
 
@@ -31,9 +29,8 @@ struct Inner {
     shared: Arc<Shared>,
     /// This server's terminals; another server's may record from the same device.
     terminals: Mutex<HashSet<PtyId>>,
-    /// The terminal host, whose child each terminal's program is.
-    host: Pid,
-    /// The program each terminal started, which leads the terminal's session; kept in `LEADERS` across restarts.
+    host: HostClient,
+    /// The program each terminal started, which leads the terminal's session.
     leaders: Mutex<HashMap<PtyId, Pid>>,
     /// The listening terminals in the order they started; the device carries the first.
     order: Mutex<Vec<PtyId>>,
@@ -49,11 +46,8 @@ impl Platform {
         let device = ca::Device::find(MIC_DEVICE.uid)?
             .with_context(|| format!("no audio device {}; reinstall the server to install it", MIC_DEVICE.uid))?;
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let reached = local::connect_blocking(terminal_host)
-            .with_context(|| format!("reach the terminal host {}", terminal_host.display()))?;
-        let host = getsockopt(&reached, sockopt::LocalPeerPid).context("read the terminal host's pid")?;
         let inner = Arc::new(Inner {
-            host: Pid::from_raw(host),
+            host: HostClient::at(terminal_host),
             leaders: Mutex::default(),
             device,
             dir: dir.to_path_buf(),
@@ -74,44 +68,18 @@ impl Platform {
         Ok(Vec::new())
     }
 
-    /// The host's one child that no terminal claims is the program it just started.
     pub fn started(&self, id: &PtyId) {
-        let mut leaders = lock(&self.inner.leaders);
-        let claimed: HashSet<Pid> = leaders.values().copied().collect();
-        match ca::children(self.inner.host)
-            .map(|children| children.into_iter().filter(|pid| !claimed.contains(pid)).collect::<Vec<_>>())
-        {
-            Ok(fresh) if fresh.len() == 1 => {
-                leaders.insert(id.clone(), fresh[0]);
-            }
-            Ok(fresh) => report!("{id} has {} unclaimed programs in the terminal host, not one", fresh.len()),
-            Err(error) => report!("find the program of {id}: {error:#}"),
-        }
-        self.inner.save_leaders(&leaders);
+        self.inner.learn_leader(id);
     }
 
-    /// A saved leader counts while it is still the host's child.
     pub fn adopt(&self, terminals: &[PtyId]) {
         lock(&self.inner.terminals).extend(terminals.iter().cloned());
-        let saved = self.inner.saved_leaders().unwrap_or_else(|error| {
-            report!("{error:#}");
-            HashMap::new()
-        });
-        let children = ca::children(self.inner.host).unwrap_or_else(|error| {
-            report!("{error:#}");
-            Vec::new()
-        });
-        let children: HashSet<Pid> = children.into_iter().collect();
-        let mut leaders = lock(&self.inner.leaders);
-        *leaders = saved.into_iter().filter(|(id, pid)| terminals.contains(id) && children.contains(pid)).collect();
-        self.inner.save_leaders(&leaders);
+        terminals.iter().for_each(|id| self.inner.learn_leader(id));
     }
 
     pub fn remove(&self, id: &PtyId) {
         lock(&self.inner.terminals).remove(id);
-        let mut leaders = lock(&self.inner.leaders);
-        leaders.remove(id);
-        self.inner.save_leaders(&leaders);
+        lock(&self.inner.leaders).remove(id);
     }
 
     pub fn remote_held(&self, terminals: HashSet<PtyId>) {
@@ -150,8 +118,11 @@ impl Inner {
         let (recording, skipped) = ca::recording_processes(self.device).context("list the processes recording")?;
         let listening = self.listen(&recording);
         let carried = &*lock(&self.streaming) & &*lock(&self.remote_held);
-        let switched =
-            if listening.iter().any(|id| carried.contains(id)) { self.take_input() } else { self.restore_input() };
+        let switched = if listening.iter().any(|id| carried.contains(id)) {
+            self.take_input()
+        } else {
+            restore_input(self.device, &self.restore_path())
+        };
         switched.context("switch the default input")?;
         skipped.map_or(Ok(()), |error| Err(error.context("read an audio process")))
     }
@@ -184,26 +155,18 @@ impl Inner {
         lock(&self.leaders).iter().find(|(_, known)| **known == leader).map(|(id, _)| id.clone())
     }
 
-    /// No file means no terminal has started a program yet.
-    fn saved_leaders(&self) -> anyhow::Result<HashMap<PtyId, Pid>> {
-        let path = self.dir.join(LEADERS);
-        let json = match std::fs::read(&path) {
-            Ok(json) => json,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
-            Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
-        };
-        let raw: HashMap<PtyId, i32> =
-            serde_json::from_slice(&json).with_context(|| format!("parse {}", path.display()))?;
-        Ok(raw.into_iter().map(|(id, pid)| (id, Pid::from_raw(pid))).collect())
-    }
-
-    fn save_leaders(&self, leaders: &HashMap<PtyId, Pid>) {
-        let raw: HashMap<&PtyId, i32> = leaders.iter().map(|(id, pid)| (id, pid.as_raw())).collect();
-        let path = self.dir.join(LEADERS);
-        let written =
-            serde_json::to_vec(&raw).map_err(anyhow::Error::from).and_then(|json| Ok(std::fs::write(&path, json)?));
-        if let Err(error) = written {
-            report!("save {}: {error:#}", path.display());
+    /// A terminal whose program has already exited has no leader to learn.
+    fn learn_leader(&self, id: &PtyId) {
+        match self.host.program(id) {
+            Ok(Some(program)) => {
+                lock(&self.leaders).insert(id.clone(), Pid::from_raw(program));
+            }
+            Ok(None) => {}
+            Err(octopus_proto::Error::InvalidArgs { .. }) => report!(
+                "{id} has no virtual microphone: the terminal host predates asking for a program; ending the host, \
+                 which ends its terminals, brings it"
+            ),
+            Err(error) => report!("find the program of {id}: {error}"),
         }
     }
 
@@ -224,14 +187,8 @@ impl Inner {
         }
         ca::set_default_input(self.device)
     }
-
-    fn restore_input(&self) -> anyhow::Result<()> {
-        restore_input(self.device, &self.restore_path())
-    }
 }
 
-/// The terminal a process runs in: the panel its session's leader, the program the terminal started, was started
-/// with. A leader's environment as it started stays readable however the program changes its own.
 /// Gives back the input saved at `saved` while `device` is still the default; a default the user changed since
 /// stays. A saved input that is gone stays saved until it is back.
 fn restore_input(device: ca::Device, saved: &Path) -> anyhow::Result<()> {
@@ -281,8 +238,9 @@ fn advance(order: &mut Vec<PtyId>, now: &HashSet<PtyId>) {
 
 /// `MIC_FORMAT` samples as the device's Float32.
 fn to_float(pcm: &[u8], out: &mut [f32]) {
-    for (sample, bytes) in out.iter_mut().zip(pcm.chunks_exact(MIC_FORMAT.bytes_per_sample)) {
-        *sample = f32::from(i16::from_le_bytes([bytes[0], bytes[1]])) / 32768.0;
+    let (samples, _) = pcm.as_chunks::<{ MIC_FORMAT.bytes_per_sample }>();
+    for (sample, bytes) in out.iter_mut().zip(samples) {
+        *sample = f32::from(i16::from_le_bytes(*bytes)) / 32768.0;
     }
 }
 
@@ -523,21 +481,6 @@ mod ca {
         })
     }
 
-    /// The processes `parent` started that still run.
-    pub fn children(parent: Pid) -> anyhow::Result<Vec<Pid>> {
-        const PPID_ONLY: u32 = 6;
-        let mut pids = vec![0 as nix::libc::pid_t; 4096];
-        let size = i32::try_from(pids.len() * size_of::<nix::libc::pid_t>()).expect("the buffer fits i32");
-        // SAFETY: `pids` has room for `size` bytes, and the call writes no more.
-        let filled =
-            unsafe { nix::libc::proc_listpids(PPID_ONLY, parent.as_raw() as u32, pids.as_mut_ptr().cast(), size) };
-        if filled < 0 {
-            bail!("list the children of {parent}: {}", std::io::Error::last_os_error());
-        }
-        pids.truncate(filled as usize / size_of::<nix::libc::pid_t>());
-        Ok(pids.into_iter().filter(|pid| *pid > 0).map(Pid::from_raw).collect())
-    }
-
     pub struct Recording {
         pub pid: Pid,
         /// Whether it records from the Octopus Microphone rather than another input.
@@ -710,16 +653,6 @@ mod tests {
             .map(|(pid, from_device)| ca::Recording { pid: Pid::from_raw(pid), from_device });
         let listening = listeners(&recording, &terminals, &remote_held, terminal_of);
         assert_eq!(listening, HashSet::from([id("pty_a"), id("pty_b")]));
-    }
-
-    #[test]
-    fn this_process_lists_the_children_it_started() {
-        let mut child = std::process::Command::new("sleep").arg("5").spawn().expect("start a child");
-        let pid = Pid::from_raw(i32::try_from(child.id()).expect("a pid fits i32"));
-        let children = ca::children(nix::unistd::getpid()).expect("list this process's children");
-        child.kill().expect("end the child");
-        child.wait().expect("reap the child");
-        assert!(children.contains(&pid), "{children:?} lacks {pid}");
     }
 
     #[test]

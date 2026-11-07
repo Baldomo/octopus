@@ -6,7 +6,7 @@ import { feel } from "./feel";
 import { phone } from "./phone";
 import { LONG_PRESS_MS, type Point } from "./press";
 import { notify } from "./Toast";
-import { COMMIT_PX, keepTouch } from "./touch";
+import { COMMIT_PX, fingerIn, keepTouch } from "./touch";
 
 /** A buffer cell; `row` counts from the first line of the scrollback. */
 export type Cell = { col: number; row: number };
@@ -151,11 +151,9 @@ export function termSelection(props: {
     };
   };
 
-  /** A finger on the pane, and the word it selected once held past the long press. */
   type Finger = { id: number; from: Point; word: Span | null };
   let finger: Finger | null = null;
   let holding: ReturnType<typeof setTimeout> | undefined;
-  const touchOf = (touches: TouchList, id: number | undefined) => [...touches].find((touch) => touch.identifier === id);
   const onControls = (event: Event) =>
     event.target instanceof Element && event.target.closest(".hdl, .selmenu") !== null;
   const letGo = () => {
@@ -190,7 +188,7 @@ export function termSelection(props: {
     pane.addEventListener(
       "touchmove",
       (event) => {
-        const touch = touchOf(event.touches, finger?.id);
+        const touch = fingerIn(event.touches, finger?.id);
         if (finger === null || touch === undefined) return;
         const to = { x: touch.clientX, y: touch.clientY };
         const { word } = finger;
@@ -208,7 +206,7 @@ export function termSelection(props: {
     );
     for (const lift of ["touchend", "touchcancel"] as const)
       pane.addEventListener(lift, (event) => {
-        if (touchOf(event.changedTouches, finger?.id) !== undefined) letGo();
+        if (fingerIn(event.changedTouches, finger?.id) !== undefined) letGo();
       });
   };
 
@@ -235,7 +233,7 @@ export function termSelection(props: {
     element.addEventListener(
       "touchmove",
       (event) => {
-        const touch = touchOf(event.touches, grip?.id);
+        const touch = fingerIn(event.touches, grip?.id);
         if (grip === null || touch === undefined) return;
         const cell = cellAt({ x: touch.clientX + grip.offset.x, y: touch.clientY + grip.offset.y }, true);
         if (cell !== null) select(ordered(grip.fixed, cell));
@@ -244,7 +242,7 @@ export function termSelection(props: {
     );
     for (const lift of ["touchend", "touchcancel"] as const)
       element.addEventListener(lift, (event) => {
-        if (touchOf(event.changedTouches, grip?.id) === undefined) return;
+        if (fingerIn(event.changedTouches, grip?.id) === undefined) return;
         grip = null;
         setMoving(false);
       });

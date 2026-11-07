@@ -5,14 +5,18 @@ use std::process::{Child, Command};
 use std::sync::Arc;
 use std::time::Duration;
 
+use octopus_client::account::Book;
 use octopus_client::servers::Address;
 use octopus_client::{CallError, Connection, Identity};
 use octopus_proto::device::DeviceKey;
 use octopus_proto::local::Listener;
-use octopus_proto::ops::{TaskCreate, TaskGet, WorkspaceAdd};
+use octopus_proto::ops::{HarnessSet, TaskCreate, TaskFocus, TaskGet, TermSend, WorkspaceAdd};
 use octopus_proto::remote::{self, RelayUrl};
-use octopus_proto::types::{CheckoutKind, Color, Panel, ReadDir, SessionStart, Task, TaskId, TaskState, WorkspaceId};
+use octopus_proto::types::{
+    CheckoutKind, Color, Hooks, Panel, ReadDir, SessionStart, Stream, Task, TaskId, TaskState, WorkspaceId,
+};
 use octopus_server::{Server, TerminalHost, serve};
+use tempfile::TempDir;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 pub const SERVER: &str = "mac-mini";
@@ -34,6 +38,13 @@ pub async fn start(dir: &Path, socket: &str, host: &str) -> Running {
     start_with(dir, socket, host, false).await
 }
 
+/// A server started in a fresh directory, which lives as long as the returned `TempDir`.
+pub async fn server() -> (TempDir, Running) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = start(dir.path(), "server.sock", "host.sock").await;
+    (dir, running)
+}
+
 /// As `start`, giving each terminal a virtual microphone when `microphone` holds.
 pub async fn start_with(dir: &Path, socket: &str, host: &str, microphone: bool) -> Running {
     let mut config = iroh_relay::server::ServerConfig::default();
@@ -51,7 +62,9 @@ pub async fn start_with(dir: &Path, socket: &str, host: &str, microphone: bool) 
 
 /// A client named `name` with a key of its own.
 pub fn identity(name: &str) -> Identity {
-    Identity::new(name.into(), DeviceKey::generate())
+    let key = DeviceKey::generate();
+    let account = Book::memory(&key);
+    Identity::new(name.into(), key, account).expect("an identity")
 }
 
 pub fn local(socket: &Path) -> Address {
@@ -127,6 +140,29 @@ pub fn echo_agent(line: &str) -> Vec<String> {
     vec!["sh".into(), "-c".into(), format!("echo {line}; exec cat")]
 }
 
+/// A harness that is always installed and names no session.
+pub fn harness(id: &str, argv: Vec<String>, hooks: Hooks) -> HarnessSet {
+    HarnessSet { id: id.into(), argv, install: "true".into(), start: vec![], resume: vec![], hooks }
+}
+
+pub async fn set_harness(connection: &Connection, id: &str, argv: Vec<String>, hooks: Hooks) {
+    connection.call(&harness(id, argv, hooks)).await.expect("harness.set");
+}
+
+pub async fn focus(connection: &Connection, id: &TaskId) {
+    connection.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("task.focus");
+}
+
+/// The stream of the task's agent terminal.
+pub async fn agent(connection: &Connection, id: &TaskId) -> Stream {
+    Stream::Pty(task(connection, id).await.panels[0].id.clone())
+}
+
+/// Types `text` and enter into `panel`, taking its lock.
+pub fn send(id: &TaskId, panel: &str, text: &str) -> TermSend {
+    TermSend { task: id.clone(), panel: panel.into(), text: text.into(), enter: true, take_lock: true }
+}
+
 /// Writes `script` as the login profile of both sh-family shells and zsh under `home`.
 pub fn write_login_profile(home: &Path, script: &str) {
     for file in [".profile", ".zprofile"] {
@@ -154,6 +190,13 @@ pub async fn create(connection: &Connection, workspace: &WorkspaceId, checkout: 
 
 pub async fn task(connection: &Connection, task: &TaskId) -> Task {
     connection.call(&TaskGet { task: task.clone() }).await.expect("task.get")
+}
+
+pub fn refused<T: std::fmt::Debug>(outcome: Result<T, CallError>) -> octopus_proto::Error {
+    match outcome {
+        Err(CallError::Server(error)) => error,
+        other => panic!("expected the server to refuse, got {other:?}"),
+    }
 }
 
 /// The label of the panel's lock holder, the way every client shows it.

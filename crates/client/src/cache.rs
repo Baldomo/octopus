@@ -29,7 +29,7 @@ impl Cache {
 
     pub fn apply(&mut self, push: &Push) -> PushEffect {
         match &push.event {
-            Event::FileChanged { .. } => return PushEffect::NotState,
+            Event::FileChanged { .. } | Event::AccountUpdated { .. } => return PushEffect::NotState,
             _ if push.rev <= self.rev => return PushEffect::Stale,
             Event::TaskUpdated { task } => {
                 self.tasks.insert(task.id.clone(), task.as_ref().clone());

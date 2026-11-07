@@ -37,17 +37,13 @@ function terminalTheme(current: Scheme): ITheme {
   });
 }
 
-/** A dropped stream retries after this, by which time a server that went away reads as unreachable. */
+/** By this time a server that went away reads as unreachable. */
 const REATTACH_MS = 500;
 /** A refusal waits this long for the lock's move that caused it to reach the model before it counts as a problem. */
 const LOCK_SETTLES_MS = 500;
-/**
- * A pane that holds its size this long has settled. A drag or a rotation resizes the PTY once it settles, since every
- * resize the server takes is published.
- */
+/** Every resize the server takes is published, so a drag or a rotation resizes the PTY only once it settles. */
 const PANE_SETTLES_MS = 150;
 
-/** Whether the app shows anything: a hidden window, or a phone app in the background, shows no terminal. */
 export const [windowShown, setWindowShown] = createSignal(true);
 const [windowFocuses, setWindowFocuses] = createSignal(0);
 export const windowFocused = () => setWindowFocuses((count) => count + 1);
@@ -59,10 +55,7 @@ type Cells = { cols: number; rows: number };
 export type Size = { width: number; height: number };
 type Core = { _charSizeService: { measure: () => void }; _renderService: { dimensions: { css: { cell: Size } } } };
 
-/**
- * The cell xterm draws, which only its private services know. It measures afresh, since xterm measures a terminal that
- * opened hidden only once it sees it on screen.
- */
+/** Measures afresh, since xterm measures a terminal that opened hidden only once it sees it on screen. */
 export function cellSize(xterm: Terminal): Size {
   const core = (xterm as unknown as { _core: Core })._core;
   core._charSizeService.measure();
@@ -74,24 +67,12 @@ type TerminalSession = {
   mine: () => boolean;
   shown: () => boolean;
   sgrMouse: () => boolean;
-  /** Writes `keys` to the terminal while this client streams it. */
   input: (keys: string) => void;
-  /** Moves the lock here at the pane's size. */
   take: () => void;
-  /** Sizes the terminal to its pane while this client holds the lock. */
   fit: () => void;
-  /** Opens the terminal in `pane`, the element whose size is the pane's, drawing through WebGL where it can. */
   open: (pane: HTMLElement) => void;
 };
 
-/**
- * A terminal keeps its screen while it stays mounted, and holds a data stream only while it is `shown`, the app shows
- * it, and its server is reachable; the server reads that stream as this client showing the terminal. A look claims a
- * free lock at the pane's size: the terminal starting to show while its server is reachable, or the window coming into
- * focus while it shows. A stream reopening for the client that held the lock when the last one ended claims too. The holder sizes the PTY to its pane.
- * The server sends the whole screen at the PTY's size on attaching and on every resize, and every client redraws it at
- * that size.
- */
 export function terminalSession(props: { at: TaskRef; panel: () => PanelView; shown: () => boolean }): TerminalSession {
   const mine = createMemo(() => props.panel().held_here);
   const shown = createMemo(props.shown);
@@ -103,7 +84,6 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
     overviewRuler: { width: px("--scrollbar-w") },
   });
   const sgr = sgrMouse(xterm.parser);
-  /** The cells that fit the element the terminal opened in, beside the overview ruler along its right edge. */
   const pane = (): Cells | undefined => {
     const host = xterm.element?.parentElement;
     if (!host?.clientWidth || !host.clientHeight) return undefined;
@@ -119,10 +99,8 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
   const [attached, setAttached] = createSignal(false);
   const claim = lockClaim();
   let generation = 0;
-  /** Counts streams that ended under a running PTY, each of which calls for a fresh attachment. */
   const [drops, setDrops] = createSignal(0);
 
-  /** A screen resets the terminal to its size before its bytes draw it; an empty message ends the stream. */
   const attach = async () => {
     const current = ++generation;
     const output = new Channel<TermScreen | ArrayBuffer>();

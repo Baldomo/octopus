@@ -7,10 +7,12 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{Running, SERVER, connect, create, eventually, read_until, start_with, task, workspace};
-use octopus_client::{CallError, Connection, DataStream};
+use common::{
+    Running, SERVER, connect, create, eventually, focus, read_until, refused, send, set_harness, start_with, task,
+    workspace,
+};
+use octopus_client::{Connection, DataStream};
 use octopus_proto::Error;
-use octopus_proto::ops::{HarnessSet, TaskFocus, TermSend};
 use octopus_proto::types::{CheckoutKind, Hooks, MIC_FORMAT, PtyId, Stream, TaskId};
 use octopus_shell::microphone::{Access, Capture, Chunk, Microphone};
 use tempfile::TempDir;
@@ -69,22 +71,12 @@ impl Listening {
             MIC_FORMAT.rate,
             dir.path().join("heard.raw").display()
         );
-        let argv = vec!["sh".into(), "-c".into(), script];
-        let harness = HarnessSet {
-            id: "rec".into(),
-            argv,
-            install: "true".into(),
-            start: vec![],
-            resume: vec![],
-            hooks: Hooks::None,
-        };
-        holder.call(&harness).await.expect("harness.set");
+        set_harness(&holder, "rec", vec!["sh".into(), "-c".into(), script], Hooks::None).await;
         let id = create(&holder, &workspace, CheckoutKind::Root, "rec").await;
-        holder.call(&TaskFocus { task: id.clone(), args: vec![] }).await.expect("focus");
+        focus(&holder, &id).await;
         let pty = task(&holder, &id).await.panels[0].id.clone();
         let live = holder.open_data_stream(&Stream::Pty(pty.clone())).await.expect("attach");
-        let go = TermSend { task: id.clone(), panel: "agent".into(), text: "go".into(), enter: true, take_lock: true };
-        holder.call(&go).await.expect("start recording");
+        holder.call(&send(&id, "agent", "go")).await.expect("start recording");
         eventually("the agent listening", async || task(&holder, &id).await.panels[0].listening).await;
         Self { dir, running, holder, task: id, pty, live }
     }
@@ -109,11 +101,8 @@ impl Listening {
 async fn a_recording_program_hears_the_lock_holder_and_a_viewer_sends_nothing() {
     let listening = Listening::start("laptop").await;
     let desk = connect(&listening.running, "desk").await;
-    match desk.open_data_stream(&Stream::Mic(listening.pty.clone())).await {
-        Err(CallError::Server(error)) => assert_eq!(error, Error::PtyLocked { holder: "laptop".into() }),
-        Err(error) => panic!("a viewer's microphone failed otherwise: {error}"),
-        Ok(_) => panic!("a viewer's microphone was taken"),
-    }
+    let viewer = desk.open_data_stream(&Stream::Mic(listening.pty.clone())).await;
+    assert_eq!(refused(viewer.map(drop)), Error::PtyLocked { holder: "laptop".into() });
     let mut mic = listening.holder.open_data_stream(&Stream::Mic(listening.pty.clone())).await.expect("send");
     let mut interval = tokio::time::interval(Duration::from_millis(TONE_MS as u64));
     for chunk in 0..150 {
@@ -129,29 +118,28 @@ async fn a_recording_program_hears_the_lock_holder_and_a_viewer_sends_nothing() 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs a PulseAudio or PipeWire sound server and arecord"]
 async fn the_client_microphone_carries_its_capture_into_the_terminal_once_granted() {
-    let denials = Arc::new(Mutex::new(Vec::new()));
-    let heard_denials = Arc::clone(&denials);
-    let granted = Microphone::new(
-        Box::new(|| Ok(Access::Granted)),
-        Box::new(tone_capture),
-        Box::new(move |denied| heard_denials.lock().expect("denials").push(denied)),
-    );
+    let (granted, granted_denials) = microphone(Access::Granted);
     let listening = Listening::start("phone").await;
     listening.send(&granted);
     let peak = listening.peak().await;
     assert!(peak > HEARD, "a granted capture's recording peaks at {peak}");
 
-    let recorded_denials = Arc::new(Mutex::new(Vec::new()));
-    let heard = Arc::clone(&recorded_denials);
-    let denied = Microphone::new(
-        Box::new(|| Ok(Access::Denied)),
-        Box::new(tone_capture),
-        Box::new(move |is| heard.lock().expect("denials").push(is)),
-    );
+    let (denied, denials) = microphone(Access::Denied);
     let listening = Listening::start("phone").await;
     listening.send(&denied);
-    let peak = listening.peak().await;
-    assert_eq!(peak, 0, "a denied capture sends nothing, so the terminal hears silence");
-    assert_eq!(*recorded_denials.lock().expect("denials"), [true]);
-    assert!(denials.lock().expect("denials").is_empty(), "a granted capture is never denied");
+    assert_eq!(listening.peak().await, 0, "a denied capture sends nothing, so the terminal hears silence");
+    assert_eq!(*denials.lock().expect("denials"), [true]);
+    assert!(granted_denials.lock().expect("denials").is_empty(), "a granted capture is never denied");
+}
+
+/// A client microphone capturing the tone once the OS answers `access`, and every denial it reports.
+fn microphone(access: Access) -> (Arc<Microphone>, Arc<Mutex<Vec<bool>>>) {
+    let denials = Arc::new(Mutex::new(Vec::new()));
+    let reported = Arc::clone(&denials);
+    let microphone = Microphone::new(
+        Box::new(move || Ok(access)),
+        Box::new(tone_capture),
+        Box::new(move |denied| reported.lock().expect("denials").push(denied)),
+    );
+    (microphone, denials)
 }

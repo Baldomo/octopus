@@ -10,7 +10,7 @@ import { dropTarget, isAway, isLanding, isLifted, isNesting, lift } from "@octop
 import { animate, FADE, give, play, PROJECT_S, reduced, type Running } from "@octopus/shared/motion.ts";
 import { PUSH } from "./motion";
 import { back, openSheet, openTask, screen } from "./nav";
-import { Circle, Glyph, Gap, Id, Slot } from "./parts";
+import { Circle, CrumbBar, Glyph, Gap, Id, Slot } from "./parts";
 import { pressed } from "./press";
 import { pullToRefresh } from "./pull";
 import { liftOnPhone, refreshServers } from "./Tasks";
@@ -108,17 +108,15 @@ export function Board(props: { section: string }) {
     <Show when={section()}>
       {(shown) => (
         <>
-          <div class="bar">
-            <Circle icon="back" label="Tasks" tap={back} />
-            <div class="ttl" style={{ "--ws": swatchColor(shown().swatch) }}>
-              <span class="crumb">
-                <i />
-                {shown().name}
-              </span>
-              <b class="name">All tasks</b>
-            </div>
-            <Circle icon="more" label="Section menu" tap={() => openSheet({ is: "section", name: shown().name })} />
-          </div>
+          <CrumbBar
+            up="Tasks"
+            color={swatchColor(shown().swatch)}
+            crumb={shown().name}
+            title="All tasks"
+            end={
+              <Circle icon="more" label="Section menu" tap={() => openSheet({ is: "section", name: shown().name })} />
+            }
+          />
           <div class="tabs scroll" ref={slidingThumb}>
             <For each={shown().columns}>
               {(each, nth) => {

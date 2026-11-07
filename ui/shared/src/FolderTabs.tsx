@@ -6,10 +6,6 @@ import type { LiftOnDrag, Within } from "./lift";
 import { liftTab } from "./liftTab";
 import { inOrder } from "./sectionOrder";
 
-/**
- * What a tab shows of its page: its name, the `where` that tells it from a namesake, the `title` its hover shows, a
- * spinner while `loading`, and the unsaved mark while `dirty`.
- */
 export type FolderTab = {
   key: string;
   name: string;
@@ -19,12 +15,10 @@ export type FolderTab = {
   dirty: boolean;
 };
 
-/** A tab that adds a page: + after the last tab, raised while the page it adds is the selected one. */
 type AddTab = { title: string; selected: boolean; run: () => void };
 
 const IN_TABS: Within = { stage: ".ftabs", list: ".etabs", free: false };
 
-/** One line of tabs, which scrolls sideways under the wheel, the selected tab opening into the header beneath it. */
 export function FolderTabs(props: {
   tabs: FolderTab[];
   selected: string | null;

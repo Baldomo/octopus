@@ -274,13 +274,9 @@ async fn send(connection: Arc<Connection>, pty: PtyId, mut audio: broadcast::Rec
     };
     loop {
         match audio.recv().await {
-            Ok(chunk) => {
-                if stream.write_all(&chunk).await.is_err() {
-                    break;
-                }
-            }
+            Ok(chunk) if stream.write_all(&chunk).await.is_ok() => {}
             Err(broadcast::error::RecvError::Lagged(_)) => {}
-            Err(broadcast::error::RecvError::Closed) => break,
+            Ok(_) | Err(broadcast::error::RecvError::Closed) => break,
         }
     }
     let _server_gone = stream.shutdown().await;

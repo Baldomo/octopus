@@ -6,12 +6,16 @@
 
 use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
+#[cfg(not(target_os = "macos"))]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+#[cfg(not(target_os = "macos"))]
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+use nix::unistd::Pid;
 use octopus_proto::local::{self, BlockingStream, Listener};
 use octopus_proto::term::Piece;
 use octopus_proto::types::PtyId;
@@ -51,6 +55,7 @@ enum HostRequest {
     Forget { id: PtyId },
     WaitExit { id: PtyId },
     Activity { id: PtyId },
+    Program { id: PtyId },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -175,6 +180,10 @@ async fn answer<R: AsyncRead + Unpin>(
             let activity = tokio::task::spawn_blocking(move || pty.activity()).await.map_err(Error::internal)??;
             Ok((serde_json::to_value(activity).map_err(Error::internal)?, Then::Close))
         }
+        HostRequest::Program { id } => {
+            let program = find(terminals, &id)?.program().map(|pid| pid.as_raw());
+            Ok((serde_json::to_value(program).map_err(Error::internal)?, Then::Close))
+        }
     }
 }
 
@@ -189,10 +198,7 @@ async fn serve<S: AsyncRead + AsyncWrite + Send + 'static>(terminals: Terminals,
         Ok(request) => answer(&terminals, request, &mut read).await,
         Err(error) => Err(Error::invalid(error)),
     };
-    let (reply, then) = match answered {
-        Ok((value, then)) => (Ok(value), then),
-        Err(error) => (Err(error), Then::Close),
-    };
+    let (reply, then) = answered.map_or_else(|error| (Err(error), Then::Close), |(value, then)| (Ok(value), then));
     if write.write_all(line(&Outcome::from(reply)).as_bytes()).await.is_err() {
         return;
     }
@@ -238,6 +244,89 @@ async fn forward_input<R: AsyncRead + Unpin>(pty: Arc<Pty>, mut read: R) {
     }
 }
 
+/// Starts the host out of the server's process group, so a Ctrl-C or group signal aimed at the server spares it, with
+/// stderr inherited, so its diagnostics land in the server's log.
+#[cfg(not(target_os = "macos"))]
+fn start_host(program: &Path, address: &Path) -> std::io::Result<Pid> {
+    let mut command = Command::new(program);
+    command.args(["server", "terminal-host", "--address"]).arg(address);
+    command.stdin(Stdio::null()).stdout(Stdio::null()).process_group(0);
+    Ok(Pid::from_raw(command.spawn()?.id().cast_signed()))
+}
+
+/// Starts the host out of the server's process group, so a Ctrl-C or group signal aimed at the server spares it, with
+/// stderr inherited, so its diagnostics land in the server's log. It answers for its own privacy permissions: macOS asks a process's responsible
+/// process, which a child inherits and a process outliving its parent loses. Disclaiming here makes the host responsible
+/// from its first instruction, so every terminal's program answers to it, whoever started the server.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code, reason = "libSystem's posix_spawn and responsibility calls have no safe binding")]
+fn start_host(program: &Path, address: &Path) -> std::io::Result<Pid> {
+    use std::ffi::{CString, OsStr, c_int, c_short};
+    use std::io::Error as IoError;
+    use std::os::unix::ffi::OsStrExt;
+    use std::ptr;
+
+    use nix::libc;
+
+    unsafe extern "C" {
+        fn responsibility_spawnattrs_setdisclaim(attrs: *mut libc::posix_spawnattr_t, disclaim: c_int) -> c_int;
+        fn posix_spawn_file_actions_addinherit_np(actions: *mut libc::posix_spawn_file_actions_t, fd: c_int) -> c_int;
+    }
+
+    const FLAGS: c_short = (libc::POSIX_SPAWN_SETPGROUP
+        | libc::POSIX_SPAWN_CLOEXEC_DEFAULT
+        | libc::POSIX_SPAWN_SETSIGDEF
+        | libc::POSIX_SPAWN_SETSIGMASK) as c_short;
+    let check = |code: c_int| if code == 0 { Ok(()) } else { Err(IoError::from_raw_os_error(code)) };
+    let text = |text: &OsStr| CString::new(text.as_bytes()).map_err(IoError::other);
+
+    let argv =
+        [program.as_os_str(), "server".as_ref(), "terminal-host".as_ref(), "--address".as_ref(), address.as_ref()];
+    let argv = argv.map(text).into_iter().collect::<std::io::Result<Vec<_>>>()?;
+    let env = std::env::vars_os().map(|(key, value)| text(&[key, value].join(OsStr::new("="))));
+    let env = env.collect::<std::io::Result<Vec<_>>>()?;
+    let pointers = |texts: &[CString]| -> Vec<*mut libc::c_char> {
+        texts.iter().map(|text| text.as_ptr().cast_mut()).chain([ptr::null_mut()]).collect()
+    };
+    let (argv_pointers, env_pointers) = (pointers(&argv), pointers(&env));
+
+    let mut attr: libc::posix_spawnattr_t = ptr::null_mut();
+    let mut actions: libc::posix_spawn_file_actions_t = ptr::null_mut();
+    let mut pid = 0;
+    // SAFETY: every pointer outlives the calls, `argv` and `env` end in null, and destroying an attribute or action set
+    // that failed to initialise is a no-op returning EINVAL.
+    unsafe {
+        let (mut every, mut none) = (std::mem::zeroed(), std::mem::zeroed());
+        libc::sigfillset(&mut every);
+        libc::sigemptyset(&mut none);
+        let spawned = (|| {
+            check(libc::posix_spawnattr_init(&mut attr))?;
+            check(libc::posix_spawnattr_setflags(&mut attr, FLAGS))?;
+            check(libc::posix_spawnattr_setpgroup(&mut attr, 0))?;
+            check(libc::posix_spawnattr_setsigdefault(&mut attr, &every))?;
+            check(libc::posix_spawnattr_setsigmask(&mut attr, &none))?;
+            check(responsibility_spawnattrs_setdisclaim(&mut attr, 1))?;
+            check(libc::posix_spawn_file_actions_init(&mut actions))?;
+            let null = c"/dev/null".as_ptr();
+            check(libc::posix_spawn_file_actions_addopen(&mut actions, libc::STDIN_FILENO, null, libc::O_RDONLY, 0))?;
+            check(libc::posix_spawn_file_actions_addopen(&mut actions, libc::STDOUT_FILENO, null, libc::O_WRONLY, 0))?;
+            check(posix_spawn_file_actions_addinherit_np(&mut actions, libc::STDERR_FILENO))?;
+            check(libc::posix_spawn(
+                &mut pid,
+                argv[0].as_ptr(),
+                &actions,
+                &attr,
+                argv_pointers.as_ptr(),
+                env_pointers.as_ptr(),
+            ))
+        })();
+        libc::posix_spawn_file_actions_destroy(&mut actions);
+        libc::posix_spawnattr_destroy(&mut attr);
+        spawned?;
+    }
+    Ok(Pid::from_raw(pid))
+}
+
 pub(crate) struct HostClient {
     address: PathBuf,
 }
@@ -247,29 +336,31 @@ fn host_error(address: &Path, error: impl std::fmt::Display) -> Error {
 }
 
 impl HostClient {
+    /// A client of the host already answering at `address`.
+    #[cfg(any(target_os = "macos", test))]
+    pub(crate) fn at(address: &Path) -> Self {
+        Self { address: address.to_path_buf() }
+    }
+
     pub(crate) fn reach_or_start(host: &TerminalHost) -> Result<Self, Error> {
         let address = host.address.clone();
         if local::connect_blocking(&address).is_ok() {
             return Ok(Self { address });
         }
-        let mut command = Command::new(&host.program);
-        command.args(["server", "terminal-host", "--address"]).arg(&address);
-        // stderr stays inherited, so the host's diagnostics land in the server's log.
-        command.stdin(Stdio::null()).stdout(Stdio::null());
-        // Out of the server's process group, so a Ctrl-C or group signal aimed at the server spares the host.
-        command.process_group(0);
-        let mut child = command.spawn().map_err(|error| host_error(&address, format!("start: {error}")))?;
+        let child =
+            start_host(&host.program, &address).map_err(|error| host_error(&address, format!("start: {error}")))?;
         let deadline = Instant::now() + HOST_START;
         while local::connect_blocking(&address).is_err() {
-            if let Some(status) = child.try_wait().map_err(|error| host_error(&address, error))? {
-                return Err(host_error(&address, format!("exited on start with {status}")));
+            match waitpid(child, Some(WaitPidFlag::WNOHANG)).map_err(|error| host_error(&address, error))? {
+                WaitStatus::StillAlive => {}
+                status => return Err(host_error(&address, format!("exited on start with {status:?}"))),
             }
             if Instant::now() > deadline {
                 return Err(host_error(&address, format!("not answering {HOST_START:?} after start")));
             }
             std::thread::sleep(HOST_START_POLL);
         }
-        std::thread::spawn(move || child.wait());
+        std::thread::spawn(move || waitpid(child, None));
         Ok(Self { address })
     }
 
@@ -278,8 +369,10 @@ impl HostClient {
     }
 
     fn open(&self, request: &HostRequest) -> Result<(BlockingStream, Value), Error> {
-        let (stream, outcome) = local::open_blocking(&self.address, request).map_err(|error| self.failed(error))?;
-        Ok((stream, Result::from(outcome)?))
+        match local::open_blocking(&self.address, request).map_err(|error| self.failed(error))? {
+            (stream, Outcome::Ok(value)) => Ok((stream, value)),
+            (_, Outcome::Err(error)) => Err(error),
+        }
     }
 
     fn call<T: DeserializeOwned>(&self, request: &HostRequest) -> Result<T, Error> {
@@ -301,9 +394,10 @@ impl HostClient {
     /// The terminal's screen, then its live pieces until it exits.
     pub async fn attach(&self, id: &PtyId) -> Result<local::Stream, Error> {
         let request = HostRequest::Attach { id: id.clone() };
-        let (stream, outcome) = local::open(&self.address, &request).await.map_err(|error| self.failed(error))?;
-        Result::from(outcome)?;
-        Ok(stream)
+        match local::open(&self.address, &request).await.map_err(|error| self.failed(error))? {
+            (stream, Outcome::Ok(_)) => Ok(stream),
+            (_, Outcome::Err(error)) => Err(error),
+        }
     }
 
     /// Whether anything still answers at the host's address.
@@ -337,5 +431,49 @@ impl HostClient {
 
     pub(crate) fn terminate(&self, id: &PtyId) -> Result<(), Error> {
         self.call(&HostRequest::Terminate { id: id.clone() })
+    }
+
+    /// The pid of the program the terminal started, which leads its session, while it runs.
+    #[cfg(any(target_os = "macos", test))]
+    pub(crate) fn program(&self, id: &PtyId) -> Result<Option<i32>, Error> {
+        self.call(&HostRequest::Program { id: id.clone() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn each_terminal_names_the_program_that_leads_its_session() {
+        let address = std::env::temp_dir().join(format!("octopus-host-test-{}.sock", std::process::id()));
+        tokio::spawn({
+            let address = address.clone();
+            async move { run_terminal_host(&address).await }
+        });
+        let client = HostClient::at(&address);
+        tokio::task::spawn_blocking(move || {
+            let deadline = Instant::now() + HOST_START;
+            while local::connect_blocking(&client.address).is_err() {
+                assert!(Instant::now() < deadline, "the host never answered");
+                std::thread::sleep(HOST_START_POLL);
+            }
+            let ids = ["pty_a", "pty_b", "pty_c"].map(|id| PtyId(id.into()));
+            for id in &ids {
+                let argv = vec!["sleep".to_string(), "30".to_string()];
+                client.spawn(id, argv, &std::env::temp_dir(), Vec::new()).expect("spawn a terminal");
+            }
+            for id in &ids {
+                let program = client.program(id).expect("ask the host").expect("the program runs");
+                let leader = nix::unistd::getsid(Some(nix::unistd::Pid::from_raw(program))).expect("read its session");
+                assert_eq!(leader.as_raw(), program);
+            }
+            for id in &ids {
+                client.forget(id).expect("end the terminal");
+            }
+        })
+        .await
+        .expect("the host answers");
+        std::fs::remove_file(&address).expect("remove the host's socket");
     }
 }

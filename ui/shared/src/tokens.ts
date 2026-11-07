@@ -18,7 +18,6 @@ export const swatchColor = (swatch: Swatch) => `var(--ws-${swatch.hue}-${swatch.
 
 export const token = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-/** Resolves color tokens in the given scheme, each as `#rrggbb[aa]`. */
 export const colors = (scheme: Scheme) => (name: string) => resolve(name, scheme);
 
 function resolve(name: string, scheme: Scheme): string {
@@ -32,7 +31,6 @@ function resolve(name: string, scheme: Scheme): string {
   return hex(value);
 }
 
-/** A computed style of an element nested under the given class chain, e.g. `["code-ed", "src"]`. */
 export function styleOf(classes: string[], property: "lineHeight" | "paddingTop"): string {
   const root = document.createElement("div");
   root.style.display = "none";

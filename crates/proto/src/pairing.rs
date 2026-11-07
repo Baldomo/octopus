@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::device::PublicKey;
 use crate::remote::{self, RelayUrl};
-use crate::schema::{Arg, Shape};
+use crate::schema::{Shape, arg_shape, spelled};
 
 const CODE_BYTES: usize = 16;
 
@@ -144,34 +144,12 @@ impl FromStr for Invite {
     }
 }
 
-impl Serialize for Invite {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
+spelled!(Invite);
+arg_shape!(Shape::Text => Invite, Proof);
 
-impl<'de> Deserialize<'de> for Invite {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer)?.parse().map_err(serde::de::Error::custom)
-    }
-}
-
-impl Arg for Invite {
-    fn shape() -> Shape {
-        Shape::Text
-    }
-}
-
-/// Spelled in hex on the wire.
 impl Serialize for Proof {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&hex::encode(&self.0))
-    }
-}
-
-impl Arg for Proof {
-    fn shape() -> Shape {
-        Shape::Text
     }
 }
 

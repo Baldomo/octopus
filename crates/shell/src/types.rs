@@ -1,6 +1,6 @@
 //! The TypeScript the UI compiles against, rendered from the Rust types and constants that cross the IPC boundary.
 
-use octopus_proto::ops::{Entry, EntryKind, Match, Offer, PairedClient};
+use octopus_proto::ops::{Entry, EntryKind, Match, Offer, PairedAccount, PairedClient};
 use octopus_proto::term::HISTORY_LINES;
 use octopus_proto::types::{
     AGENT_PANEL, Agent, AgentStatus, BACKGROUND_BROWSER_PANEL, BrowserId, BrowserPanel, Checkout, CheckoutKind,
@@ -12,8 +12,11 @@ use serde_json::json;
 use ts_rs::Config;
 
 use crate::client_menu::{AgentFlags, Appearance, ZOOMS, Zoom, ZoomStep};
-use crate::commands::{Boot, NewTask, ShownOffer};
-use crate::hub::{FILES_CHANGED_EVENT, FilesChanged, MODEL_EVENT, Model, SERVERS_EVENT, ServerView};
+use crate::commands::{Boot, NewTask, ShownLink, ShownOffer};
+use crate::hub::{
+    ACCOUNT_EVENT, AccountView, DeviceView, FILES_CHANGED_EVENT, FilesChanged, MODEL_EVENT, Model, SERVERS_EVENT,
+    ServerView,
+};
 use crate::microphone::MICROPHONE_DENIED_EVENT;
 use crate::task_lists::{Column, Glyph, Lists, Row, Section, TaskRef, WorkspaceRef};
 use crate::task_view::{PanelView, TaskView};
@@ -65,6 +68,10 @@ pub fn render() -> String {
         Offer,
         ShownOffer,
         PairedClient,
+        PairedAccount,
+        ShownLink,
+        AccountView,
+        DeviceView,
         TaskRef,
         Glyph,
         Row,
@@ -116,6 +123,7 @@ pub fn render() -> String {
             &json!({
                 "model": MODEL_EVENT,
                 "servers": SERVERS_EVENT,
+                "account": ACCOUNT_EVENT,
                 "filesChanged": FILES_CHANGED_EVENT,
                 "ui": UI_EVENT,
                 "windowShown": SHOWN_EVENT,

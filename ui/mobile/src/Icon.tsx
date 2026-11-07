@@ -78,12 +78,10 @@ const SYMBOLS = {
     "0 0 16 16",
     `<path d="M2.5 5.5a1 1 0 0 1 1-1h1.5l1-1.5h4l1 1.5h1.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z"/><circle cx="8" cy="8.5" r="2.2"/>`,
   ],
-  term: ["0 0 16 16", `<path d="m3.5 5 3 3-3 3M8.5 11.5h4"/>`],
 } as const;
 
 export type IconName = keyof typeof SYMBOLS;
 
-/** The sprite every `Icon` draws from, mounted once. */
 export const Sprite = () => (
   <svg width="0" height="0" style={{ position: "absolute" }}>
     <For each={Object.entries(SYMBOLS)}>

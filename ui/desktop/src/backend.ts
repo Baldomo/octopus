@@ -20,7 +20,6 @@ import {
 
 const invoke = <T>(command: (typeof COMMANDS)[number], args?: InvokeArgs) => invokeAny<T>(command, args);
 
-/** The desktop app's own commands, beside the client app core's. */
 export const desktop = {
   titleBarDoubleClick: () => invoke<void>("title_bar_double_click"),
   /** Resolves to the id of the panel that shows `url` on the task's server. */
@@ -38,7 +37,6 @@ export const desktop = {
     invoke<void>("browser_load", { at, panel, url, load }),
   browserShowPage: (onScreen: OnScreen | null) => invoke<void>("browser_show_page", { onScreen }),
   browserGo: (at: TaskRef, panel: BrowserId, go: Go) => invoke<void>("browser_go", { at, panel, go }),
-  /** Selects the next match of `text` in the panel's page, or the one before when `backwards`. */
   browserFind: (at: TaskRef, panel: BrowserId, text: string, backwards: boolean) =>
     invoke<void>("browser_find", { at, panel, text, backwards }),
   /** Closes the panel's webview on this client; the panel stays on its server. */

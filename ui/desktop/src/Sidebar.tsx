@@ -2,10 +2,8 @@ import { createEffect, For, on, onCleanup, Show } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import type { Column, Section } from "@octopus/shared/generated.ts";
 import { Glyph } from "@octopus/shared/Glyph.tsx";
-import { dropHint } from "@octopus/shared/drop.ts";
 import { animateList } from "@octopus/shared/flip.ts";
 import {
-  dropTarget,
   isAway,
   isLanding,
   isLifted,
@@ -15,11 +13,10 @@ import {
   lift,
   lifting,
   liftSection,
-  liftsIn,
 } from "@octopus/shared/liftTasks.ts";
 import { type Within } from "@octopus/shared/lift.ts";
 import { liftOnDrag } from "./lift";
-import { GroupHead } from "./Group";
+import { Group } from "./Group";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { commands, hint } from "@octopus/shared/commands.ts";
 import { isMenuOpen, MenuHost, menuTrigger, onRightClick } from "@octopus/shared/Menu.tsx";
@@ -47,71 +44,57 @@ const IN_SIDEBAR: Within = { stage: ".sidebar", list: ".groups", free: false };
 /** The sidebar's rows and its sections' parts, which slide to where each change puts them. */
 const ITEMS = ".wsh, .gh, .task, .drophint, .empty-state";
 
-/** A state's group of a section, which shows while empty only to take a task lifted in its section. */
-function Group(props: { section: string; column: Column }) {
-  const target = dropTarget(props.section, props.column.state);
+function SectionGroup(props: { section: string; column: Column }) {
   return (
-    <Show when={props.column.rows.length > 0 || liftsIn(props.section)}>
-      <div class="group" classList={{ over: target.over() }} data-state={props.column.state} {...target.attributes}>
-        <GroupHead state={props.column.state} />
-        <For
-          each={props.column.rows}
-          fallback={
-            <div class="drophint" data-key={`${props.section}/${props.column.state}/empty`}>
-              {dropHint(props.column.state)}
-            </div>
-          }
-        >
-          {(row) => {
-            let element!: HTMLDivElement;
-            const id = `task:${row.key}`;
-            const menu = () => <TaskMenu row={row} />;
-            return (
-              <div
-                ref={element}
-                class="task"
-                classList={{
-                  sub: row.depth > 0,
-                  active: isOpen(row.key),
-                  lifting: isLifted(row.key),
-                  away: isAway(row.key),
-                  landing: isLanding(row.key),
-                  nest: isNesting(row.key),
-                  "menu-open": isMenuOpen(id),
-                }}
-                data-key={row.key}
-                style={{ "--depth": row.depth }}
-                tabindex="0"
-                onClick={() => openTask(row.key)}
-                onContextMenu={onRightClick(id, () => element, menu)}
-                onKeyDown={(event) => event.key === "F2" && startRename("task", row.key)}
-                {...liftOnDrag(IN_SIDEBAR, lift(row, props.section))}
-              >
-                <Glyph glyph={row.glyph} />
-                <Show
-                  when={isRenaming("task", row.key)}
-                  fallback={
-                    <span class="tt" onDblClick={() => startRename("task", row.key)}>
-                      {row.title}
-                    </span>
-                  }
-                >
-                  <RenameInput value={row.title} apply={(title) => backend.taskRename(row.at, title)} />
-                </Show>
-                <Show when={row.state !== props.column.state}>
-                  <span class="st">{row.state}</span>
-                </Show>
-                <span class="acts">
-                  <button class="mini more" title="task menu" {...menuTrigger(id, () => element, menu)}>
-                    ⋯
-                  </button>
+    <Group class="group" section={props.section} column={props.column} counted={false}>
+      {(row) => {
+        let element!: HTMLDivElement;
+        const id = `task:${row.key}`;
+        const menu = () => <TaskMenu row={row} />;
+        return (
+          <div
+            ref={element}
+            class="task"
+            classList={{
+              sub: row.depth > 0,
+              active: isOpen(row.key),
+              lifting: isLifted(row.key),
+              away: isAway(row.key),
+              landing: isLanding(row.key),
+              nest: isNesting(row.key),
+              "menu-open": isMenuOpen(id),
+            }}
+            data-key={row.key}
+            style={{ "--depth": row.depth }}
+            tabindex="0"
+            onClick={() => openTask(row.key)}
+            onContextMenu={onRightClick(id, () => element, menu)}
+            onKeyDown={(event) => event.key === "F2" && startRename("task", row.key)}
+            {...liftOnDrag(IN_SIDEBAR, lift(row, props.section))}
+          >
+            <Glyph glyph={row.glyph} />
+            <Show
+              when={isRenaming("task", row.key)}
+              fallback={
+                <span class="tt" onDblClick={() => startRename("task", row.key)}>
+                  {row.title}
                 </span>
-              </div>
-            );
-          }}
-        </For>
-      </div>
-    </Show>
+              }
+            >
+              <RenameInput value={row.title} apply={(title) => backend.taskRename(row.at, title)} />
+            </Show>
+            <Show when={row.state !== props.column.state}>
+              <span class="st">{row.state}</span>
+            </Show>
+            <span class="acts">
+              <button class="mini more" title="task menu" {...menuTrigger(id, () => element, menu)}>
+                ⋯
+              </button>
+            </span>
+          </div>
+        );
+      }}
+    </Group>
   );
 }
 
@@ -181,7 +164,7 @@ function SectionGroups(props: { section: Section }) {
       </div>
       <div class="wsb">
         <div class="thread" />
-        <For each={props.section.groups}>{(column) => <Group section={name()} column={column} />}</For>
+        <For each={props.section.groups}>{(column) => <SectionGroup section={name()} column={column} />}</For>
         <Show when={props.section.live === 0}>
           <div class="empty-state">No live tasks.</div>
         </Show>

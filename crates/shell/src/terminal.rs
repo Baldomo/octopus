@@ -13,8 +13,6 @@ use ts_rs::TS;
 
 use crate::lock;
 
-type Inputs = Arc<Mutex<HashMap<u64, mpsc::UnboundedSender<Vec<u8>>>>>;
-
 /// Opens a screen: the UI resets its terminal to cols×rows, then draws the bytes that follow.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
 pub(crate) struct TermScreen {
@@ -27,7 +25,7 @@ pub(crate) struct TermScreen {
 #[derive(Default)]
 pub struct Terminals {
     next: AtomicU64,
-    inputs: Inputs,
+    inputs: Arc<Mutex<HashMap<u64, mpsc::UnboundedSender<Vec<u8>>>>>,
 }
 
 impl Terminals {

@@ -1,10 +1,28 @@
-import { createResource, createSignal, For, Match, Show, Switch } from "solid-js";
+import { createSignal, For, Match, Show, Switch, type JSX } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
-import { aboutCopy, APPEARANCES, NEXT_START } from "@octopus/shared/ClientMenu.tsx";
-import { VERSION, ZOOMS, type ShownOffer } from "@octopus/shared/generated.ts";
-import { clientStatus, expiry, grouped, inviteCode, isThisClient } from "@octopus/shared/pairing.ts";
+import {
+  aboutCopy,
+  accountModes,
+  APPEARANCES,
+  LEAVE_CONFIRM,
+  NEXT_START,
+  REMOVE_CONFIRM,
+} from "@octopus/shared/ClientMenu.tsx";
+import { VERSION, ZOOMS, type PairedAccount, type ShownOffer } from "@octopus/shared/generated.ts";
+import {
+  accountLabel,
+  clientStatus,
+  expiry,
+  firstWhere,
+  grouped,
+  inviteCode,
+  isThisAccount,
+  isThisClient,
+  pairedAccounts,
+} from "@octopus/shared/pairing.ts";
 import { clock, ticking } from "@octopus/shared/time.ts";
 import {
+  account,
   harnesses,
   me,
   report,
@@ -59,85 +77,219 @@ function AgentFlagsField(props: { harness: string }) {
   );
 }
 
-/** The client menu: this phone's servers, then its appearance, zoom, agent flags and version. */
+const copyText = (text: string, what: string) =>
+  navigator.clipboard.writeText(text).then(() => notify(`Copied the ${what}`), report);
+const shareText = (text: string, what: string) =>
+  navigator.share
+    ? navigator.share({ text }).catch((error: Error) => {
+        if (error.name !== "AbortError") report(error);
+      })
+    : copyText(text, what);
+
+/** A QR code of `text`, then Copy and Share, which hands `text` to the OS's share sheet. */
+function Shared(props: { qr: string; text: string; what: string; copy: string; children?: JSX.Element }) {
+  return (
+    <>
+      <div class="qr" innerHTML={props.qr} />
+      <Gap n={3} />
+      {props.children}
+      <div class="pair2">
+        <button class="secondary" onClick={() => copyText(props.text, props.what)}>
+          <Icon name="copy" />
+          {props.copy}
+        </button>
+        <button class="secondary" onClick={() => shareText(props.text, props.what)}>
+          <Icon name="share" />
+          Share
+        </button>
+      </div>
+      <Gap n={2} />
+    </>
+  );
+}
+
+function Confirm(props: { text: string; act: string; run: () => void; cancel: () => void }) {
+  return (
+    <div class="confirm">
+      <span>{props.text}</span>
+      <div class="row2">
+        <button class="btn quiet" onClick={props.cancel}>
+          Cancel
+        </button>
+        <button class="btn danger" onClick={props.run}>
+          {props.act}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const JoinAccount = () => (
+  <Mi slot={<Icon name="cam" />} end={<Chev />} tap={() => go({ at: "scan", reading: "link" })}>
+    Join an account…
+  </Mi>
+);
+
 export function ClientMenu() {
+  const now = ticking();
   const { copied, copy: about } = aboutCopy();
+  const { mode, setMode, shownLink, removing, done } = accountModes();
+  const succeed = () => {
+    feel("success");
+    done();
+  };
   return (
     <Sheet>
-      <SheetHead title={me()} />
-      <Gl>servers</Gl>
-      <For each={servers()}>
-        {(server) => (
-          <Mi
-            class={server.reachable ? undefined : "off"}
-            slot={<ServerDot server={server} />}
-            end={
-              <>
-                <Id>{server.reachable ? rtt(server.rtt_ms) : "unreachable"}</Id>
-                <Chev />
-              </>
-            }
-            tap={() => showInSheet({ is: "server", name: server.name }, "deeper")}
-          >
-            {server.label}
-          </Mi>
+      <Show when={shownLink()}>
+        {(shown) => (
+          <>
+            <SheetHead title="Link a device" facts={[expiry(shown().expires_at, now(), "one device")]} back={done} />
+            <Shared qr={shown().qr} text={shown().link} what="link" copy="Copy link" />
+          </>
         )}
-      </For>
-      <Mi slot={<Icon name="plus" />} tap={() => go({ at: "scan" })}>
-        Pair a server…
-      </Mi>
-      <Sep />
-      <Mi
-        slot={<Icon name="sun" />}
-        end={<Seg options={APPEARANCES} value={ui.prefs.appearance} choose={setAppearance} />}
-      >
-        Appearance
-      </Mi>
-      <Mi
-        slot={<Icon name="zoom" />}
-        end={
-          <div class="stepper">
-            <span role="button" aria-label="Zoom out" onClick={() => step("out")}>
-              <Icon name="minus" />
-            </span>
-            <output>{ui.prefs.zoom}%</output>
-            <span role="button" aria-label="Zoom in" onClick={() => step("in")}>
-              <Icon name="plus" />
-            </span>
-          </div>
-        }
-      >
-        Zoom
-      </Mi>
-      <Show when={harnesses().length > 0}>
-        <Gl>agent flags</Gl>
-        <For each={harnesses()}>{(harness) => <AgentFlagsField harness={harness} />}</For>
-        <Note>{NEXT_START}</Note>
       </Show>
-      <Sep />
-      <Mi slot={<Icon name="info" />} end={<Why>{copied() ? "copied" : VERSION}</Why>} tap={about}>
-        About octopus
-      </Mi>
-      <Gap n={2} />
+      <Show when={shownLink() === null}>
+        <SheetHead title={me()} facts={[`account ${account().id}`]} />
+        <Gl>devices</Gl>
+        <Show
+          when={account().member}
+          fallback={
+            <>
+              <Note>Removed from this account</Note>
+              <JoinAccount />
+              <Mi slot={<Icon name="plus" />} tap={() => backend.accountStartOver().then(succeed, report)}>
+                Start over
+              </Mi>
+            </>
+          }
+        >
+          <For each={account().devices}>
+            {(device) => (
+              <Mi
+                end={
+                  <Show
+                    when={device.this}
+                    fallback={
+                      <button class="btn quiet" onClick={() => setMode({ remove: device })}>
+                        Remove
+                      </button>
+                    }
+                  >
+                    <Why>this phone</Why>
+                  </Show>
+                }
+              >
+                {device.name}
+              </Mi>
+            )}
+          </For>
+          <Show when={removing()}>
+            {(device) => (
+              <Confirm
+                text={REMOVE_CONFIRM(device().name)}
+                act="Remove"
+                run={() => backend.accountRemove(device().key).then(succeed, report)}
+                cancel={done}
+              />
+            )}
+          </Show>
+          <Mi slot={<Icon name="qr" />} end={<Chev />} tap={() => backend.accountLink().then(setMode, report)}>
+            Link a device…
+          </Mi>
+          <Switch>
+            <Match when={account().devices.length < 2}>
+              <JoinAccount />
+            </Match>
+            <Match when={mode() === "leave"}>
+              <Confirm
+                text={LEAVE_CONFIRM("phone")}
+                act="Leave"
+                run={() => backend.accountLeave().then(succeed, report)}
+                cancel={done}
+              />
+            </Match>
+            <Match when={true}>
+              <Mi
+                slot={<Icon name="x" />}
+                danger
+                tap={() => {
+                  feel("warning");
+                  setMode("leave");
+                }}
+              >
+                Leave account
+              </Mi>
+            </Match>
+          </Switch>
+        </Show>
+        <Gl>servers</Gl>
+        <For each={servers()}>
+          {(server) => (
+            <Mi
+              class={server.reachable ? undefined : "off"}
+              slot={<ServerDot server={server} />}
+              end={
+                <>
+                  <Id>{server.reachable ? rtt(server.rtt_ms) : "unreachable"}</Id>
+                  <Chev />
+                </>
+              }
+              tap={() => showInSheet({ is: "server", name: server.name }, "deeper")}
+            >
+              {server.label}
+            </Mi>
+          )}
+        </For>
+        <Mi slot={<Icon name="plus" />} tap={() => go({ at: "scan", reading: "invite" })}>
+          Pair a server…
+        </Mi>
+        <Sep />
+        <Mi
+          slot={<Icon name="sun" />}
+          end={<Seg options={APPEARANCES} value={ui.prefs.appearance} choose={setAppearance} />}
+        >
+          Appearance
+        </Mi>
+        <Mi
+          slot={<Icon name="zoom" />}
+          end={
+            <div class="stepper">
+              <span role="button" aria-label="Zoom out" onClick={() => step("out")}>
+                <Icon name="minus" />
+              </span>
+              <output>{ui.prefs.zoom}%</output>
+              <span role="button" aria-label="Zoom in" onClick={() => step("in")}>
+                <Icon name="plus" />
+              </span>
+            </div>
+          }
+        >
+          Zoom
+        </Mi>
+        <Show when={harnesses().length > 0}>
+          <Gl>agent flags</Gl>
+          <For each={harnesses()}>{(harness) => <AgentFlagsField harness={harness} />}</For>
+          <Note>{NEXT_START}</Note>
+        </Show>
+        <Sep />
+        <Mi slot={<Icon name="info" />} end={<Why>{copied() ? "copied" : VERSION}</Why>} tap={about}>
+          About octopus
+        </Mi>
+        <Gap n={2} />
+      </Show>
     </Sheet>
   );
 }
 
-type Mode = "main" | "rename" | "forget" | ShownOffer;
-
-/** A server's screen in the sheet: its reachability and key, its pairing code, its paired clients, rename and forget. */
 export function ServerMenu(props: { name: string }) {
   const server = () => serverView(props.name);
   const now = ticking();
-  const [mode, setMode] = createSignal<Mode>("main");
+  const [mode, setMode] = createSignal<"main" | "rename" | "forget" | ShownOffer>("main");
   const offer = () => {
     const shown = mode();
     return typeof shown === "string" ? null : shown;
   };
-  const [clients, { refetch }] = createResource(
-    () => (server()?.reachable ? props.name : false),
-    backend.serverClients,
-  );
+  const { listed, note, refetch } = pairedAccounts(props.name);
   const facts = () => {
     const shown = server();
     if (shown === undefined) return [];
@@ -147,16 +299,8 @@ export function ServerMenu(props: { name: string }) {
     return [reach, shown.key === null ? "local socket" : `key ${shortKey(shown.key)}`];
   };
   const showCode = () => backend.serverOffer(props.name).then(setMode, report);
-  const copyInvite = (invite: string) =>
-    navigator.clipboard.writeText(invite).then(() => notify("Copied the pairing invite"), report);
-  const shareInvite = (invite: string) =>
-    navigator.share
-      ? navigator.share({ text: invite }).catch((error: Error) => {
-          if (error.name !== "AbortError") report(error);
-        })
-      : copyInvite(invite);
-  const revoke = (client: string) =>
-    backend.serverRevoke(props.name, client).then(() => {
+  const revoke = (paired: PairedAccount) =>
+    backend.serverRevoke(props.name, paired.account).then(() => {
       feel("success");
       refetch();
     }, report);
@@ -174,24 +318,13 @@ export function ServerMenu(props: { name: string }) {
         <Match when={offer()}>
           {(offered) => (
             <>
-              {head([expiry(offered().offer, now())], () => setMode("main"))}
-              <div class="qr" innerHTML={offered().qr} />
-              <Gap n={3} />
-              <div class="cmd">
-                <span class="name">{grouped(inviteCode(offered().offer))}</span>
-              </div>
-              <Gap n={3} />
-              <div class="pair2">
-                <button class="secondary" onClick={() => copyInvite(offered().offer.invite)}>
-                  <Icon name="copy" />
-                  Copy invite
-                </button>
-                <button class="secondary" onClick={() => shareInvite(offered().offer.invite)}>
-                  <Icon name="share" />
-                  Share
-                </button>
-              </div>
-              <Gap n={2} />
+              {head([expiry(offered().offer.expires_at, now(), "one pairing")], () => setMode("main"))}
+              <Shared qr={offered().qr} text={offered().offer.invite} what="pairing invite" copy="Copy invite">
+                <div class="cmd">
+                  <span class="name">{grouped(inviteCode(offered().offer))}</span>
+                </div>
+                <Gap n={3} />
+              </Shared>
             </>
           )}
         </Match>
@@ -206,37 +339,36 @@ export function ServerMenu(props: { name: string }) {
             Show pairing code
           </Mi>
           <Show when={mode() !== "forget"}>
-            <Gl>paired clients</Gl>
             <Show
-              when={server()?.reachable && !clients.error && clients()}
+              when={listed()}
               fallback={
-                <div class="empty">
-                  {!server()?.reachable
-                    ? "unknown while unreachable"
-                    : clients.error
-                      ? String(clients.error)
-                      : "listing…"}
-                </div>
+                <>
+                  <Gl>paired accounts</Gl>
+                  <div class="empty">{note()}</div>
+                </>
               }
             >
-              {(listed) => (
-                <For each={listed()}>
-                  {(client) => (
-                    <Mi
-                      slot={<i class={client.connected || isThisClient(client) ? "dot srv" : "dot idle"} />}
-                      end={
-                        <>
-                          <Why>{clientStatus(client, now())}</Why>
-                          <Show when={!isThisClient(client)}>
-                            <button class="btn danger" onClick={() => revoke(client.name)}>
-                              Revoke
-                            </button>
-                          </Show>
-                        </>
-                      }
-                    >
-                      {client.name}
-                    </Mi>
+              {(shown) => (
+                <For each={shown()}>
+                  {(paired) => (
+                    <>
+                      <Gl>{accountLabel(paired)}</Gl>
+                      <For each={firstWhere(paired.devices, isThisClient)}>
+                        {(client) => (
+                          <Mi
+                            slot={<i class={client.connected || client.hosts ? "dot srv" : "dot idle"} />}
+                            end={<Why>{clientStatus(client, now(), "this phone")}</Why>}
+                          >
+                            {client.name}
+                          </Mi>
+                        )}
+                      </For>
+                      <Show when={!isThisAccount(paired)}>
+                        <Mi slot={<Icon name="x" />} danger tap={() => revoke(paired)}>
+                          Revoke account
+                        </Mi>
+                      </Show>
+                    </>
                   )}
                 </For>
               )}
@@ -269,20 +401,12 @@ export function ServerMenu(props: { name: string }) {
             }
           >
             <Gap n={2} />
-            <div class="confirm">
-              <span>
-                Forget {props.name}? Its tasks leave this client's lists; they keep running on {props.name}. Pairing
-                again needs a new code.
-              </span>
-              <div class="row2">
-                <button class="btn quiet" onClick={() => setMode("main")}>
-                  Cancel
-                </button>
-                <button class="btn danger" onClick={forget}>
-                  Forget
-                </button>
-              </div>
-            </div>
+            <Confirm
+              text={`Forget ${props.name}? Its tasks leave this account's lists; they keep running on ${props.name}. Pairing again needs a new code.`}
+              act="Forget"
+              run={forget}
+              cancel={() => setMode("main")}
+            />
           </Show>
           <Gap n={2} />
         </Match>

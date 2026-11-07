@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use octopus_proto::Error;
+use octopus_proto::account::{Account, AccountId};
 use octopus_proto::device::{DeviceKey, PublicKey};
 use octopus_proto::types::{
     AGENT_PANEL, BrowserId, BrowserPanel, Checkout, CheckoutKind, Color, Hooks, PtyId, Session, SessionId, TaskId,
@@ -64,7 +65,42 @@ CREATE TABLE IF NOT EXISTS browsers (
 );
 CREATE TABLE IF NOT EXISTS device (id INTEGER PRIMARY KEY CHECK (id = 0), pkcs8 BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS clients (name TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, seen_at INTEGER);
+CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY, log TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS owner (id INTEGER PRIMARY KEY CHECK (id = 0), account TEXT NOT NULL);
 ";
+
+/// A server that pinned devices before accounts trusts each one's first account in its place, once.
+fn trust_pinned_devices(db: &mut Connection) -> Result<(), Error> {
+    let tx = db.transaction().map_err(Error::internal)?;
+    let fresh =
+        tx.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('accounts', 1)", []).map_err(Error::internal)?;
+    if fresh == 1 {
+        let keys: Vec<PublicKey> = select(&tx, "SELECT key FROM clients", [], |row| wire_column(row, "key"))?;
+        for key in keys {
+            put_account(&tx, &Account::first(key))?;
+        }
+    }
+    tx.commit().map_err(Error::internal)
+}
+
+fn select<T, C: FromIterator<T>>(
+    db: &Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+    row: impl FnMut(&Row) -> rusqlite::Result<T>,
+) -> Result<C, Error> {
+    db.prepare(sql).and_then(|mut statement| statement.query_map(params, row)?.collect()).map_err(Error::internal)
+}
+
+fn put_account(db: &Connection, account: &Account) -> Result<(), Error> {
+    let log = serde_json::to_string(account).map_err(Error::internal)?;
+    db.execute(
+        "INSERT INTO accounts (id, log) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET log = excluded.log",
+        params![account.id().to_string(), log],
+    )
+    .map(drop)
+    .map_err(Error::internal)
+}
 
 /// A task's terminal panel: its agent's, named `agent`, or a shell's.
 #[derive(Debug, Clone, PartialEq)]
@@ -120,7 +156,9 @@ fn revise_task(tx: Transaction, task: &TaskId) -> Result<TaskRow, Error> {
     let rev = bump_rev(&tx)?;
     let row = tx
         .query_row("UPDATE tasks SET rev = ?2 WHERE id = ?1 RETURNING *", params![task.0, rev.cast_signed()], task_row)
-        .map_err(Error::internal)?;
+        .optional()
+        .map_err(Error::internal)?
+        .ok_or_else(|| Error::not_found(task))?;
     tx.commit().map_err(Error::internal)?;
     Ok(row)
 }
@@ -167,20 +205,6 @@ fn harness_values(id: &str, harness: &Harness) -> [String; 6] {
     ]
 }
 
-fn put_harness(db: &Connection, id: &str, harness: &Harness) -> rusqlite::Result<()> {
-    let upsert = format!(
-        "{INSERT_HARNESS} ON CONFLICT(id) DO UPDATE SET argv = excluded.argv, start = excluded.start,
-         resume = excluded.resume, install = excluded.install, hooks = excluded.hooks"
-    );
-    db.execute(&upsert, harness_values(id, harness)).map(drop)
-}
-
-/// A store without a `claude-code` harness gains one; a stored one stands as `harness.set` left it.
-fn seed_claude_code(db: &Connection) -> rusqlite::Result<()> {
-    let seed = format!("{INSERT_HARNESS} ON CONFLICT(id) DO NOTHING");
-    db.execute(&seed, harness_values(harness::CLAUDE_CODE, &harness::claude_code())).map(drop)
-}
-
 fn workspace_row(row: &Row) -> rusqlite::Result<Workspace> {
     Ok(Workspace {
         id: WorkspaceId(row.get("id")?),
@@ -194,15 +218,18 @@ impl Store {
     /// The store holds the server's private key, so only its owner may read it.
     pub fn open(path: &Path) -> Result<Self, Error> {
         owner_only(path).map_err(|error| Error::internal(format!("{}: {error}", path.display())))?;
-        let db = Connection::open(path).map_err(Error::internal)?;
+        let mut db = Connection::open(path).map_err(Error::internal)?;
         db.execute_batch(SCHEMA).map_err(Error::internal)?;
+        trust_pinned_devices(&mut db)?;
         db.prepare("SELECT session_started FROM tasks LIMIT 0").map(drop).map_err(|_| {
             Error::internal(format!(
                 "{}: its tasks record no session_started, so this server cannot open it",
                 path.display()
             ))
         })?;
-        seed_claude_code(&db).map_err(Error::internal)?;
+        // A stored `claude-code` harness stands as `harness.set` left it.
+        let seed = format!("{INSERT_HARNESS} ON CONFLICT(id) DO NOTHING");
+        db.execute(&seed, harness_values(harness::CLAUDE_CODE, &harness::claude_code())).map_err(Error::internal)?;
         Ok(Self { db })
     }
 
@@ -223,7 +250,7 @@ impl Store {
         Ok(key)
     }
 
-    /// A name pinned to another device stays its until `pairing.forget` lets it go.
+    /// A name recorded for another device stays its until that device's account is forgotten.
     pub fn refuse_claim(&self, name: &str, key: &PublicKey) -> Result<(), Error> {
         let holder: Option<String> = self
             .db
@@ -232,39 +259,44 @@ impl Store {
             .map_err(Error::internal)?;
         match holder {
             Some(holder) if holder != key.to_string() => Err(Error::conflict(format!(
-                "the client name {name} is paired to another device; rename this device, or `pairing forget` the other \
-                 one"
+                "the client name {name} belongs to another device; rename this device, or `pairing forget` the other \
+                 one's account"
             ))),
             _ => Ok(()),
         }
     }
 
-    /// Replaces the key's earlier pin, so a re-paired client keeps one.
-    pub fn pin_client(&mut self, name: &str, key: &PublicKey) -> Result<(), Error> {
-        let key = key.to_string();
+    /// Records the name the device gives, keeping when it was last seen.
+    pub fn name_device(&mut self, name: &str, key: &PublicKey) -> Result<(), Error> {
+        self.db
+            .execute(
+                "INSERT INTO clients (name, key) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET name = excluded.name",
+                params![name, key.to_string()],
+            )
+            .map(drop)
+            .map_err(Error::internal)
+    }
+
+    pub fn forget_devices(&mut self, keys: &[PublicKey]) -> Result<(), Error> {
         let tx = self.db.transaction().map_err(Error::internal)?;
-        tx.execute("DELETE FROM clients WHERE key = ?1", [&key]).map_err(Error::internal)?;
-        tx.execute("INSERT INTO clients (name, key) VALUES (?1, ?2)", params![name, key]).map_err(Error::internal)?;
+        for key in keys {
+            tx.execute("DELETE FROM clients WHERE key = ?1", [key.to_string()]).map_err(Error::internal)?;
+        }
         tx.commit().map_err(Error::internal)
     }
 
-    /// Unpins the named client and returns the key it was pinned to.
-    pub fn forget_client(&mut self, name: &str) -> Result<PublicKey, Error> {
-        self.db
-            .query_row("DELETE FROM clients WHERE name = ?1 RETURNING key", [name], |row| wire_column(row, "key"))
-            .optional()
-            .map_err(Error::internal)?
-            .ok_or_else(|| Error::not_found(format!("a paired client named {name}")))
+    /// Each recorded device's name and when one of its connections last opened or closed.
+    pub fn devices(&self) -> Result<HashMap<PublicKey, (String, Option<i64>)>, Error> {
+        select(&self.db, "SELECT key, name, seen_at FROM clients", [], |row| {
+            Ok((wire_column(row, "key")?, (row.get("name")?, row.get("seen_at")?)))
+        })
     }
 
-    /// Every pinned client's key and name, with when one of its connections last opened or closed.
-    pub fn clients(&self) -> Result<Vec<(PublicKey, String, Option<i64>)>, Error> {
-        let mut statement =
-            self.db.prepare("SELECT key, name, seen_at FROM clients ORDER BY name").map_err(Error::internal)?;
-        let rows = statement
-            .query_map([], |row| Ok((wire_column(row, "key")?, row.get("name")?, row.get("seen_at")?)))
-            .map_err(Error::internal)?;
-        rows.collect::<Result<_, _>>().map_err(Error::internal)
+    pub fn device_name(&self, key: &PublicKey) -> Result<Option<String>, Error> {
+        self.db
+            .query_row("SELECT name FROM clients WHERE key = ?1", [key.to_string()], |row| row.get(0))
+            .optional()
+            .map_err(Error::internal)
     }
 
     pub fn client_seen(&self, key: &PublicKey, at: i64) -> Result<(), Error> {
@@ -274,16 +306,32 @@ impl Store {
             .map_err(Error::internal)
     }
 
-    pub fn client_pinned_to(&self, key: &PublicKey) -> Result<Option<String>, Error> {
-        self.db
-            .query_row("SELECT name FROM clients WHERE key = ?1", [key.to_string()], |row| row.get(0))
-            .optional()
-            .map_err(Error::internal)
+    pub fn accounts(&self) -> Result<Vec<Account>, Error> {
+        let logs: Vec<String> = select(&self.db, "SELECT log FROM accounts", [], |row| row.get(0))?;
+        logs.iter().map(|log| serde_json::from_str(log).map_err(Error::internal)).collect()
     }
 
-    pub fn rename_client(&self, key: &PublicKey, name: &str) -> Result<(), Error> {
+    pub fn keep_account(&self, account: &Account) -> Result<(), Error> {
+        put_account(&self.db, account)
+    }
+
+    pub fn forget_account(&self, id: &AccountId) -> Result<(), Error> {
+        self.db.execute("DELETE FROM accounts WHERE id = ?1", [id.to_string()]).map(drop).map_err(Error::internal)
+    }
+
+    /// The account a client on this machine sent last.
+    pub fn owner(&self) -> Result<Option<AccountId>, Error> {
+        let owner: Option<String> =
+            self.db.query_row("SELECT account FROM owner", [], |row| row.get(0)).optional().map_err(Error::internal)?;
+        owner.map(|id| id.parse().map_err(Error::internal)).transpose()
+    }
+
+    pub fn set_owner(&self, id: &AccountId) -> Result<(), Error> {
         self.db
-            .execute("UPDATE clients SET name = ?2 WHERE key = ?1", params![key.to_string(), name])
+            .execute(
+                "INSERT INTO owner (id, account) VALUES (0, ?1) ON CONFLICT(id) DO UPDATE SET account = excluded.account",
+                [id.to_string()],
+            )
             .map(drop)
             .map_err(Error::internal)
     }
@@ -319,9 +367,7 @@ impl Store {
     }
 
     pub fn workspaces(&self) -> Result<Vec<Workspace>, Error> {
-        let mut statement = self.db.prepare("SELECT * FROM workspaces ORDER BY name").map_err(Error::internal)?;
-        let rows = statement.query_map([], workspace_row).map_err(Error::internal)?;
-        rows.collect::<Result<_, _>>().map_err(Error::internal)
+        select(&self.db, "SELECT * FROM workspaces ORDER BY name", [], workspace_row)
     }
 
     pub fn workspace(&self, id: &WorkspaceId) -> Result<Workspace, Error> {
@@ -371,23 +417,20 @@ impl Store {
     }
 
     pub fn workspace_tasks(&self, id: &WorkspaceId) -> Result<Vec<TaskRow>, Error> {
-        let mut statement =
-            self.db.prepare("SELECT * FROM tasks WHERE workspace = ?1 ORDER BY rowid").map_err(Error::internal)?;
-        let rows = statement.query_map([&id.0], task_row).map_err(Error::internal)?;
-        rows.collect::<Result<_, _>>().map_err(Error::internal)
+        select(&self.db, "SELECT * FROM tasks WHERE workspace = ?1 ORDER BY rowid", [&id.0], task_row)
     }
 
     /// Deletes the workspace with its tasks and their terminal and browser rows. Each task of another workspace
     /// whose parent goes becomes a root task at a rev of its own, below the removal's.
     pub fn remove_workspace(&mut self, id: &WorkspaceId) -> Result<(Vec<TaskRow>, u64), Error> {
         let tx = self.db.transaction().map_err(Error::internal)?;
-        let orphans: Vec<String> = tx
-            .prepare(
-                "SELECT id FROM tasks WHERE workspace != ?1
-                 AND parent IN (SELECT id FROM tasks WHERE workspace = ?1) ORDER BY rowid",
-            )
-            .and_then(|mut statement| statement.query_map([&id.0], |row| row.get(0))?.collect())
-            .map_err(Error::internal)?;
+        let orphans: Vec<String> = select(
+            &tx,
+            "SELECT id FROM tasks WHERE workspace != ?1
+             AND parent IN (SELECT id FROM tasks WHERE workspace = ?1) ORDER BY rowid",
+            [&id.0],
+            |row| row.get(0),
+        )?;
         let mut rerooted = Vec::new();
         for orphan in orphans {
             let rev = bump_rev(&tx)?;
@@ -413,7 +456,11 @@ impl Store {
 
     pub fn set_harness(&mut self, id: &str, harness: &Harness) -> Result<u64, Error> {
         let tx = self.db.transaction().map_err(Error::internal)?;
-        put_harness(&tx, id, harness).map_err(Error::internal)?;
+        let upsert = format!(
+            "{INSERT_HARNESS} ON CONFLICT(id) DO UPDATE SET argv = excluded.argv, start = excluded.start,
+             resume = excluded.resume, install = excluded.install, hooks = excluded.hooks"
+        );
+        tx.execute(&upsert, harness_values(id, harness)).map_err(Error::internal)?;
         let rev = bump_rev(&tx)?;
         tx.commit().map_err(Error::internal)?;
         Ok(rev)
@@ -475,18 +522,12 @@ impl Store {
     }
 
     pub fn tasks(&self) -> Result<Vec<TaskRow>, Error> {
-        let mut statement = self.db.prepare("SELECT * FROM tasks ORDER BY rowid").map_err(Error::internal)?;
-        let rows = statement.query_map([], task_row).map_err(Error::internal)?;
-        rows.collect::<Result<_, _>>().map_err(Error::internal)
+        select(&self.db, "SELECT * FROM tasks ORDER BY rowid", [], task_row)
     }
 
     pub fn worktrees_ended_by(&self, cutoff: i64) -> Result<Vec<TaskRow>, Error> {
-        let mut statement = self
-            .db
-            .prepare("SELECT * FROM tasks WHERE checkout = 'worktree' AND ended_at IS NOT NULL AND ended_at <= ?1")
-            .map_err(Error::internal)?;
-        let rows = statement.query_map([cutoff], task_row).map_err(Error::internal)?;
-        rows.collect::<Result<_, _>>().map_err(Error::internal)
+        let sql = "SELECT * FROM tasks WHERE checkout = 'worktree' AND ended_at IS NOT NULL AND ended_at <= ?1";
+        select(&self.db, sql, [cutoff], task_row)
     }
 
     pub fn save_task(&mut self, row: &mut TaskRow) -> Result<u64, Error> {
@@ -515,29 +556,13 @@ impl Store {
 
     /// Moves a task to a new rev without changing its fields, for changes the task view derives.
     pub fn touch_task(&mut self, id: &TaskId) -> Result<TaskRow, Error> {
-        let tx = self.db.transaction().map_err(Error::internal)?;
-        let rev = bump_rev(&tx)?;
-        let row = tx
-            .query_row(
-                "UPDATE tasks SET rev = ?2 WHERE id = ?1 RETURNING *",
-                params![id.0, rev.cast_signed()],
-                task_row,
-            )
-            .optional()
-            .map_err(Error::internal)?
-            .ok_or_else(|| Error::not_found(id))?;
-        tx.commit().map_err(Error::internal)?;
-        Ok(row)
+        revise_task(self.db.transaction().map_err(Error::internal)?, id)
     }
 
     /// Every task's browser panels, each task's in its order.
     pub fn browsers(&self) -> Result<HashMap<TaskId, Vec<BrowserPanel>>, Error> {
-        let mut statement = self
-            .db
-            .prepare("SELECT task, panel, url, title, load FROM browsers ORDER BY place, rowid")
-            .map_err(Error::internal)?;
-        let rows = statement
-            .query_map([], |row| {
+        let rows: Vec<(TaskId, BrowserPanel)> =
+            select(&self.db, "SELECT task, panel, url, title, load FROM browsers ORDER BY place, rowid", [], |row| {
                 let panel = BrowserPanel {
                     panel: BrowserId(row.get(1)?),
                     url: row.get(2)?,
@@ -545,11 +570,9 @@ impl Store {
                     load: row.get::<_, i64>(4)?.cast_unsigned(),
                 };
                 Ok((TaskId(row.get(0)?), panel))
-            })
-            .map_err(Error::internal)?;
+            })?;
         let mut browsers: HashMap<TaskId, Vec<BrowserPanel>> = HashMap::new();
-        for row in rows {
-            let (task, panel) = row.map_err(Error::internal)?;
+        for (task, panel) in rows {
             browsers.entry(task).or_default().push(panel);
         }
         Ok(browsers)
@@ -611,16 +634,9 @@ impl Store {
     /// Deletes the panel rows the host lost and returns the rest, each task's in list order.
     pub fn reattach(&mut self, hosted: &HashSet<PtyId>) -> Result<Vec<PanelRow>, Error> {
         let tx = self.db.transaction().map_err(Error::internal)?;
-        let rows: Vec<PanelRow> = tx
-            .prepare("SELECT id, task, name FROM panels ORDER BY rowid")
-            .and_then(|mut statement| {
-                statement
-                    .query_map([], |row| {
-                        Ok(PanelRow { id: PtyId(row.get(0)?), task: TaskId(row.get(1)?), name: row.get(2)? })
-                    })?
-                    .collect()
-            })
-            .map_err(Error::internal)?;
+        let rows: Vec<PanelRow> = select(&tx, "SELECT id, task, name FROM panels ORDER BY rowid", [], |row| {
+            Ok(PanelRow { id: PtyId(row.get(0)?), task: TaskId(row.get(1)?), name: row.get(2)? })
+        })?;
         let (kept, gone): (Vec<_>, Vec<_>) = rows.into_iter().partition(|row| hosted.contains(&row.id));
         for row in &gone {
             tx.execute("DELETE FROM panels WHERE id = ?1", [&row.id.0]).map_err(Error::internal)?;

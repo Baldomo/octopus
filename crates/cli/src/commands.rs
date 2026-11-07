@@ -10,6 +10,7 @@ use octopus_proto::types::WorkspaceId;
 use octopus_proto::{Op, Outcome};
 use serde_json::Value;
 
+use crate::account::AccountVerb;
 use crate::manual::{FileVerb, PairingVerb, ServerVerb, TermVerb};
 use crate::{call, connect, print, server_error};
 
@@ -91,6 +92,7 @@ pub fn tree() -> Command {
     extend(&mut nouns, "term", TermVerb::augment_subcommands);
     extend(&mut nouns, "file", FileVerb::augment_subcommands);
     extend(&mut nouns, "pairing", PairingVerb::augment_subcommands);
+    extend(&mut nouns, "account", AccountVerb::augment_subcommands);
     #[cfg(feature = "desktop")]
     nouns.insert(0, Command::new("app").about("Open the window onto every server in this client's list."));
     Command::new("octopus")
@@ -145,7 +147,7 @@ async fn call_op(command: &ops::Command, matches: &ArgMatches) -> anyhow::Result
     match connection.call_raw(command.op, Value::Object(args)).await.context(command.op)? {
         Outcome::Ok(result) if command.op == ops::PairingOffer::NAME => {
             let offer: ops::Offer = serde_json::from_value(result.clone()).context("decode the offer")?;
-            eprintln!("{}", octopus_client::qr::text(&offer.invite));
+            eprintln!("{}", octopus_client::qr::text(&offer.invite)?);
             print(&result)
         }
         Outcome::Ok(result) => print(&result),
@@ -165,6 +167,7 @@ pub async fn run(matches: &ArgMatches) -> anyhow::Result<()> {
         "term" => TermVerb::from_arg_matches(verbs)?.run().await,
         "file" => FileVerb::from_arg_matches(verbs)?.run().await,
         "pairing" => PairingVerb::from_arg_matches(verbs)?.run().await,
+        "account" => AccountVerb::from_arg_matches(verbs)?.run().await,
         _ => unreachable!("the tree declares no verb {noun} {verb}"),
     }
 }

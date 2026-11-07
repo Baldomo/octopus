@@ -4,7 +4,6 @@ export type Box = { x: number; y: number; width: number; height: number };
 /** The parts of a 2D transform drawn from a box's top-left corner: its scale `a`, `d` and its shift `e`, `f`. */
 type Drawn = { a: number; d: number; e: number; f: number };
 
-/** Where an item laid out at `box` shows while `transform` draws it. */
 export const shownAt = (box: Box, transform: Drawn): Box => ({
   x: box.x + transform.e,
   y: box.y + transform.f,
@@ -23,7 +22,6 @@ export const slideFrom = (from: Box, to: Box, stretches: boolean) => ({
   f: from.y - to.y,
 });
 
-/** Whether the change from `from` to `to` moves an item by half a pixel or more along any edge it slides. */
 export const moves = (from: Box, to: Box, stretches: boolean) =>
   [from.x - to.x, from.y - to.y, ...(stretches ? [from.width - to.width, from.height - to.height] : [])].some(
     (change) => Math.abs(change) >= 0.5,

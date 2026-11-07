@@ -17,7 +17,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::commands::SERVER_HELP;
 use crate::install::{self, ServerRun, Service};
-use crate::{attach, call, call_error, connect, print};
+use crate::{account, attach, call, call_error, connect, print};
 
 #[derive(Subcommand)]
 pub enum ServerVerb {
@@ -53,7 +53,7 @@ pub enum ServerVerb {
         #[arg(long)]
         socket: PathBuf,
     },
-    /// Call a listed server by another name in this client's list; the server is not told.
+    /// Call a server by another name on every device of this account; the server is not told.
     Rename {
         #[arg(long, help = SERVER_HELP)]
         server: String,
@@ -61,7 +61,7 @@ pub enum ServerVerb {
         #[arg(long)]
         name: String,
     },
-    /// Drop a server and its pin from this client's list; the server keeps this client paired.
+    /// Drop a server from this account's list on every device; the server keeps trusting the account.
     Forget {
         #[arg(long, help = SERVER_HELP)]
         server: String,
@@ -102,17 +102,15 @@ impl ServerVerb {
             }
             Self::Rename { server, name } => {
                 let config = Config::user()?;
-                let mut servers = Servers::load(&config)?;
-                servers.rename(&server, &name)?;
-                servers.save(&config)?;
-                print(&servers)
+                let me = Identity::load(&config)?;
+                servers::rename(&config, &me, &server, &name)?;
+                account::sync_everywhere(&config, &me).await
             }
             Self::Forget { server } => {
                 let config = Config::user()?;
-                let mut servers = Servers::load(&config)?;
-                servers.forget(&server)?;
-                servers.save(&config)?;
-                print(&servers)
+                let me = Identity::load(&config)?;
+                servers::forget(&config, &me, &server)?;
+                account::sync_everywhere(&config, &me).await
             }
         }
     }
@@ -219,8 +217,9 @@ impl PairingVerb {
     pub async fn run(self) -> anyhow::Result<()> {
         let Self::Accept { invite } = self;
         let config = Config::user()?;
-        let server = servers::pair(&invite, &Identity::load(&config)?).await?;
-        Servers::remember(&config, server.clone())?;
+        let me = Identity::load(&config)?;
+        let server = servers::pair(&invite, &me).await?;
+        account::sync_everywhere(&config, &me).await?;
         print(&server)
     }
 }

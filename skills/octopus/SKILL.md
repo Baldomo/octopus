@@ -313,16 +313,16 @@ Show a one-time invite that pairs one client with this server.
 
 ## `octopus pairing list`
 
-List the clients this server has paired with.
+List the accounts this server trusts and their devices.
 
 - `--server <server>`: The paired server's name.
 
 ## `octopus pairing forget`
 
-Forget a paired client, closing its open connections and freeing its locks; it pairs again only with a new invite.
+Stop trusting an account, closing its devices' connections and freeing their locks; it pairs again only with a new invite.
 
 - `--server <server>`: The paired server's name.
-- `--client <client>`: The name the client last gave.
+- `--account <account>`: The account's id.
 
 ## `octopus pairing accept`
 
@@ -372,13 +372,43 @@ Remember a server on this machine's local socket under a name.
 
 ## `octopus server rename`
 
-Call a listed server by another name in this client's list; the server is not told.
+Call a server by another name on every device of this account; the server is not told.
 
 - `--server <server>`: The paired server's name.
 - `--name <name>`: The name to call the server by.
 
 ## `octopus server forget`
 
-Drop a server and its pin from this client's list; the server keeps this client paired.
+Drop a server from this account's list on every device; the server keeps trusting the account.
 
 - `--server <server>`: The paired server's name.
+
+## `octopus account show`
+
+Show this device's account: its id, its devices and the servers it lists.
+
+## `octopus account link`
+
+Make a link another device joins this account with, held by the named server for 10 minutes.
+
+- `--server <server>`: The paired server's name.
+
+## `octopus account join`
+
+Join the account a link names, bringing this device's servers along.
+
+- `--link <link>`: The link `account link` printed: octopus://<server key>?join=…&account=…&invite=…&relay=….
+
+## `octopus account remove`
+
+Remove another device from this account; it loses every server of the account.
+
+- `--device <device>`: The device's name, as `account show` lists it.
+
+## `octopus account leave`
+
+Leave this account for a fresh one of this device's own, keeping its servers.
+
+## `octopus account start-over`
+
+Start a fresh account with no servers, as a device its account removed does.

@@ -1,7 +1,7 @@
 import { onCleanup } from "solid-js";
 import type { Lift, Point } from "@octopus/shared/lift.ts";
 import { feel } from "./feel";
-import { COMMIT_PX, keepTouch } from "./touch";
+import { COMMIT_PX, fingerIn, keepTouch, reaches } from "./touch";
 
 export type { Point };
 
@@ -44,7 +44,7 @@ export function pressed(tap: () => void, hold: () => void, lift?: (element: HTML
         lifted?.cancel();
         reset();
       };
-      const ours = (touches: TouchList) => [...touches].find((touch) => touch.identifier === finger?.id);
+      const ours = (touches: TouchList) => fingerIn(touches, finger?.id);
       element.addEventListener(
         "touchstart",
         (event) => {
@@ -112,7 +112,7 @@ export function repeats(write: () => void) {
       finger = null;
       element.removeAttribute("data-pressed");
     };
-    const ours = (touches: TouchList) => [...touches].find((touch) => touch.identifier === finger);
+    const ours = (touches: TouchList) => fingerIn(touches, finger);
     element.addEventListener(
       "touchstart",
       (event) => {
@@ -139,14 +139,7 @@ export function repeats(write: () => void) {
       "touchmove",
       (event) => {
         const touch = ours(event.touches);
-        if (touch === undefined) return;
-        const box = element.getBoundingClientRect();
-        const on =
-          touch.clientX >= box.left &&
-          touch.clientX <= box.right &&
-          touch.clientY >= box.top &&
-          touch.clientY <= box.bottom;
-        if (!on) stop();
+        if (touch && !reaches(element, { x: touch.clientX, y: touch.clientY }, 0)) stop();
       },
       { passive: true },
     );

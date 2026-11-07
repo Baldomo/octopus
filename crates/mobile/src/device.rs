@@ -19,9 +19,7 @@ pub fn key(app: &AppHandle, before_making: impl FnOnce() -> anyhow::Result<()>) 
     Ok(key)
 }
 
-pub fn name(app: &AppHandle) -> anyhow::Result<String> {
-    os::name(app)
-}
+pub use os::{back_pops, insets, name, settings};
 
 /// How far the status bar, the display's cutout and the navigation bar reach over the page, in CSS pixels.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -31,16 +29,6 @@ pub struct Insets {
     pub left: f64,
     pub right: f64,
     pub bottom: f64,
-}
-
-/// The page's insets where the webview does not report them as its safe area, as on Android.
-pub fn insets(app: &AppHandle) -> anyhow::Result<Option<Insets>> {
-    os::insets(app)
-}
-
-/// Opens the OS's settings for this app, where the user grants what they denied it.
-pub fn settings(app: &AppHandle) -> anyhow::Result<()> {
-    os::settings(app)
 }
 
 /// Whether the phone may record, asking the user the first time and waiting for the answer.
@@ -113,6 +101,11 @@ mod os {
     /// WebKit reports the safe area to CSS itself.
     pub fn insets(_: &AppHandle) -> anyhow::Result<Option<super::Insets>> {
         Ok(None)
+    }
+
+    /// The page follows its own edge swipe.
+    pub fn back_pops(_: &AppHandle, _: bool) -> anyhow::Result<()> {
+        Ok(())
     }
 
     /// Once granted, the audio session records as well as plays, which capturing needs, beside whatever else plays.
@@ -229,6 +222,7 @@ mod os {
         pops: bool,
     }
 
+    /// The system back gesture and button pop the page's top screen or sheet, handing their progress to the page.
     pub fn back_pops(app: &AppHandle, pops: bool) -> anyhow::Result<()> {
         run::<IgnoredAny>(app, "backPops", Pops { pops }).context("hand the system back to the page")?;
         Ok(())
@@ -287,15 +281,3 @@ mod os {
 
 #[cfg(target_os = "android")]
 pub use os::{follow_appearance, plugin, run};
-
-/// Whether the system back gesture and button pop the page's top screen or sheet, which on Android hands their
-/// progress to the page; on iOS the page follows its own edge swipe.
-pub fn back_pops(app: &AppHandle, pops: bool) -> anyhow::Result<()> {
-    #[cfg(target_os = "android")]
-    return os::back_pops(app, pops);
-    #[cfg(target_os = "ios")]
-    {
-        let _ = (app, pops);
-        Ok(())
-    }
-}

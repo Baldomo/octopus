@@ -72,17 +72,49 @@ export type ShownOffer = { offer: Offer, qr: string, };
 
 export type PairedClient = { 
 /**
- * The name the client last gave.
+ * The name the device last gave, else the one its account gives it.
  */
 name: string, 
 /**
- * The key the client is pinned by, which is who it is.
+ * The device's key, which is who it is.
  */
-key: string, connected: boolean, 
+key: string, 
+/**
+ * Whether this server runs on the device's machine, which reaches it over its local socket.
+ */
+hosts: boolean, connected: boolean, 
 /**
  * When one of its connections last opened or closed, in milliseconds since 1970; null if it never connected.
  */
 seen_at: number | null, };
+
+export type PairedAccount = { account: string, devices: Array<PairedClient>, };
+
+export type ShownLink = { link: string, 
+/**
+ * When the link stops joining, in milliseconds since 1970.
+ */
+expires_at: number, qr: string, };
+
+export type AccountView = { 
+/**
+ * The first eight hex digits of the account's id.
+ */
+id: string, 
+/**
+ * Whether the account still holds this client.
+ */
+member: boolean, devices: Array<DeviceView>, };
+
+export type DeviceView = { name: string, 
+/**
+ * The device's key, in hex.
+ */
+key: string, 
+/**
+ * Whether it is this client.
+ */
+this: boolean, };
 
 export type TaskRef = { server: string, task: TaskId, };
 
@@ -184,7 +216,7 @@ export type Surface = "files" | "browser";
 
 export type Split = number;
 
-export type Modal = "palette" | "new_task" | "pair_server" | "shortcuts";
+export type Modal = "palette" | "new_task" | "pair_server" | "join_account" | "shortcuts";
 
 export type Appearance = "system" | "light" | "dark";
 
@@ -252,7 +284,7 @@ me: string,
 /**
  * This client's device key, which every server it is paired with knows it by.
  */
-key: string, servers: Array<ServerView>, model: Model, ui: Ui, };
+key: string, account: AccountView, servers: Array<ServerView>, model: Model, ui: Ui, };
 
 export type NewTask = { server: string, workspace: WorkspaceId, title: string, parent: TaskId | null, state: TaskState, checkout: CheckoutKind, harness: string, 
 /**
@@ -290,6 +322,6 @@ export const HOLDER_GRACE_MS = 10000 as const;
 
 export const VERSION = "0.0.0" as const;
 
-export const COMMANDS = ["boot","ready","ui_act","quit","server_pair","server_offer","server_clients","server_revoke","servers_refresh","server_rename","server_forget","workspace_add","workspace_remove","section_rename","section_color","auto_color","task_focus","task_move","task_set_parent","task_rename","task_archive","task_create","term_attach","term_input","term_detach","term_open","term_close","term_claim","term_take_lock","term_resize","file_list","file_read","file_write","file_create","file_move","file_copy","file_delete","file_upload","file_search"] as const;
+export const COMMANDS = ["boot","ready","ui_act","quit","server_pair","server_offer","server_accounts","server_revoke","account_link","account_join","account_remove","account_leave","account_start_over","servers_refresh","server_rename","server_forget","workspace_add","workspace_remove","section_rename","section_color","auto_color","task_focus","task_move","task_set_parent","task_rename","task_archive","task_create","term_attach","term_input","term_detach","term_open","term_close","term_claim","term_take_lock","term_resize","file_list","file_read","file_write","file_create","file_move","file_copy","file_delete","file_upload","file_search"] as const;
 
-export const EVENTS = {"filesChanged":"files_changed","microphoneDenied":"microphone_denied","model":"model","servers":"servers","ui":"ui","windowFocused":"window-focused","windowShown":"window-shown"} as const;
+export const EVENTS = {"account":"account","filesChanged":"files_changed","microphoneDenied":"microphone_denied","model":"model","servers":"servers","ui":"ui","windowFocused":"window-focused","windowShown":"window-shown"} as const;

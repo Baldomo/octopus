@@ -21,7 +21,6 @@ export const nameOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 const dirsOf = (path: string) => path.split("/").slice(0, -1);
 const tail = (dirs: string[], depth: number) => dirs.slice(-depth).join("/");
 
-/** For each open path whose name another tab shares, the fewest trailing directories that tell it apart. */
 export function tabHints(tabs: string[]) {
   const hints: Record<string, string> = {};
   for (const path of tabs) {
@@ -47,22 +46,16 @@ type Tree = {
   dirty: Record<string, boolean>;
   unreadable: Record<string, string>;
   rendered: Record<string, boolean>;
-  /** The tree row to scroll into view once it shows. */
   revealing: string | null;
-  /** The tree's selected entries, which its actions act on. */
   selected: string[];
   /** The row the keyboard moves from, and the far end of a Shift range. */
   focus: string | null;
-  /** The near end of a Shift range. */
   anchor: string | null;
-  /** What the next paste copies, or moves when it was cut. */
   clip: { paths: string[]; cut: boolean } | null;
 };
 
-/** Whether `path` is `dir` or lies inside it. */
 export const within = (path: string, dir: string) => dir === "." || path === dir || path.startsWith(`${dir}/`);
 
-/** `name`, or the first of "name copy", "name copy 2", … that `taken` lacks, its extension kept at the end. */
 export function freeName(name: string, taken: Set<string>) {
   const dot = name.lastIndexOf(".");
   const [stem, extension] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
@@ -91,7 +84,6 @@ const ancestorsOf = (path: string) =>
     .slice(0, -1)
     .map((_, at, dirs) => dirs.slice(0, at + 1).join("/"));
 
-/** One task's file tree and editor tabs, kept while the task stays among the recent ones. */
 export class TaskFiles {
   readonly state: Tree;
   private readonly set: SetStoreFunction<Tree>;
@@ -119,7 +111,6 @@ export class TaskFiles {
     this.list(".");
   }
 
-  /** Selects `paths`, the keyboard at `focus` and a Shift range reaching from `anchor`. */
   select(paths: string[], focus: string | null, anchor = focus) {
     this.set({ selected: paths, focus, anchor });
   }
@@ -146,7 +137,6 @@ export class TaskFiles {
     if (kind === "file") await this.open(path);
   }
 
-  /** Moves the entry, its open tabs and its place in the tree along with it. */
   async move(from: string, to: string) {
     await backend.fileMove(this.at, from, to);
     this.relist(from, to);
@@ -210,7 +200,6 @@ export class TaskFiles {
     if (expanding && this.state.listings[dir] === undefined) this.list(dir);
   }
 
-  /** Expands the tree down to `path`, and `path` itself when it is a directory, and scrolls its row into view. */
   reveal(path: string, directory: boolean) {
     for (const dir of directory ? [...ancestorsOf(path), path] : ancestorsOf(path)) this.expand(dir, true);
     this.set("revealing", path);
@@ -220,7 +209,6 @@ export class TaskFiles {
     this.set("revealing", null);
   }
 
-  /** Flips the selected tab between its code and its rendered view. */
   toggleRendered() {
     const path = this.state.active;
     if (path !== null && renderable(path)) this.set("rendered", path, !this.state.rendered[path]);

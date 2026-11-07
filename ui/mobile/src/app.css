@@ -99,7 +99,6 @@ body {
   padding-bottom: var(--g5);
 }
 
-/* fields type into a bare input */
 .field input {
   all: unset;
   flex: 1;
@@ -188,7 +187,6 @@ body {
   flex: none;
 }
 
-/* parts the design's screens draw */
 .h1 {
   font: var(--t-title);
   letter-spacing: -0.015em;
@@ -299,6 +297,10 @@ body {
 :root[data-scanning] .finder {
   background: transparent;
   box-shadow: 0 0 0 100vmax #0c0d0f;
+}
+
+:root[data-scanning] .cam .content {
+  overflow: visible;
 }
 
 :root[data-scanning] .cam .content > :not(.finder) {
@@ -481,7 +483,6 @@ body {
   display: grid;
 }
 
-/* the editor and the rendered view */
 .codepane {
   display: flex;
 }

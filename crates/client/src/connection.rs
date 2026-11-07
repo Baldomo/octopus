@@ -3,20 +3,22 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
+use octopus_proto::account::Change;
 use octopus_proto::device::DeviceKey;
-use octopus_proto::ops::{SessionHello, SessionPing};
+use octopus_proto::ops::{AccountSync, Hosted, SessionHello, SessionPing};
 use octopus_proto::remote::{Connection as RemoteConnection, Dialer};
 use octopus_proto::types::{LockHolder, ReadDir, Stream, TaskId};
-use octopus_proto::{Error, FileSize, Op, Outcome, Push, Request, ServerFrame, StreamHeader, line, local};
+use octopus_proto::{Error, FileSize, Op, Outcome, Push, Request, ServerFrame, StreamHeader, line, local, lock};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, WriteHalf};
-use tokio::sync::{OnceCell, broadcast, oneshot, watch};
+use tokio::sync::{broadcast, oneshot, watch};
 
 use crate::Task;
+use crate::account::Book;
 use crate::servers::Address;
 
 const PUSH_BACKLOG: usize = 4096;
@@ -24,26 +26,55 @@ const HEARTBEAT: Duration = Duration::from_secs(2);
 /// A server that has not answered a ping by then is treated as gone, so the client reconnects.
 const HEARTBEAT_PATIENCE: Duration = Duration::from_secs(5);
 
-/// This client as servers know it: its name, the key it pairs with, and this process's iroh endpoint, which every
-/// remote server is dialled from, bound on the first dial.
+/// This client as servers know it: its name, the key it pairs with, its account, and the iroh endpoint new dials go
+/// out from, bound on the first dial after each `forget_dialer`.
 pub struct Identity {
     name: Mutex<String>,
     pub key: DeviceKey,
-    dialer: OnceCell<Dialer>,
+    pub account: Book,
+    dialer: tokio::sync::Mutex<Option<Dialer>>,
 }
 
 impl Identity {
-    pub fn new(name: String, key: DeviceKey) -> Self {
-        Self { name: Mutex::new(name), key, dialer: OnceCell::new() }
+    /// Names this device in its account under `name` when the account names it otherwise.
+    pub fn new(name: String, key: DeviceKey, account: Book) -> anyhow::Result<Self> {
+        let me = Self { name: Mutex::new(String::new()), key, account, dialer: tokio::sync::Mutex::default() };
+        me.rename(name)?;
+        Ok(me)
     }
 
     pub fn name(&self) -> String {
         lock(&self.name).clone()
     }
 
-    /// Names this client on every connection and pairing it opens from now on.
-    pub fn rename(&self, name: String) {
+    /// Names this client on every connection and pairing it opens from now on, and in its account.
+    pub fn rename(&self, name: String) -> anyhow::Result<()> {
+        let state = self.account.state();
+        let named = state.members.iter().find(|member| member.key == self.key.public());
+        if named.is_some_and(|member| member.name != name) {
+            self.account.append(&self.key, Change::Name { name: name.clone() })?;
+        }
         *lock(&self.name) = name;
+        Ok(())
+    }
+
+    /// Whether this device's account still holds it.
+    pub fn in_account(&self) -> bool {
+        self.account.state().is_member(&self.key.public())
+    }
+
+    /// Lists the server on this machine in the account, as this device's, unless it is listed so already under
+    /// whatever name the account gives it.
+    fn host(&self, server: &Hosted) -> anyhow::Result<()> {
+        let listed = self.account.state().servers.into_iter().any(|listed| {
+            listed.key == server.key && listed.relay == server.relay && listed.host == Some(self.key.public())
+        });
+        if !listed && self.in_account() {
+            let (relay, name) = (server.relay.clone(), server.name.clone());
+            let change = Change::ListServer { server: server.key, relay, name, host: Some(self.key.public()) };
+            self.account.append(&self.key, change)?;
+        }
+        Ok(())
     }
 
     /// Whether this client holds the lock `holder` holds on the server at `address`: a server it is paired with
@@ -56,8 +87,18 @@ impl Identity {
         }
     }
 
-    pub async fn dialer(&self) -> std::io::Result<&Dialer> {
-        self.dialer.get_or_try_init(Dialer::bind).await
+    pub async fn dialer(&self) -> std::io::Result<Dialer> {
+        let mut dialer = self.dialer.lock().await;
+        if let Some(bound) = &*dialer {
+            return Ok(bound.clone());
+        }
+        let bound = Dialer::bind().await?;
+        *dialer = Some(bound.clone());
+        Ok(bound)
+    }
+
+    pub async fn forget_dialer(&self) {
+        *self.dialer.lock().await = None;
     }
 }
 
@@ -73,10 +114,6 @@ pub enum CallError {
     Server(Error),
     #[error(transparent)]
     Transport(#[from] anyhow::Error),
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
 /// Where each stream is opened: a fresh local socket connection, or a fresh stream of the one iroh connection.
@@ -99,11 +136,9 @@ impl Link {
     }
 }
 
-type Pending = Mutex<HashMap<u64, oneshot::Sender<Outcome>>>;
-
 struct Control {
     write: tokio::sync::Mutex<WriteHalf<DataStream>>,
-    pending: Pending,
+    pending: Mutex<HashMap<u64, oneshot::Sender<Outcome>>>,
     next_id: AtomicU64,
     /// Why the connection closed, once it has.
     closed: watch::Sender<Option<String>>,
@@ -142,10 +177,34 @@ impl Control {
     }
 }
 
-/// Data streams already open outlive it.
+/// Sends the account and the accounts this device left, and keeps what the server merged; the server on this
+/// machine is listed in the account as this device's, which takes a second round.
+async fn sync(control: &Control, me: &Identity, local: bool) -> anyhow::Result<Hosted> {
+    let server = round(control, me).await?;
+    if local {
+        let before = me.account.account();
+        me.host(&server)?;
+        if me.account.account() != before {
+            round(control, me).await?;
+        }
+    }
+    Ok(server)
+}
+
+/// One `account.sync`: sends what this device keeps and keeps what the server merged.
+async fn round(control: &Control, me: &Identity) -> anyhow::Result<Hosted> {
+    let kept = me.account.kept();
+    let synced = control.call(&AccountSync { account: kept.account, former: kept.former }).await?;
+    me.account.absorb(&synced.account)?;
+    Ok(synced.server)
+}
+
+/// Data streams already open outlive it while its endpoint stays `Identity`'s or another connection's.
 pub struct Connection {
     link: Link,
     client: String,
+    local: bool,
+    server: Hosted,
     control: Arc<Control>,
     pushes: broadcast::Sender<Push>,
     _reader: Task,
@@ -201,7 +260,7 @@ impl Connection {
             Address::Remote { key, relay } => {
                 let dialer = me.dialer().await?;
                 let connection = dialer.connect(&me.key, *key, relay).await?;
-                Link::Remote { connection, _dialer: dialer.clone() }
+                Link::Remote { connection, _dialer: dialer }
             }
         };
         let stream = link.open().await.with_context(|| format!("connect {address}"))?;
@@ -219,8 +278,20 @@ impl Connection {
         let client = me.name();
         let hello = SessionHello { client: client.clone() };
         control.call(&hello).await.map_err(|error| anyhow!("{address}: {error}"))?;
+        let local = matches!(address, Address::Local { .. });
+        let server = sync(&control, me, local).await.map_err(|error| anyhow!("{address}: {error:#}"))?;
         let heartbeat = Task(tokio::spawn(heartbeat(Arc::downgrade(&control))));
-        Ok(Self { link, client, control, pushes, _reader: reader, _heartbeat: heartbeat })
+        Ok(Self { link, client, local, server, control, pushes, _reader: reader, _heartbeat: heartbeat })
+    }
+
+    /// The server as it names itself, with its key and relay.
+    pub fn server(&self) -> &Hosted {
+        &self.server
+    }
+
+    /// Merges this device's account with the server's log of it, both ways.
+    pub async fn sync_account(&self, me: &Identity) -> anyhow::Result<()> {
+        sync(&self.control, me, self.local).await.map(drop)
     }
 
     pub fn pushes(&self) -> broadcast::Receiver<Push> {

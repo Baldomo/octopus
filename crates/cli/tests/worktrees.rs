@@ -1,10 +1,9 @@
 mod common;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{connect, create, start, task, workspace};
-use octopus_client::CallError;
+use common::{connect, create, refused, server, task, workspace};
 use octopus_proto::ops::{
     SessionSync, TaskArchive, TaskCreate, TaskMove, TaskRename, TaskSetParent, WorkspaceAdd, WorkspaceList,
     WorkspaceRemove, WorkspaceRename, WorkspaceSetColor,
@@ -22,14 +21,19 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_worktree_lives_on_its_branch_until_its_lifetime_after_the_task_ends() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let repo = dir.path().join("repo");
+/// A git repository with one commit on `main`, under `dir`.
+fn repo(dir: &Path) -> PathBuf {
+    let repo = dir.join("repo");
     std::fs::create_dir(&repo).expect("mkdir repo");
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "root"]);
-    let running = start(dir.path(), "server.sock", "host.sock").await;
+    repo
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_worktree_lives_on_its_branch_until_its_lifetime_after_the_task_ends() {
+    let (dir, running) = server().await;
+    let repo = repo(dir.path());
     let laptop = connect(&running, "laptop").await;
     let workspace = workspace(&laptop, &repo).await;
 
@@ -54,21 +58,10 @@ async fn a_worktree_lives_on_its_branch_until_its_lifetime_after_the_task_ends()
     assert_eq!(git(&directory, &["branch", "--show-current"]), "task/strict-serde");
 }
 
-fn refused<T: std::fmt::Debug>(result: Result<T, CallError>) -> Error {
-    match result {
-        Err(CallError::Server(error)) => error,
-        other => panic!("expected the server to refuse, got {other:?}"),
-    }
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn a_workspace_renames_and_recolors_in_place_and_goes_with_its_tasks_once_none_is_live() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let repo = dir.path().join("repo");
-    std::fs::create_dir(&repo).expect("mkdir repo");
-    git(&repo, &["init", "-q", "-b", "main"]);
-    git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "root"]);
-    let running = start(dir.path(), "server.sock", "host.sock").await;
+    let (dir, running) = server().await;
+    let repo = repo(dir.path());
     let laptop = connect(&running, "laptop").await;
     let teal = Color::Picked(Swatch { hue: Hue::Teal, tone: Tone::Deep });
     let add =
@@ -128,8 +121,7 @@ async fn a_workspace_renames_and_recolors_in_place_and_goes_with_its_tasks_once_
 
 #[tokio::test(flavor = "multi_thread")]
 async fn only_an_ended_task_archives_and_a_move_unarchives_it() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let running = start(dir.path(), "server.sock", "host.sock").await;
+    let (dir, running) = server().await;
     let laptop = connect(&running, "laptop").await;
     let id = create(&laptop, &workspace(&laptop, dir.path()).await, CheckoutKind::Root, "none").await;
     let archive = TaskArchive { task: id.clone() };
@@ -146,8 +138,7 @@ async fn only_an_ended_task_archives_and_a_move_unarchives_it() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_task_nests_under_another_task_of_its_workspace_outside_its_own_subtree() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let running = start(dir.path(), "server.sock", "host.sock").await;
+    let (dir, running) = server().await;
     let laptop = connect(&running, "laptop").await;
     let desk = connect(&running, "desk").await;
     let octopus = workspace(&laptop, dir.path()).await;

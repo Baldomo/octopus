@@ -53,8 +53,7 @@ fn failed(what: impl std::fmt::Display, error: impl std::error::Error) -> io::Er
     io::Error::other(text)
 }
 
-/// n0's public relay in Europe: where a server the app installs is homed, and the relay an entry paired before relays
-/// existed is taken to name.
+/// n0's public relay in Europe, where a server the app installs is homed.
 pub const N0_EU_RELAY: &str = "https://euc1-1.relay.n0.iroh.link./";
 
 /// A relay URL a client can reach a relay at: http or https.
@@ -140,8 +139,7 @@ impl Dialer {
     /// holder can complete the handshake.
     pub async fn connect(&self, device: &DeviceKey, server: PublicKey, relay: &RelayUrl) -> io::Result<Connection> {
         let at = format!("{server} at {relay}");
-        let learned = self.relays.lock().unwrap_or_else(|poison| poison.into_inner()).insert(relay.clone());
-        if learned {
+        if crate::lock(&self.relays).insert(relay.clone()) {
             self.endpoint.insert_relay(relay.clone(), Arc::new(RelayConfig::from(relay.clone()))).await;
         }
         let connection = self

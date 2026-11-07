@@ -8,12 +8,6 @@ import { report } from "./state";
 const sameOrder = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && a.every((key, nth) => key === b[nth]);
 
-/**
- * Lifts a tab as a ghost that follows the pointer along its row, the other tabs making room wherever it would land.
- * `keys` tells the tabs' own order, and `arrange` shows them in another one while the tab is held, or in their own at
- * null. Letting go moves the tab to its new index and lands the ghost there once the tabs show in that order; cancelling
- * flies it home.
- */
 export const liftTab =
   (
     key: string,
@@ -28,7 +22,6 @@ export const liftTab =
     let order = own;
     let at = own.indexOf(key);
     const scrolled = list.scrollLeft;
-    /** Where a tab rests along the row's scrolled content, in the layout's pixels. */
     const along = (tab: HTMLElement) => ({
       left: rest(tab, zoom).left / zoom + scrolled,
       width: tab.getBoundingClientRect().width / zoom,
@@ -37,7 +30,6 @@ export const liftTab =
       [...list.querySelectorAll<HTMLElement>("[data-key]:not(.flip-ghost)")].map((tab) => [tab.dataset.key!, tab]),
     );
     const held = along(element);
-    /** The other tabs' middles along the row with the held tab taken out. */
     const middles = own
       .filter((each) => each !== key)
       .map((each) => {
@@ -75,7 +67,6 @@ export const liftTab =
       arrange(null);
       settle(Promise.resolve());
     };
-    /** Resolves once the tabs show in the order the drop gave them, the move fails, or the wait runs out. */
     const landed = (to: number) =>
       new Promise<void>((resolve) =>
         createRoot((dispose) => {

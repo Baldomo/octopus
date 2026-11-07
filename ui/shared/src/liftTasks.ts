@@ -19,14 +19,9 @@ import { curve, play, PROJECT_S, reduced, SNAPPY } from "./motion";
 import { moveTo, placeAmong } from "./sectionOrder";
 import { arrange, arranged, model, orderSections, report, sections, ui } from "./state";
 
-/** Where a held task goes: the group or column of `state`, at its top level or under the task `under`. */
 type Aim = { state: TaskState; under: TaskView | null };
 
-/**
- * The task in hand: its own row and its subtasks' travel with it, and `toward` is where it goes, the place under the
- * pointer while held and the one it dropped on until it lands there. Its rows are `away` from the first time it heads
- * to a state's group or column until it flies home, so the list shifts under the pointer once at most.
- */
+/** Rows stay `away` from the first time the task heads to a state until it flies home, so the list shifts once at most. */
 type Hand = {
   key: string;
   section: string;
@@ -36,19 +31,14 @@ type Hand = {
   dropped: boolean;
 };
 const [hand, setHand] = createSignal<Hand | null>(null);
-/** The rows of a dropped task that stay out of sight while its ghost lands where they arrive. */
 const [landing, setLanding] = createSignal<string[]>([]);
-/** The section whose header is lifted, and whether it has folded to its header. */
 const [heldSection, setHeldSection] = createSignal<{ name: string; folded: boolean } | null>(null);
 
-/** A task's row or card takes the held task as a subtask while the pointer is off its top and bottom quarters. */
 const NEST_EDGE = 0.25;
-/** How far a lifted section's header travels before its section folds, so a hold that stays put leaves it open. */
+/** A hold that stays put leaves its section open. */
 const FOLD_PX = 4;
 
-/** The row the ghost stands in for, hidden under it. */
 export const isLifted = createRoot(() => createSelector(() => hand()?.key ?? null));
-/** A row the held task carries, which gives up its place while the task is away from it. */
 export const isAway = createRoot(() =>
   createSelector(
     () => {
@@ -59,7 +49,6 @@ export const isAway = createRoot(() =>
   ),
 );
 export const isLanding = createRoot(() => createSelector(landing, (key: string, keys) => keys.includes(key)));
-/** The row the held task nests under if it drops now. */
 export const isNesting = createRoot(() =>
   createSelector(() => {
     const held = hand();
@@ -75,13 +64,11 @@ export const isSectionFolded = (name: string) => {
 
 export const lifting = () => hand() !== null || heldSection() !== null;
 
-/** Whether a pointer holds a task lifted in `section`, or one dropped there still lands. */
 export const liftsIn = (section: string) => {
   const held = hand();
   return held?.section === section && (!held.dropped || held.toward !== null);
 };
 
-/** A group, column or state tab that takes a task lifted in its section to its state. */
 export const dropTarget = (section: string, state: TaskState) => ({
   over: () => {
     const held = hand();
@@ -93,10 +80,8 @@ export const dropTarget = (section: string, state: TaskState) => ({
 const stateOf = (element: Element | null | undefined) =>
   TASK_STATES.find((state) => state === element?.closest<HTMLElement>("[data-state]")?.dataset.state);
 
-/** The height an item takes in its list, its top margin included. */
 const footprint = (element: HTMLElement) => element.offsetHeight + parseFloat(getComputedStyle(element).marginTop);
 
-/** Whether `a` sorts before `b` in a group, which orders its rows by title and then by where each task lives. */
 function sortsBefore(a: Row, b: Row) {
   const order = (row: Row) => [row.title.toLowerCase(), row.at.server, row.at.task];
   const [left, right] = [order(a), order(b)];
@@ -104,14 +89,6 @@ function sortsBefore(a: Row, b: Row) {
   return differs >= 0 && left[differs]! < right[differs]!;
 }
 
-/**
- * Lifts a task's row or card as a ghost that rises under the pointer and follows it one to one, rubber-banding past
- * the list's top and foot. Over another state of its section its rows give up their place, and that state's group or
- * column opens one where the task will sit or, on a state tab, the ghost thins so the tab's ring shows. Over the middle
- * of another task's row in its workspace, that row lights to take it as a subtask and the ghost thins over it. Letting
- * go drops it where the throw projects: the ghost flies there at the pointer's speed and the rows show once they
- * arrive, or it flies home.
- */
 export const lift =
   (row: Row, section: string): Start =>
   (element, from, surface) => {
@@ -131,7 +108,7 @@ export const lift =
     const room = carried.reduce((height, each) => height + footprint(each), 0);
     const margin = parseFloat(getComputedStyle(element).marginTop) * zoom;
     const parent = model.tasks[row.key]?.task.parent ?? null;
-    /** Whether the point stands on the place the task's rows hold, which takes no drop until they give it up. */
+    /** The task's own place takes no drop until its rows give it up. */
     const onOwnPlace = ({ x, y }: Point) =>
       carried.some((each) => {
         const box = each.getBoundingClientRect();
@@ -153,10 +130,7 @@ export const lift =
     };
     holdLift(takeOver);
 
-    /**
-     * The task whose row's middle the pointer is over, which takes this one as a subtask if it is another task of its
-     * workspace outside its own subtree; undefined off the middle, where the row's group decides.
-     */
+    /** undefined off the row's middle, where the row's group decides. */
     const nestAt = (at: Point, target: HTMLElement, under: TaskView) => {
       const box = target.getBoundingClientRect();
       if (at.y < box.top + box.height * NEST_EDGE || at.y > box.bottom - box.height * NEST_EDGE) return undefined;
@@ -183,10 +157,6 @@ export const lift =
       return { aim: { state, under: null }, element: target };
     };
 
-    /**
-     * Where the task will sit once it lands: below the row it nests under, or in a state's group or column among its
-     * top-level rows ordered by title, which opens a place there; an empty one's hint stands where it will sit.
-     */
     let gap: { element: HTMLElement; side: "marginTop" | "paddingBottom" } | null = null;
     const ownPlace = () => rest(element, zoom);
     let slot = ownPlace;
@@ -227,7 +197,6 @@ export const lift =
       }
     };
 
-    /** Heads the task toward `target`, or back to its own place at null, the list making room as it goes. */
     const aim = (target: { aim: Aim; element: HTMLElement } | null, dropped: boolean) => {
       const was = hand();
       if (was === null) return;
@@ -252,7 +221,6 @@ export const lift =
       aim(targetAt(at), false);
     });
 
-    /** Flies the ghost back onto its own row, wherever the list has moved it. */
     const home = () => {
       pointer.stop();
       setLanding([]);
@@ -266,13 +234,11 @@ export const lift =
       if (reduced() || !element.isConnected) return finish();
       void fly(ownPlace()).then((arrived) => arrived && finish());
     };
-    /** Whether the task's row stands where `toward` puts it: in its state's group, under the parent it heads to. */
     const placed = (toward: Aim) => {
       const under = toward.under === null ? (nested ? null : parent) : toward.under.task.id;
       return (arrival: HTMLElement) =>
         stateOf(arrival) === toward.state && (model.tasks[row.key]?.task.parent ?? null) === under;
     };
-    /** Lands the ghost where the task's rows arrive, the place held open for them until then. */
     const land = (toward: Aim) => {
       setLanding(keys);
       ghost.classList.remove("up");
@@ -305,7 +271,6 @@ export const lift =
         home();
       };
     };
-    /** Shrinks the ghost into the state tab it dropped on; the card gives up its column's place until it arrives. */
     const into = (tab: Element, toward: Aim) => {
       const box = tab.getBoundingClientRect();
       void fly({
@@ -329,14 +294,12 @@ export const lift =
         followChange(list);
       };
     };
-    /** Nests the task under the task it heads to, or brings a nested one to the top level and then to its state. */
     const send = async (toward: Aim) => {
       if (toward.under !== null) return backend.taskSetParent(row.at, toward.under.at);
       if (nested) await backend.taskSetParent(row.at, null);
       if (toward.state !== row.state) await backend.taskMove(row.at, toward.state);
     };
 
-    /** Where the pointer's throw carries it, kept within the surface. */
     const projected = () => {
       const speed = motion.velocity();
       const bounds = (free ? surface.stage : list).getBoundingClientRect();
@@ -374,12 +337,6 @@ export const lift =
     };
   };
 
-/**
- * Lifts a section by its header as a ghost that follows the pointer up and down the list, the section folding to its
- * header once the pointer travels, and the other sections making room wherever it would land. Letting go over the
- * list saves the order and lands the ghost on the header's new place; letting go off the list, or cancelling, flies
- * it home.
- */
 export const liftSection =
   (name: string): Start =>
   (element, from, surface) => {
@@ -400,7 +357,6 @@ export const liftSection =
     };
     holdLift(finish);
 
-    /** Puts the section after every other section whose middle stands above `center`. */
     const arrangeAt = (center: number) => {
       const above = [...list.querySelectorAll<HTMLElement>("[data-section]")].filter((section) => {
         const box = section.getBoundingClientRect();

@@ -1,4 +1,5 @@
-import { createEffect, createMemo, createSignal, Match, on, onCleanup, Show, Switch } from "solid-js";
+import { createEffect, createMemo, createSignal, on, onCleanup, Show, type JSX } from "solid-js";
+import { Dynamic } from "solid-js/web";
 import { backend } from "@octopus/shared/backend.ts";
 import { Board } from "./Board";
 import { desktop, desktopEvents } from "./backend";
@@ -8,14 +9,14 @@ import { Files } from "@octopus/shared/Files.tsx";
 import { filesOf, forgetFilesExcept } from "@octopus/shared/taskFiles.ts";
 import { commands, hint } from "@octopus/shared/commands.ts";
 import { NewTask } from "@octopus/shared/NewTask.tsx";
-import { PairServer } from "@octopus/shared/PairServer.tsx";
+import { JoinAccount, PairServer } from "@octopus/shared/PairServer.tsx";
 import { Palette } from "@octopus/shared/Palette.tsx";
 import { Shortcuts } from "@octopus/shared/Shortcuts.tsx";
 import { Sidebar } from "./Sidebar";
 import { holdsKeyboard } from "@octopus/shared/SidebarControls.tsx";
 import { Toast, toast, toasting } from "@octopus/shared/Toast.tsx";
-import { act, model, openView, report, serverView, showModal, showSidebar, ui } from "@octopus/shared/state.ts";
-import { floatSurface, floatTop, sinkSurface } from "./layer";
+import { act, model, openView, report, serverView, showModal, showSidebar, ui, uiAct } from "@octopus/shared/state.ts";
+import { floatTop } from "./layer";
 import { liftOnDrag } from "./lift";
 import { StatusBar } from "./StatusBar";
 import { TaskSplit } from "./TaskSplit";
@@ -32,7 +33,6 @@ viewport.addEventListener("resize", () => setWebview({ width: viewport.width, he
 /** The app places the layer in whole device pixels, so it may stop short of a surface's far edge by up to one. */
 const PLACEMENT_SLACK = 1;
 
-/** The element's rect in window coordinates. */
 const box = (element: HTMLElement): Bounds => ({
   x: element.offsetLeft,
   y: element.offsetTop,
@@ -69,26 +69,37 @@ const NO_INPUT: Bounds = { x: 0, y: 0, width: 0, height: 0 };
  */
 function floating(surface: { name: string; modal: () => boolean; out: () => boolean }) {
   const { name, modal, out } = surface;
+  const sink = () => uiAct({ do: "sink", surface: name });
   /** The surface's far corner in this webview's coordinates. */
   const [reach, setReach] = createSignal<{ right: number; bottom: number } | null>(null);
   /** A null `input` takes no pointer. */
   const ref = (element: HTMLElement, input: HTMLElement | null = element) => {
+    /** Ticks whenever the surface's content changes its size, as a menu growing a QR code does. */
+    const [resized, setResized] = createSignal(0);
+    const observer = new ResizeObserver(() => setResized((ticks) => ticks + 1));
+    observer.observe(element);
+    onCleanup(() => observer.disconnect());
     createEffect(
       on(
-        () => [out(), modal(), ui.viewport.width, ui.viewport.height] as const,
+        () => [out(), modal(), ui.viewport.width, ui.viewport.height, resized()] as const,
         ([isOut, isModal]) => {
           const rect = box(element);
           setReach({ right: rect.x + rect.width, bottom: rect.y + rect.height - floatTop() });
           if (isOut)
-            floatSurface(name, { input: input === null ? NO_INPUT : box(input), drawn: drawnBox(element) }, isModal);
-          else if (element.getAnimations().length === 0) sinkSurface(name);
+            uiAct({
+              do: "float",
+              surface: name,
+              at: { input: input === null ? NO_INPUT : box(input), drawn: drawnBox(element) },
+              modal: isModal,
+            });
+          else if (element.getAnimations().length === 0) sink();
         },
       ),
     );
     element.addEventListener("transitionend", (event) => {
-      if (event.target === element && !out()) sinkSurface(name);
+      if (event.target === element && !out()) sink();
     });
-    onCleanup(() => sinkSurface(name));
+    onCleanup(sink);
   };
   const held = () => {
     const corner = reach();
@@ -113,8 +124,7 @@ export function Docked() {
   });
   createEffect(
     on(shownInTaskView, (key) => {
-      const shown = key === null ? undefined : openView();
-      if (shown !== undefined) act(backend.taskFocus(shown.at));
+      if (key !== null) act(backend.taskFocus(openView()!.at));
     }),
   );
   createEffect(
@@ -203,26 +213,21 @@ function FloatingClientMenu() {
   return <ClientMenu floats={menu.ref} shown={menu.shown()} />;
 }
 
+const MODALS: Record<ModalName, () => JSX.Element> = {
+  palette: Palette,
+  new_task: NewTask,
+  pair_server: PairServer,
+  join_account: JoinAccount,
+  shortcuts: Shortcuts,
+};
+
 function Modal(props: { modal: ModalName }) {
   const scrim = floating({ name: "modal", modal: () => true, out: () => true });
   return (
     <>
       <div class="scrim" ref={scrim.ref} onClick={() => showModal(null)} />
       <Show when={scrim.shown()}>
-        <Switch>
-          <Match when={props.modal === "palette"}>
-            <Palette />
-          </Match>
-          <Match when={props.modal === "new_task"}>
-            <NewTask />
-          </Match>
-          <Match when={props.modal === "pair_server"}>
-            <PairServer />
-          </Match>
-          <Match when={props.modal === "shortcuts"}>
-            <Shortcuts />
-          </Match>
-        </Switch>
+        <Dynamic component={MODALS[props.modal]} />
       </Show>
     </>
   );

@@ -1,17 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use octopus_client::cache::{Cache, PushEffect};
 use octopus_client::servers::{self, Address, Config, Server, Servers};
 use octopus_client::tunnel::{Tunnel, listen_on_localhost, loopback_port};
 use octopus_client::{CallError, Connection, Identity};
+use octopus_proto::account::{Account, Change, Link as AccountLink};
 use octopus_proto::device::PublicKey;
 use octopus_proto::ops::{SessionSync, WorkspaceRename, WorkspaceSetColor};
 use octopus_proto::pairing::Invite;
 use octopus_proto::types::{Color, LockHolder, WorkspaceId};
-use octopus_proto::{Event, Op, Push};
+use octopus_proto::{Event, Op, Push, now};
 use serde::Serialize;
 use tauri::{AppHandle, Url};
 use tokio::sync::broadcast::error::RecvError;
@@ -26,6 +27,7 @@ use crate::{emit, lock, saturate};
 pub(crate) const MODEL_EVENT: &str = "model";
 pub(crate) const SERVERS_EVENT: &str = "servers";
 pub(crate) const FILES_CHANGED_EVENT: &str = "files_changed";
+pub(crate) const ACCOUNT_EVENT: &str = "account";
 
 const RECONNECT: Duration = Duration::from_secs(1);
 /// How often a server's chip and status bar pick up its connection's newest round trip.
@@ -48,6 +50,25 @@ pub(crate) struct ServerView {
     /// The round trip of the connection's newest heartbeat.
     pub rtt_ms: Option<u32>,
     pub problem: Option<String>,
+}
+
+/// This client's account as the window shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+pub(crate) struct AccountView {
+    /// The first eight hex digits of the account's id.
+    pub id: String,
+    /// Whether the account still holds this client.
+    pub member: bool,
+    pub devices: Vec<DeviceView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+pub(crate) struct DeviceView {
+    pub name: String,
+    /// The device's key, in hex.
+    pub key: String,
+    /// Whether it is this client.
+    pub this: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -101,20 +122,18 @@ impl State {
     }
 }
 
-fn now() -> i64 {
-    let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).expect("the clock reads after 1970");
-    i64::try_from(elapsed.as_millis()).expect("milliseconds since 1970 fit in i64")
-}
-
 pub struct Hub {
     pub me: Identity,
     config: Config,
     app: AppHandle,
     state: Mutex<State>,
+    /// Held through each reconcile, so two never interleave their supervising.
+    reconciling: Mutex<()>,
     versions: AtomicU64,
     model_changed: Notify,
     servers_changed: Notify,
     files_changed: Notify,
+    redials: Notify,
     microphone: Arc<Microphone>,
 }
 
@@ -135,7 +154,7 @@ impl Hub {
         app: AppHandle,
         config: Config,
         me: Identity,
-        servers: Vec<Server>,
+        servers: Servers,
         microphone_access: AskAccess,
     ) -> Arc<Self> {
         let denied = app.clone();
@@ -146,18 +165,82 @@ impl Hub {
             microphone: Microphone::new(microphone_access, Box::new(Capture::microphone), denied_changed),
             app,
             state: Mutex::default(),
+            reconciling: Mutex::default(),
             versions: AtomicU64::new(0),
             model_changed: Notify::new(),
             servers_changed: Notify::new(),
             files_changed: Notify::new(),
+            redials: Notify::new(),
         });
         tauri::async_runtime::spawn(Arc::clone(&hub).emit_models());
         tauri::async_runtime::spawn(Arc::clone(&hub).emit_servers());
         tauri::async_runtime::spawn(Arc::clone(&hub).emit_files_changed());
-        for server in servers {
+        tauri::async_runtime::spawn(Arc::clone(&hub).follow_account());
+        for server in servers.reachable(&hub.me) {
             hub.supervise(server);
         }
         hub
+    }
+
+    /// Reaches the servers the account lists as it changes, and sends every change to each server reached.
+    async fn follow_account(self: Arc<Self>) {
+        let mut changes = self.me.account.changes();
+        while changes.changed().await.is_ok() {
+            if let Err(error) = self.reconcile() {
+                eprintln!("octopus app: follow the account: {error:#}");
+            }
+            emit(&self.app, ACCOUNT_EVENT, self.account());
+            let connected: Vec<Arc<Connection>> =
+                lock(&self.state).links.values().filter_map(|link| link.connection.clone()).collect();
+            for connection in connected {
+                let hub = Arc::clone(&self);
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = connection.sync_account(&hub.me).await {
+                        eprintln!("octopus app: sync the account: {error:#}");
+                    }
+                });
+            }
+        }
+    }
+
+    /// Reaches each server this client reaches now and stops reaching the rest.
+    fn reconcile(self: &Arc<Self>) -> anyhow::Result<()> {
+        let _reconciling = lock(&self.reconciling);
+        let wanted = Servers::load(&self.config)?.reachable(&self.me);
+        let stale: Vec<String> = lock(&self.state)
+            .links
+            .iter()
+            .filter(|(name, link)| !wanted.iter().any(|server| server.name == **name && server.address == link.address))
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in stale {
+            self.unsupervise(&name);
+        }
+        for server in wanted {
+            if !lock(&self.state).links.contains_key(&server.name) {
+                self.supervise(server);
+            }
+        }
+        Ok(())
+    }
+
+    /// Dials from a new endpoint from now on and ends every dial under way. An endpoint can stay deaf after the network
+    /// changes under it, as when a phone moves off Wi-Fi with the app in the background.
+    pub async fn redial(&self) {
+        self.me.forget_dialer().await;
+        self.redials.notify_waiters();
+    }
+
+    pub(crate) fn account(&self) -> AccountView {
+        let state = self.me.account.state();
+        let me = self.me.key.public();
+        let mut devices: Vec<DeviceView> = state
+            .members
+            .iter()
+            .map(|member| DeviceView { name: member.name.clone(), key: member.key.hex(), this: member.key == me })
+            .collect();
+        devices.sort_by_key(|device| !device.this);
+        AccountView { id: self.me.account.account().id().short(), member: state.is_member(&me), devices }
     }
 
     /// A link that goes aborts its supervisor at its next await, so a step it already started may find its link gone.
@@ -175,7 +258,10 @@ impl Hub {
                     let _asker_gone = answer.send(Err(format!("{}: {problem}", hub.label(&server.name))));
                 }
                 hub.lost(&server.name, problem);
-                tokio::time::sleep(RECONNECT).await;
+                tokio::select! {
+                    () = tokio::time::sleep(RECONNECT) => {}
+                    () = hub.redials.notified() => {}
+                }
             }
         });
         state.links.insert(name, Link { address, connection: None, problem: None, since: now(), resyncs, supervisor });
@@ -197,14 +283,26 @@ impl Hub {
         server: &Server,
         asked: &mut mpsc::UnboundedReceiver<oneshot::Sender<Result<(), String>>>,
     ) -> anyhow::Result<String> {
-        let connection = Arc::new(Connection::connect(&server.address, &self.me).await?);
-        let mut pushes = connection.pushes();
-        self.resync(&server.name, &connection).await?;
+        let reached = async {
+            let connection = Arc::new(Connection::connect(&server.address, &self.me).await?);
+            let pushes = connection.pushes();
+            self.resync(&server.name, &connection).await?;
+            anyhow::Ok((connection, pushes))
+        };
+        let (connection, mut pushes) = tokio::select! {
+            reached = reached => reached?,
+            () = self.redials.notified() => anyhow::bail!("redialling"),
+        };
         let mut refresh = tokio::time::interval(RTT_REFRESH);
         loop {
             tokio::select! {
                 closed = connection.closed() => return Ok(closed),
                 push = pushes.recv() => match push {
+                    Ok(Push { event: Event::AccountUpdated { account }, .. })
+                        if account == self.me.account.account().id() =>
+                    {
+                        connection.sync_account(&self.me).await?
+                    }
                     Ok(push) => self.apply(&server.name, push),
                     Err(RecvError::Lagged(_)) => self.resync(&server.name, &connection).await?,
                     Err(RecvError::Closed) => unreachable!("the connection owns its push sender"),
@@ -291,42 +389,52 @@ impl Hub {
             .map(|(name, _)| name.clone())
     }
 
-    /// Pairs with the server `invite` names, lists it, and resolves to its name.
+    /// Pairs with the server `invite` names, lists it in the account, and resolves to its name.
     pub async fn pair(self: &Arc<Self>, invite: &Invite) -> anyhow::Result<String> {
         let server = servers::pair(invite, &self.me).await?;
-        let name = server.name.clone();
-        self.add(server)?;
-        Ok(name)
+        self.reconcile()?;
+        Ok(self.listed_as(&invite.server).unwrap_or(server.name))
     }
 
-    fn add(self: &Arc<Self>, server: Server) -> anyhow::Result<()> {
-        if lock(&self.state).links.contains_key(&server.name) {
-            anyhow::bail!("a server named {} is already in the list", server.name);
-        }
-        Servers::remember(&self.config, server.clone())?;
-        self.supervise(server);
-        Ok(())
-    }
-
-    /// Lists the server under a new name and reaches it afresh under that name.
+    /// Renames the server on this machine's list or in the account, and reaches it afresh under that name.
     pub(crate) fn rename_server(self: &Arc<Self>, from: &str, to: &str) -> anyhow::Result<()> {
-        if lock(&self.state).links.contains_key(to) {
-            anyhow::bail!("a server named {to} is already in the list");
-        }
-        let mut servers = Servers::load(&self.config)?;
-        let renamed = servers.rename(from, to)?;
-        servers.save(&self.config)?;
-        self.unsupervise(from);
-        self.supervise(renamed);
-        Ok(())
+        servers::rename(&self.config, &self.me, from, to)?;
+        self.reconcile()
     }
 
-    pub(crate) fn forget_server(&self, server: &str) -> anyhow::Result<()> {
-        let mut servers = Servers::load(&self.config)?;
-        servers.forget(server)?;
-        servers.save(&self.config)?;
-        self.unsupervise(server);
-        Ok(())
+    pub(crate) fn forget_server(self: &Arc<Self>, server: &str) -> anyhow::Result<()> {
+        servers::forget(&self.config, &self.me, server)?;
+        self.reconcile()
+    }
+
+    /// A fresh link to this account, held by the server on this machine when it is reached, else by the first one
+    /// reached.
+    pub(crate) async fn link(&self) -> anyhow::Result<(AccountLink, i64)> {
+        let connection = lock(&self.state)
+            .links
+            .values()
+            .filter_map(|link| Some((link.connection.clone()?, matches!(link.address, Address::Remote { .. }))))
+            .min_by_key(|(_, remote)| *remote)
+            .map(|(connection, _)| connection)
+            .ok_or_else(|| anyhow::anyhow!("no server is reachable to hold the link"))?;
+        let (invite, secret, expires_at) = self.me.account.update(|kept| Ok(kept.account.invite(&self.me.key)))?;
+        connection.sync_account(&self.me).await?;
+        let server = connection.server();
+        let account = self.me.account.account().id();
+        Ok((AccountLink { server: server.key, relay: server.relay.clone(), account, invite, secret }, expires_at))
+    }
+
+    pub(crate) fn remove_device(&self, key: &str) -> anyhow::Result<()> {
+        let state = self.me.account.state();
+        let member = state.members.iter().find(|member| member.key.hex() == key);
+        let member = member.ok_or_else(|| anyhow::anyhow!("no device {key} in this account"))?;
+        self.me.account.append(&self.me.key, Change::Remove { device: member.key })
+    }
+
+    /// Moves this client to a fresh account of its own, with the servers of the one it leaves or with none.
+    pub(crate) fn start_afresh(&self, keep_servers: bool) -> anyhow::Result<()> {
+        let fresh = Account::fresh(self.me.key.public());
+        self.me.account.move_to(&self.me.key, fresh, &self.me.name(), keep_servers)
     }
 
     /// Renames the section's workspace on every server of the section, refusing before any rename when a server
@@ -439,25 +547,25 @@ impl Hub {
         state
             .links
             .iter()
-            .map(|(name, link)| ServerView {
-                name: name.clone(),
-                label: state.label(name).to_string(),
-                relay: match &link.address {
-                    Address::Local { .. } => None,
-                    Address::Remote { relay, .. } => Some(relay.to_string()),
-                },
-                key: match &link.address {
-                    Address::Local { .. } => None,
-                    Address::Remote { key, .. } => Some(key.hex()),
-                },
-                reachable: link.connection.is_some(),
-                since: link.since,
-                rtt_ms: link
-                    .connection
-                    .as_ref()
-                    .and_then(|connection| connection.rtt())
-                    .map(|rtt| saturate(rtt.as_millis())),
-                problem: link.problem.clone(),
+            .map(|(name, link)| {
+                let (relay, key) = match &link.address {
+                    Address::Local { .. } => (None, None),
+                    Address::Remote { relay, key } => (Some(relay.to_string()), Some(key.hex())),
+                };
+                ServerView {
+                    name: name.clone(),
+                    label: state.label(name).to_string(),
+                    relay,
+                    key,
+                    reachable: link.connection.is_some(),
+                    since: link.since,
+                    rtt_ms: link
+                        .connection
+                        .as_ref()
+                        .and_then(|connection| connection.rtt())
+                        .map(|rtt| saturate(rtt.as_millis())),
+                    problem: link.problem.clone(),
+                }
             })
             .collect()
     }

@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use octopus_client::CallError;
+use octopus_proto::Error;
 use octopus_proto::types::{ReadDir, Stream};
 use percent_encoding::percent_decode_str;
 use tauri::http::{Request, Response, StatusCode, header};
@@ -98,13 +100,9 @@ impl Pages {
         let read = match hub.connection(&root.server) {
             Ok(connection) => connection.read(dir, path.clone(), start, len).await.map_err(|error| {
                 let status = match &error {
-                    octopus_client::CallError::Server(octopus_proto::Error::NotFound { .. }) => StatusCode::NOT_FOUND,
-                    octopus_client::CallError::Server(octopus_proto::Error::InvalidArgs { .. }) => {
-                        StatusCode::FORBIDDEN
-                    }
-                    octopus_client::CallError::Transport(_) | octopus_client::CallError::Server(_) => {
-                        StatusCode::BAD_GATEWAY
-                    }
+                    CallError::Server(Error::NotFound { .. }) => StatusCode::NOT_FOUND,
+                    CallError::Server(Error::InvalidArgs { .. }) => StatusCode::FORBIDDEN,
+                    CallError::Transport(_) | CallError::Server(_) => StatusCode::BAD_GATEWAY,
                 };
                 (status, hub.failure(&root.server, error))
             }),
@@ -125,11 +123,10 @@ impl Pages {
                 (StatusCode::PARTIAL_CONTENT, Some(format!("bytes {start}-{}/{size}", start + sent - 1)))
             }
         };
-        let reply = response(status, content_type(&path)).header(header::ACCEPT_RANGES, "bytes");
-        let reply = match range {
-            Some(range) => reply.header(header::CONTENT_RANGE, range),
-            None => reply,
-        };
+        let mut reply = response(status, content_type(&path)).header(header::ACCEPT_RANGES, "bytes");
+        if let Some(range) = range {
+            reply = reply.header(header::CONTENT_RANGE, range);
+        }
         reply.body(bytes).expect("a status, its headers and a body make a response")
     }
 }

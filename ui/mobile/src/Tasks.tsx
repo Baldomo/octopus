@@ -159,7 +159,6 @@ function SectionRows(props: { section: Section }) {
   );
 }
 
-/** The root screen: every section's live tasks under their state, on one scroll. */
 export function Tasks() {
   return (
     <>

@@ -2,6 +2,7 @@ import { createRoot, createSelector, createSignal } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { backend } from "./backend";
 import type {
+  AccountView,
   Appearance,
   Boot,
   Model,
@@ -32,6 +33,7 @@ export const workspaces = () => inSectionOrder(model.lists.workspaces, sectionOr
 export const [servers, setServers] = createSignal<ServerView[]>([]);
 export const [me, setMe] = createSignal("");
 export const [myKey, setMyKey] = createSignal("");
+export const [account, setAccount] = createSignal<AccountView>({ id: "", member: true, devices: [] });
 
 /** The state both layers render, owned by the app; every change goes through it and returns as a newer `Ui`. */
 const [ui, setUi] = createStore<Ui>({
@@ -83,11 +85,9 @@ export const showClientMenu = (shown: boolean) => uiAct({ do: "show_client_menu"
 export const toggleClientMenu = () => uiAct({ do: "toggle_client_menu" });
 export const setAppearance = (appearance: Appearance) => uiAct({ do: "set_appearance", appearance });
 export const zoom = (step: ZoomStep) => uiAct({ do: "zoom", step });
-/** Rejects flags whose quoting does not close. */
 export const setAgentFlags = (harness: string, flags: string) =>
   backend.uiAct({ do: "set_agent_flags", harness, flags });
 
-/** Every harness a listed task names or this client keeps flags for. */
 export const harnesses = () =>
   [
     ...new Set([...Object.values(model.tasks).map((view) => view.task.harness), ...Object.keys(ui.prefs.agent_flags)]),
@@ -117,6 +117,7 @@ export function applyUi(next: Ui) {
 export function applyBoot(boot: Boot) {
   setMe(boot.me);
   setMyKey(boot.key);
+  setAccount(boot.account);
   setServers(boot.servers);
   applyModel(boot.model);
   applyUi(boot.ui);

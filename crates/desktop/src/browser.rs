@@ -379,11 +379,6 @@ fn open_tab(app: &AppHandle, at: &TaskRef, panel: &BrowserId, url: &Url, select:
     emit(app, OPENED_EVENT, Opened { task: at.key(), panel: panel.clone(), url, select });
 }
 
-/// Whether a browser page holds the keyboard in the window.
-pub(crate) fn page_has_focus(window: &tauri::Window) -> bool {
-    native::has_focus(window)
-}
-
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 #[path = "browser/macos.rs"]
@@ -391,3 +386,4 @@ mod native;
 #[cfg(target_os = "linux")]
 #[path = "browser/linux.rs"]
 mod native;
+pub(crate) use native::has_focus as page_has_focus;

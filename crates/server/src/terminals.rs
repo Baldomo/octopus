@@ -159,6 +159,10 @@ impl Terminal {
         lock(&self.screen).holder.as_ref() == Some(client)
     }
 
+    pub(crate) fn holder(&self) -> Option<Client> {
+        lock(&self.screen).holder.clone()
+    }
+
     /// Whether `client` holds the lock and shows the terminal nowhere.
     pub(crate) fn held_unshown(&self, client: &Client) -> bool {
         let screen = lock(&self.screen);
@@ -304,19 +308,16 @@ impl State {
             .collect()
     }
 
-    /// A paired holder is labelled with the name its key is pinned under now, or its key once it is no longer pinned.
+    /// A paired holder is labelled with the name its device gave last, or its key while it has given none.
     fn lock_holder(&self, holder: Client) -> LockHolder {
         match holder {
             Client::Local(name) => LockHolder { name, key: None },
             Client::Paired(key) => {
-                let name = match self.store.client_pinned_to(&key) {
+                let name = match self.store.device_name(&key) {
                     Ok(Some(name)) => name,
-                    Ok(None) => {
-                        report!("{key} holds a lock though it is no longer pinned");
-                        key.to_string()
-                    }
+                    Ok(None) => key.to_string(),
                     Err(error) => {
-                        report!("look up the name {key} is pinned under: {error}");
+                        report!("look up the name of {key}: {error}");
                         key.to_string()
                     }
                 };
@@ -515,7 +516,7 @@ impl Server {
         let rev = {
             let mut state = lock(&self.state);
             if let Client::Paired(key) = client
-                && state.store.client_pinned_to(key)?.is_none()
+                && !state.is_member(key)
             {
                 if terminal.free(client) {
                     self.touch_task(&mut state, task)?;

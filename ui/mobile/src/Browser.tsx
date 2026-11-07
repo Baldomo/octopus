@@ -1,8 +1,7 @@
 import { createResource, createSignal, onCleanup, Show } from "solid-js";
 import { model, report } from "@octopus/shared/state.ts";
 import { Icon } from "./Icon";
-import { back } from "./nav";
-import { Circle, Id, sectionColor } from "./parts";
+import { Circle, CrumbBar, Id, sectionColor } from "./parts";
 import { phone } from "./phone";
 
 /** The task's newest browser panel under its URL: the host in text, the path dim, "tunnel" while it reaches the server. */
@@ -29,17 +28,13 @@ export function Browser(props: { taskKey: string }) {
   };
   return (
     <>
-      <div class="bar">
-        <Circle icon="back" label="Task" tap={back} />
-        <div class="ttl" style={{ "--ws": sectionColor(view()?.section) }}>
-          <span class="crumb">
-            <i />
-            <span class="name">{view()?.task.title}</span>
-          </span>
-          <b class="name">Browser</b>
-        </div>
-        <Circle icon="reload" label="Reload" tap={() => reload((count) => count + 1)} />
-      </div>
+      <CrumbBar
+        up="Task"
+        color={sectionColor(view()?.section)}
+        crumb={<span class="name">{view()?.task.title}</span>}
+        title="Browser"
+        end={<Circle icon="reload" label="Reload" tap={() => reload((count) => count + 1)} />}
+      />
       <Show
         when={panel()}
         fallback={<div class="empty">no browser panel; an agent opens one with octopus browser open</div>}

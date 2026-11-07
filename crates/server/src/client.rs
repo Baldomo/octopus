@@ -3,11 +3,10 @@
 use std::fmt;
 
 use octopus_proto::Error;
+use octopus_proto::account::{self, NAME_CHARS};
 use octopus_proto::device::PublicKey;
 
 use crate::{Server, lock, now, report};
-
-const NAME_CHARS: usize = 64;
 
 /// A paired device is the key it proved, whatever name it goes by; a client on the local socket, which only the
 /// server's own OS user reaches, is the name it gives.
@@ -26,9 +25,8 @@ impl fmt::Display for Client {
     }
 }
 
-/// A paired client's name is one line of at most 64 characters, so it reads whole wherever a client is listed.
 pub(crate) fn check_name(name: &str) -> Result<(), Error> {
-    if name.is_empty() || name.chars().count() > NAME_CHARS || name.chars().any(char::is_control) {
+    if !account::is_name(name) {
         return Err(Error::invalid(format!(
             "a client name is 1 to {NAME_CHARS} characters with no control characters, not {name:?}"
         )));

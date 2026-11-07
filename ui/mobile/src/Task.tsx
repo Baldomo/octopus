@@ -12,8 +12,8 @@ import { animateList } from "@octopus/shared/flip.ts";
 import { EachPanel } from "@octopus/shared/panels.ts";
 import { Icon } from "./Icon";
 import { onPainted } from "./motion";
-import { back, micDenied, openSheet } from "./nav";
-import { Circle, Gap, Glyph, Id, Para, sectionColor, ServerDot, Slot } from "./parts";
+import { micDenied, openSheet } from "./nav";
+import { Circle, CrumbBar, Gap, Glyph, Id, Para, sectionColor, ServerDot, Slot, Trail } from "./parts";
 import { phone } from "./phone";
 import { repeats, type Point } from "./press";
 import { type Reach, reachOf } from "./reach";
@@ -36,7 +36,6 @@ const PADDED = Array(SINK_ROWS).fill(" ".repeat(SINK_COLS)).join("\n");
 const LINE_CHARS = SINK_COLS + 1;
 const CENTER = PAD_LINES * LINE_CHARS + PAD_COLS;
 const ESC = "\x1b";
-/** The terminal sets 13pt Meslo on 20pt rows. */
 const FONT_PX = 13;
 const ROW_PX = 20;
 /** How near a line boundary, in lines, the terminal counts as on it, so float error never rests it a line off. */
@@ -81,7 +80,6 @@ function PhoneTerm(props: {
   let host!: HTMLDivElement;
   let pane!: HTMLDivElement;
   let sink!: HTMLTextAreaElement;
-  /** The terminal opens once the screen is on its way in, and shows from then on. */
   const [opened, setOpened] = createSignal(false);
   const session = terminalSession({ at: props.at, panel: () => props.panel, shown: () => props.visible && opened() });
   const { xterm, mine } = session;
@@ -105,7 +103,6 @@ function PhoneTerm(props: {
     toLastLine();
     session.input(keys);
   };
-  /** Text the keyboard inserts, the first character as its control character while Ctrl is latched. */
   const typed = (text: string) => {
     if (text === "") return;
     if (ctrl()) {
@@ -136,7 +133,6 @@ function PhoneTerm(props: {
   onCleanup(() => {
     if (document.activeElement === sink) props.typing(false);
   });
-  /** Losing the lock to another client while showing it is worth a warning; taking it over, a success. */
   createEffect(
     on(
       () => {
@@ -282,7 +278,6 @@ function PhoneTerm(props: {
       end: (velocity: Point | null) => y.release(-(velocity?.y ?? 0)),
     };
   };
-  /** Dragging scrolls the terminal, and pans a cropped one across too. */
   const drag: Gesture = ({ axis, from, at }) => {
     if (!measured()) return null;
     if (scrollsItself()) return axis === "y" ? turn(from, at) : null;
@@ -356,7 +351,6 @@ function PhoneTerm(props: {
       session.fit();
     });
   });
-  /** The terminal draws on the screen's one surface, its plain text dim while another client holds it. */
   createEffect(() => {
     const color = colors(scheme());
     xterm.options.theme = {
@@ -372,10 +366,8 @@ function PhoneTerm(props: {
     const { x, y } = pan();
     if (opened()) xterm.element!.style.transform = `translate(${-x}px, ${-y}px)`;
   });
-  /** A cropped terminal opens at its last line. */
   createEffect(() => setPan(cropped() ? { x: 0, y: most().y } : { x: 0, y: 0 }));
 
-  /** Two 3pt thumbs, one per axis the crop scrolls, sized and placed as the part on screen. */
   const thumbs = () => {
     const whole = screen();
     const seen = view();
@@ -516,7 +508,6 @@ function PhoneTerm(props: {
   );
 }
 
-/** A coral microphone while the selected terminal hears this phone, or a red crossed-out one while the OS denies it. */
 function Mic(props: { at: TaskRef; panel: PanelView }) {
   const hearing = () => props.panel.running && props.panel.held_here && props.panel.listening;
   return (
@@ -537,7 +528,6 @@ function Mic(props: { at: TaskRef; panel: PanelView }) {
   );
 }
 
-/** What the agent panel says when its harness is missing on the server, with the install command to copy. */
 function Missing(props: { open: TaskView }) {
   const install = () => {
     const agent = props.open.task.agent;
@@ -608,39 +598,35 @@ function TaskScreen(props: { open: TaskView }) {
   const [tail, setTail] = createSignal<HTMLElement>();
   return (
     <>
-      <div class="bar slim">
-        <Circle icon="back" label="Tasks" tap={back} />
-        <div class="ttl" style={{ "--ws": sectionColor(props.open.section) }}>
-          <span class="crumb">
-            <i />
+      <CrumbBar
+        slim
+        up="Tasks"
+        color={sectionColor(props.open.section)}
+        crumb={
+          <>
             <span class="name">
-              <For each={props.open.crumbs.slice(0, -1)}>
-                {(crumb, nth) => (
-                  <>
-                    <Show when={nth() > 0}>
-                      <span class="sep">/</span>
-                    </Show>
-                    {crumb}
-                  </>
-                )}
-              </For>
+              <Trail parts={props.open.crumbs.slice(0, -1)} />
             </span>
             <span class="srv">
               <ServerDot server={server()} reconnecting={reach().is === "reconnecting"} />
               {serverLabel(props.open.at.server)}
             </span>
-          </span>
-          <b class="name">{props.open.task.title}</b>
-        </div>
-        <Show when={reach().is !== "unreachable" && selected()}>
-          {(panel) => <Mic at={props.open.at} panel={panel()} />}
-        </Show>
-        <Circle
-          icon="more"
-          label="Task menu"
-          tap={() => openSheet({ is: "task", key: props.open.key, open: { panel: selected()?.id ?? null } })}
-        />
-      </div>
+          </>
+        }
+        title={props.open.task.title}
+        end={
+          <>
+            <Show when={reach().is !== "unreachable" && selected()}>
+              {(panel) => <Mic at={props.open.at} panel={panel()} />}
+            </Show>
+            <Circle
+              icon="more"
+              label="Task menu"
+              tap={() => openSheet({ is: "task", key: props.open.key, open: { panel: selected()?.id ?? null } })}
+            />
+          </>
+        }
+      />
       <Show when={agentOn() && agent() === undefined}>
         <Show when={missing()} fallback={<div class="fill" />}>
           <Missing open={props.open} />
@@ -737,7 +723,6 @@ function TaskScreen(props: { open: TaskView }) {
   );
 }
 
-/** The open task, while the model still lists it. */
 export function Task(props: { taskKey: string }) {
   return <Show when={model.tasks[props.taskKey]}>{(view) => <TaskScreen open={view()} />}</Show>;
 }

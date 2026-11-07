@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
+use crate::account::AccountId;
 use crate::schema::{self, Fields};
 use crate::types::{Stream, Task, TaskId, Workspace, WorkspaceId};
 
@@ -39,15 +40,6 @@ impl<T: Serialize> From<Result<T, Error>> for Outcome {
     }
 }
 
-impl From<Outcome> for Result<Value, Error> {
-    fn from(outcome: Outcome) -> Self {
-        match outcome {
-            Outcome::Ok(value) => Ok(value),
-            Outcome::Err(error) => Err(error),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Push {
     pub rev: u64,
@@ -55,7 +47,7 @@ pub struct Push {
     pub event: Event,
 }
 
-/// `FileChanged` carries the server's current rev and moves no state.
+/// `FileChanged` and `AccountUpdated` carry the server's current rev and move no state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "ev")]
 pub enum Event {
@@ -70,6 +62,9 @@ pub enum Event {
     HarnessUpdated { harness: String },
     #[serde(rename = "file.changed")]
     FileChanged { task: TaskId, path: String },
+    /// A merge added entries to the server's log of the account.
+    #[serde(rename = "account.updated")]
+    AccountUpdated { account: AccountId },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

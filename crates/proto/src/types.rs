@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::device::PublicKey;
-use crate::schema::{Arg, Shape};
+use crate::schema::{Arg, Shape, arg_shape};
 
 macro_rules! id {
     ($name:ident, $prefix:literal) => {
@@ -32,23 +32,9 @@ id!(TaskId, "tsk_");
 id!(PtyId, "pty_");
 id!(BrowserId, "brw_");
 
-impl Arg for WorkspaceId {
-    fn shape() -> Shape {
-        Shape::Workspace
-    }
-}
-
-impl Arg for TaskId {
-    fn shape() -> Shape {
-        Shape::Text
-    }
-}
-
-impl Arg for BrowserId {
-    fn shape() -> Shape {
-        Shape::Text
-    }
-}
+arg_shape!(Shape::Workspace => WorkspaceId);
+arg_shape!(Shape::Text => TaskId, BrowserId, BrowserTarget, SessionId);
+arg_shape!(choice(&Self::ALL) => TaskState, CheckoutKind, AgentStatus, Hooks);
 
 /// The browser panel `browser.open` shows a page in: `new`, `background`, or an existing panel's id.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,12 +71,6 @@ impl<'de> Deserialize<'de> for BrowserTarget {
     }
 }
 
-impl Arg for BrowserTarget {
-    fn shape() -> Shape {
-        Shape::Text
-    }
-}
-
 impl Arg for Option<TaskId> {
     fn shape() -> Shape {
         Shape::Nullable { value: Box::new(Shape::Text), none: "a root task" }
@@ -101,12 +81,6 @@ impl Arg for Option<TaskId> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(transparent)]
 pub struct SessionId(pub String);
-
-impl Arg for SessionId {
-    fn shape() -> Shape {
-        Shape::Text
-    }
-}
 
 /// The conversation a task's agent runs in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -194,12 +168,6 @@ impl TaskState {
     }
 }
 
-impl Arg for TaskState {
-    fn shape() -> Shape {
-        choice(&Self::ALL)
-    }
-}
-
 /// Where a task's files live: the workspace root, or a worktree of its own on its branch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -227,12 +195,6 @@ pub enum CheckoutKind {
 
 impl CheckoutKind {
     pub const ALL: [Self; 2] = [Self::Root, Self::Worktree];
-}
-
-impl Arg for CheckoutKind {
-    fn shape() -> Shape {
-        choice(&Self::ALL)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -410,12 +372,6 @@ impl AgentStatus {
     pub const ALL: [Self; 3] = [Self::Working, Self::Waiting, Self::Idle];
 }
 
-impl Arg for AgentStatus {
-    fn shape() -> Shape {
-        choice(&Self::ALL)
-    }
-}
-
 /// The hooks the server installs in a harness's agent, through which the agent reports its status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -426,12 +382,6 @@ pub enum Hooks {
 
 impl Hooks {
     pub const ALL: [Self; 2] = [Self::None, Self::ClaudeCode];
-}
-
-impl Arg for Hooks {
-    fn shape() -> Shape {
-        choice(&Self::ALL)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

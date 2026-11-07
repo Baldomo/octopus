@@ -4,9 +4,9 @@
 use std::fmt;
 use std::str::FromStr;
 
+use crate::schema::spelled;
 use ring::rand::SystemRandom;
 use ring::signature::Ed25519KeyPair;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 const PREFIX: &str = "ed25519:";
 /// The DER of the PKCS#8 v2 ed25519 key ring writes, up to the 32-byte seed (RFC 8410).
@@ -72,17 +72,7 @@ impl FromStr for PublicKey {
     }
 }
 
-impl Serialize for PublicKey {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for PublicKey {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer)?.parse().map_err(serde::de::Error::custom)
-    }
-}
+spelled!(PublicKey);
 
 /// This device's key pair, kept as PKCS#8.
 pub struct DeviceKey {

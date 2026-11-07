@@ -1,4 +1,4 @@
-import { createSignal, For, Show } from "solid-js";
+import { For, Show } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import { LIVE_STATES, type PtyId, TASK_STATES, type TaskView } from "@octopus/shared/generated.ts";
 import { ticking } from "@octopus/shared/time.ts";
@@ -7,7 +7,7 @@ import { feel } from "./feel";
 import { Icon } from "./Icon";
 import { back, go } from "./nav";
 import { Chev, Gap, Id, Mi, Para, Sep, ServerDot, Why } from "./parts";
-import { Rename } from "./Rename";
+import { RenameItem } from "./Rename";
 import { Sheet, SheetHead } from "./Sheet";
 import { reachOf } from "./reach";
 import { notify } from "./Toast";
@@ -59,10 +59,8 @@ function Facts(props: { view: TaskView; panel: PtyId | null }) {
   );
 }
 
-/** A task's menu: the open task's leads with its facts, Files and Browser, then rename, its state, its id and archive. */
 export function TaskMenu(props: { taskKey: string; open: { panel: PtyId | null } | null }) {
   const view = () => model.tasks[props.taskKey];
-  const [renaming, setRenaming] = createSignal(false);
   const copyId = (id: string) => navigator.clipboard.writeText(id).then(() => notify("Copied the task id"), report);
   return (
     <Sheet>
@@ -87,20 +85,7 @@ export function TaskMenu(props: { taskKey: string; open: { panel: PtyId | null }
                 </>
               )}
             </Show>
-            <Show
-              when={renaming()}
-              fallback={
-                <Mi slot={<Icon name="pen" />} tap={() => setRenaming(true)}>
-                  Rename…
-                </Mi>
-              }
-            >
-              <Rename
-                value={view().task.title}
-                apply={(title) => backend.taskRename(view().at, title)}
-                done={() => setRenaming(false)}
-              />
-            </Show>
+            <RenameItem value={view().task.title} apply={(title) => backend.taskRename(view().at, title)} />
             <Sep />
             <For each={TASK_STATES}>
               {(state) => (

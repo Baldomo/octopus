@@ -92,14 +92,11 @@ impl Service {
         }
         let id = service_id(&run.name)?;
         let run = ServerRun {
-            name: run.name,
             socket: absolute(run.socket)?,
             store: absolute(run.store)?,
             worktrees: absolute(run.worktrees)?,
             terminal_host: absolute(run.terminal_host)?,
-            udp: run.udp,
-            relay: run.relay,
-            microphone: run.microphone,
+            ..run
         };
         run.check()?;
         let service = Self { id, run, program: absolute(program)?, log: absolute(log)? };
@@ -282,9 +279,8 @@ WantedBy=default.target
         assert_eq!(service_id("mac-mini.2").expect("id"), "octopus-mac-mini.2");
         assert_eq!(service_id("Ada’s Mac").expect("id"), "octopus-Ada-s-Mac");
         assert!(service_id("").is_err());
-        let ServerRun { name, socket, store, worktrees, udp, relay, microphone, .. } = service("/log").run;
-        let host = PathBuf::from(socket.display().to_string().to_uppercase());
-        let shared = ServerRun { name, terminal_host: host, socket, store, worktrees, udp, relay, microphone };
+        let mut shared = service("/log").run;
+        shared.terminal_host = PathBuf::from(shared.socket.display().to_string().to_uppercase());
         assert!(shared.check().is_err(), "one socket, spelled in another case");
     }
 }

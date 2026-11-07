@@ -1,4 +1,3 @@
-/** The client menu's trigger. */
 export const Gear = () => (
   <svg
     viewBox="0 0 24 24"

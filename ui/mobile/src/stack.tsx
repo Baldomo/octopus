@@ -18,6 +18,10 @@ const PREDICTIVE_REACH = 0.4;
 /** A gesture that can carry the top sheet back, which the sheet up registers while it shows. */
 type BackDrive = { start: () => void; move: (progress: number) => void; cancel: () => void };
 let sheetDrive: BackDrive | null = null;
+
+/** The screens moving now, the one under first; empty while every screen stands. */
+const [moving, setMoving] = createSignal<Screen[]>([]);
+export const sliding = () => moving().length > 0;
 export const driveSheetBack = (drive: BackDrive) => (sheetDrive = drive);
 export const releaseSheetBack = (drive: BackDrive) => sheetDrive === drive && (sheetDrive = null);
 
@@ -28,7 +32,6 @@ export const releaseSheetBack = (drive: BackDrive) => sheetDrive === drive && (s
  */
 export function Stack(props: { children: (screen: Screen) => JSX.Element }) {
   const [layers, setLayers] = createSignal<Screen[]>(screens());
-  const [moving, setMoving] = createSignal<Screen[]>([]);
   const elements = new Map<Screen, HTMLDivElement>();
   /** How far each moving screen stands off the right edge, 0 covering the screen and 1 gone. */
   const off = new Map<Screen, number>();

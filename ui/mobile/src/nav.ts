@@ -4,22 +4,23 @@ import type { PtyId, TaskRef } from "@octopus/shared/generated.ts";
 import { act, openTask as markOpened, report } from "@octopus/shared/state.ts";
 import { phone } from "./phone";
 
-/** A full screen the stack pushes; Tasks is its root. */
+/** What the user is reading the camera or clipboard for: an invite pairs a server, a link joins an account. */
+export type Reading = "invite" | "link";
+
 export type Screen =
   | { at: "tasks" }
   | { at: "task"; key: string }
-  | { at: "scan" }
+  | { at: "scan"; reading: Reading }
   | { at: "board"; section: string }
   | { at: "files"; key: string }
   | { at: "editor"; key: string }
   | { at: "browser"; key: string }
   | { at: "search" };
 
-/** A sheet rising over the screen beneath it. */
 export type Sheet =
   | { is: "client" }
   | { is: "server"; name: string }
-  | { is: "pair"; invite: string }
+  | { is: "pair"; invite: string; reading: Reading }
   | { is: "task"; key: string; open: { panel: PtyId | null } | null }
   | { is: "reopen"; key: string }
   | { is: "section"; name: string }
@@ -68,16 +69,15 @@ export function go(screen: Screen) {
   setEntries((shown) => [...shown.slice(0, -1), { screen }]);
 }
 
-export function openSheet(sheet: Sheet) {
-  if ("sheet" in entries().at(-1)!) return showInSheet(sheet, "deeper");
-  push({ sheet, toward: "here" });
+export function openSheet(next: Sheet) {
+  if (sheet() !== null) return showInSheet(next, "deeper");
+  push({ sheet: next, toward: "here" });
 }
 
 /** Shows another page in the sheet that is up, without a history entry of its own. */
 export const showInSheet = (sheet: Sheet, toward: Toward) =>
   setEntries((shown) => [...shown.slice(0, -1), { sheet, toward }]);
 
-/** Pops every screen and sheet back to Tasks. */
 export function home() {
   const depth = entries().length - 1;
   if (depth > 0) history.go(-depth);

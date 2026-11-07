@@ -12,7 +12,6 @@ export function lockClaim() {
     ended: (held: boolean) => {
       due ||= held;
     },
-    /** Whether the stream that just opened claims, which spends the look. */
     opened: () => {
       const claims = due;
       due = false;

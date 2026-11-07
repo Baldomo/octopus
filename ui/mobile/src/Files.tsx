@@ -9,7 +9,7 @@ import { slidingThumb } from "./thumb";
 import { Icon } from "./Icon";
 import { onPainted } from "./motion";
 import { back, go } from "./nav";
-import { Circle, Id, sectionColor, Slot } from "./parts";
+import { Circle, CrumbBar, Id, sectionColor, Slot, Trail } from "./parts";
 
 type Editor = import("monaco-editor").editor.IStandaloneCodeEditor;
 
@@ -74,7 +74,6 @@ function Tree(props: { files: TaskFiles; taskKey: string; dir: string; depth: nu
   );
 }
 
-/** The checkout's tree: folders with their caret, files with their icon, unsaved ones amber. */
 export function Files(props: { taskKey: string }) {
   return (
     <Show when={model.tasks[props.taskKey]}>
@@ -82,17 +81,13 @@ export function Files(props: { taskKey: string }) {
         const files = filesOf(view());
         return (
           <>
-            <div class="bar">
-              <Circle icon="back" label="Task" tap={back} />
-              <div class="ttl" style={{ "--ws": sectionColor(view().section) }}>
-                <span class="crumb">
-                  <i />
-                  <span class="name">{view().task.title}</span>
-                </span>
-                <b class="name">Files</b>
-              </div>
-              <Circle icon="search" label="Search" tap={() => go({ at: "search" })} />
-            </div>
+            <CrumbBar
+              up="Task"
+              color={sectionColor(view().section)}
+              crumb={<span class="name">{view().task.title}</span>}
+              title="Files"
+              end={<Circle icon="search" label="Search" tap={() => go({ at: "search" })} />}
+            />
             <div class="cards" ref={animateList(".tree")}>
               <Tree files={files} taskKey={props.taskKey} dir="." depth={0} />
             </div>
@@ -137,7 +132,6 @@ async function phoneThemes() {
   return monaco;
 }
 
-/** The editor's sizes at the zoom, which scales the whole app. */
 const sized = () => ({
   fontSize: FONT_PX * scale(ui.prefs),
   lineHeight: ROW_PX * scale(ui.prefs),
@@ -198,7 +192,6 @@ function Code(props: { files: TaskFiles; path: string }) {
   );
 }
 
-/** The open files as tabs over the selected one's code, or its rendered view. */
 export function EditorScreen(props: { taskKey: string }) {
   return (
     <Show when={model.tasks[props.taskKey]}>
@@ -214,16 +207,7 @@ export function EditorScreen(props: { taskKey: string }) {
                   <Circle icon="back" label="Files" tap={back} />
                   <div class="ttl">
                     <span class="crumb">
-                      <For each={shown.split("/").slice(0, -1)}>
-                        {(dir, nth) => (
-                          <>
-                            <Show when={nth() > 0}>
-                              <span class="sep">/</span>
-                            </Show>
-                            {dir}
-                          </>
-                        )}
-                      </For>
+                      <Trail parts={shown.split("/").slice(0, -1)} />
                     </span>
                     <b class="name">{nameOf(shown)}</b>
                   </div>

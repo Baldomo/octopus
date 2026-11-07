@@ -1,10 +1,26 @@
-import { createSignal, For, onMount, Show } from "solid-js";
-import type { Appearance, ServerView } from "./generated";
+import { createSignal, For, Match, onMount, Show, Switch } from "solid-js";
+import type { Appearance, DeviceView, ShownLink } from "./generated";
+import { backend } from "./backend";
 import { commands, hint } from "./commands";
-import { closePopover, dismissible, Head, Item, Sep } from "./Menu";
+import { closePopover, Confirm, copyKey, copyOnShortcut, dismissible, Head, Item, Sep } from "./Menu";
+import { expiry } from "./pairing";
 import { ServerMenu } from "./ServerMenu";
 import { VERSION } from "./generated";
-import { harnesses, me, report, servers, setAgentFlags, setAppearance, showClientMenu, ui, zoom } from "./state";
+import {
+  account,
+  harnesses,
+  me,
+  report,
+  servers,
+  setAgentFlags,
+  setAppearance,
+  showClientMenu,
+  showModal,
+  ui,
+  zoom,
+} from "./state";
+import { ticking } from "./time";
+import { copy } from "./Toast";
 
 export const APPEARANCES: [Appearance, string][] = [
   ["system", "System"],
@@ -22,16 +38,6 @@ export function aboutCopy() {
       setTimeout(() => setCopied(false), COPIED_MS);
     }, report);
   return { copied, copy };
-}
-
-function ServerRow(props: { server: ServerView; open: () => void }) {
-  return (
-    <button class="mi" role="menuitem" onClick={props.open}>
-      <span class="dot" classList={{ off: !props.server.reachable }} />
-      <span class="name">{props.server.label}</span>
-      <span class="rtt">{props.server.reachable ? `${props.server.rtt_ms ?? "–"} ms` : "unreachable"}</span>
-    </button>
-  );
 }
 
 export const NEXT_START = "Applies on each agent's next start.";
@@ -55,6 +61,107 @@ function AgentFlagsField(props: { harness: string }) {
         onBlur={(event) => (event.currentTarget.value = saved())}
       />
     </label>
+  );
+}
+
+export const REMOVE_CONFIRM = (name: string) => `Remove ${name}? It loses every server of this account.`;
+export const LEAVE_CONFIRM = (device: "client" | "phone") =>
+  `Leave this account? This ${device} keeps its servers; the other devices keep theirs.`;
+
+type AccountMode = "main" | "leave" | { remove: DeviceView } | ShownLink;
+
+/** What the account section shows in place: its devices, a shown link, or a removal or leave being confirmed. */
+export function accountModes() {
+  const [mode, setMode] = createSignal<AccountMode>("main");
+  const shownLink = () => {
+    const shown = mode();
+    return typeof shown === "object" && "link" in shown ? shown : null;
+  };
+  const removing = () => {
+    const shown = mode();
+    return typeof shown === "object" && "remove" in shown ? shown.remove : null;
+  };
+  return { mode, setMode, shownLink, removing, done: () => setMode("main") };
+}
+
+function Account() {
+  const now = ticking();
+  const { mode, setMode, shownLink, removing, done } = accountModes();
+  const copyLink = (shown: ShownLink) => copy(shown.link, "the link").catch(report);
+  copyOnShortcut(shownLink, copyLink);
+  const Join = () => <Item run={() => showModal("join_account")}>Join an account…</Item>;
+  return (
+    <>
+      <div class="mh label">
+        <span>Devices</span>
+      </div>
+      <Show
+        when={account().member}
+        fallback={
+          <>
+            <div class="mh label">Removed from this account</div>
+            <Join />
+            <Item run={() => backend.accountStartOver().catch(report)}>Start over</Item>
+          </>
+        }
+      >
+        <For each={account().devices}>
+          {(device) => (
+            <div class="client">
+              <span class="name">{device.name}</span>
+              <Show
+                when={device.this}
+                fallback={
+                  <button class="mini" onClick={() => setMode({ remove: device })}>
+                    Remove
+                  </button>
+                }
+              >
+                <span class="mono">this client</span>
+              </Show>
+            </div>
+          )}
+        </For>
+        <Show when={removing()}>
+          {(device) => (
+            <Confirm act="Remove" run={() => backend.accountRemove(device().key).then(done, report)} cancel={done}>
+              {REMOVE_CONFIRM(device().name)}
+            </Confirm>
+          )}
+        </Show>
+        <Show when={shownLink()}>
+          {(shown) => (
+            <>
+              <div class="code">
+                <div class="qr" innerHTML={shown().qr} />
+                <div class="exp">{expiry(shown().expires_at, now(), "one device")}</div>
+              </div>
+              <Item kbd={copyKey} run={() => copyLink(shown())}>
+                Copy link
+              </Item>
+            </>
+          )}
+        </Show>
+        <Item run={() => backend.accountLink().then(setMode, report)}>
+          <span class="glyph">+</span>Link a device…
+        </Item>
+        <Switch>
+          <Match when={account().devices.length < 2}>
+            <Join />
+          </Match>
+          <Match when={mode() === "leave"}>
+            <Confirm act="Leave" run={() => backend.accountLeave().then(done, report)} cancel={done}>
+              {LEAVE_CONFIRM("client")}
+            </Confirm>
+          </Match>
+          <Match when={true}>
+            <Item danger run={() => setMode("leave")}>
+              Leave account
+            </Item>
+          </Match>
+        </Switch>
+      </Show>
+    </>
   );
 }
 
@@ -82,11 +189,21 @@ export function ClientMenu(props: { floats: (element: HTMLElement) => void; show
         keyed
         fallback={
           <>
-            <Head title={me()} lines={[]} />
+            <Head title={me()} lines={[`account ${account().id}`]} />
+            <Account />
+            <Sep />
             <div class="mh label">
               <span>Servers</span>
             </div>
-            <For each={servers()}>{(view) => <ServerRow server={view} open={() => setServer(view.name)} />}</For>
+            <For each={servers()}>
+              {(view) => (
+                <button class="mi" role="menuitem" onClick={() => setServer(view.name)}>
+                  <span class="dot" classList={{ off: !view.reachable }} />
+                  <span class="name">{view.label}</span>
+                  <span class="rtt">{view.reachable ? `${view.rtt_ms ?? "–"} ms` : "unreachable"}</span>
+                </button>
+              )}
+            </For>
             <Item run={() => commands.pairServer.run()}>
               <span class="glyph">+</span>Pair a server…
             </Item>

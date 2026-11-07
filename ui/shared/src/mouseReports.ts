@@ -25,7 +25,6 @@ function report(button: number, { col, row }: ScreenCell, sgr: boolean, released
 export const wheelReport = (way: 1 | -1, cell: ScreenCell, sgr: boolean) =>
   report(way < 0 ? WHEEL_UP : WHEEL_DOWN, cell, sgr);
 
-/** A left click at `cell`: its press, then its release. */
 export const clickReport = (cell: ScreenCell, sgr: boolean) => report(LEFT, cell, sgr) + report(LEFT, cell, sgr, true);
 
 /**

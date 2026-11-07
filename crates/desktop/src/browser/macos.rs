@@ -115,10 +115,7 @@ unsafe extern "C-unwind" fn failed_load(
         let code: isize = msg_send![error, code];
         let info: *mut AnyObject = msg_send![error, userInfo];
         let key = NSString::from_str("NSErrorFailingURLStringKey");
-        let url = match info.as_ref() {
-            Some(info) => text(msg_send![info, objectForKey: &*key]),
-            None => None,
-        };
+        let url = info.as_ref().and_then(|info| text(msg_send![info, objectForKey: &*key]));
         (code, url, text(msg_send![error, localizedDescription]))
     };
     if !NOT_A_FAILURE.contains(&code) {

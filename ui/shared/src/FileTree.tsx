@@ -9,16 +9,13 @@ import { act, isLocal, serverLabel } from "./state";
 import { freeName, join, nameOf, parentOf, within, type TaskFiles } from "./taskFiles";
 import { openShell } from "./Terminals";
 
-/** What this machine's own apps do with an entry of a task whose server runs here. */
 export type Outside = (task: TaskView, path: string, how: "reveal" | "open") => Promise<void>;
 
 /** DESIGN's tree indents each level, and spaces the modified mark, with two non-breaking spaces. */
 const GAP = "  ";
 const indent = (depth: number) => GAP.repeat(depth);
 
-/** Pointer travel that turns a press on a row into a drag. */
 const DRAG_PX = 4;
-/** How long a drag rests on a collapsed folder before it opens. */
 const EXPAND_MS = 600;
 
 const KEYS = mac
@@ -35,16 +32,14 @@ const KEYS = mac
 const REVEAL = mac ? "Reveal in Finder" : "Reveal in file manager";
 
 type Row = { path: string; name: string; kind: EntryKind; depth: number };
-/** The inline name field: a new entry in `dir`, or a rename of `path`. */
 type Draft = { kind: EntryKind; dir: string } | { rename: string };
-/** The new-entry field's row, keyed by where it adds what, so a new draft gets a fresh field. */
+/** Keyed by where it adds what, so a new draft gets a fresh field. */
 const DRAFT = "\0draft";
 const draftKey = (editing: { kind: EntryKind; dir: string }) => `${DRAFT}${editing.kind}:${editing.dir}`;
 
 const [draft, setDraft] = createSignal<Draft | null>(null);
 const [refusal, setRefusal] = createSignal<string | null>(null);
 const [dragged, setDragged] = createSignal<string[] | null>(null);
-/** The folder a drag would drop into. */
 const [target, setTarget] = createSignal<string | null>(null);
 
 const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`;
@@ -62,13 +57,11 @@ function startDraft(files: TaskFiles, next: Draft) {
 const said = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const where = (dir: string) => (dir === "." ? "the checkout" : dir);
 
-/** Refuses a name `dir` already holds, saying so in the tree's words rather than the server's. */
 async function vacant(files: TaskFiles, dir: string, name: string) {
   if ((await files.names(dir)).has(name)) throw new Error(`${where(dir)} already has ${name}`);
   return join(dir, name);
 }
 
-/** Runs each file op in turn; a refused one says why and the rest still run. */
 async function each<T>(items: T[], op: (item: T) => Promise<unknown>) {
   let done = 0;
   for (const item of items) {
@@ -82,11 +75,9 @@ async function each<T>(items: T[], op: (item: T) => Promise<unknown>) {
   return done;
 }
 
-/** `paths` minus any that lies inside another of them, which goes along with it. */
 const outermost = (paths: string[]) =>
   paths.filter((path) => !paths.some((other) => other !== path && within(path, other)));
 
-/** Moves, or copies, each entry into `dir` under its own name; copying into its own folder picks a free name. */
 async function place(files: TaskFiles, paths: string[], dir: string, copying: boolean) {
   const sources = outermost(paths).filter((path) => copying || parentOf(path) !== dir);
   const taken = await files.names(dir);
@@ -99,10 +90,13 @@ async function place(files: TaskFiles, paths: string[], dir: string, copying: bo
     if (taken.has(nameOf(path))) throw new Error(`${where(dir)} already has ${nameOf(path)}`);
     return files.move(path, join(dir, nameOf(path)));
   });
-  if (done > 0) {
-    if (dir !== ".") files.reveal(dir, true);
-    toast(`${copying ? "Copied" : "Moved"} ${plural(done, "item")} into ${where(dir)}`);
-  }
+  landed(files, dir, done, copying ? "Copied" : "Moved");
+}
+
+function landed(files: TaskFiles, dir: string, done: number, verb: string) {
+  if (done === 0) return;
+  if (dir !== ".") files.reveal(dir, true);
+  toast(`${verb} ${plural(done, "item")} into ${where(dir)}`);
 }
 
 function paste(files: TaskFiles, dir: string) {
@@ -118,7 +112,6 @@ async function duplicate(files: TaskFiles, paths: string[]) {
   );
 }
 
-/** Where the entry lives on its server's machine. */
 const absolute = (task: TaskView, path: string) =>
   path === "." ? task.task.directory : `${task.task.directory}/${path}`;
 
@@ -147,7 +140,6 @@ async function upload(files: TaskFiles, entry: FileSystemEntry, path: string): P
   }
 }
 
-/** Copies what the system's file manager dropped into `dir`, each under a name the folder lacks. */
 async function bringIn(files: TaskFiles, entries: FileSystemEntry[], dir: string) {
   const taken = await files.names(dir);
   const done = await each(entries, (entry) => {
@@ -155,10 +147,7 @@ async function bringIn(files: TaskFiles, entries: FileSystemEntry[], dir: string
     taken.add(free);
     return upload(files, entry, join(dir, free));
   });
-  if (done > 0) {
-    if (dir !== ".") files.reveal(dir, true);
-    toast(`Copied ${plural(done, "item")} into ${where(dir)}`);
-  }
+  landed(files, dir, done, "Copied");
 }
 
 /** Deleting confirms in place: a server on this machine sends entries to its trash, another one deletes them. */
@@ -204,7 +193,6 @@ type MenuProps = {
   /** The entry right-clicked, or `.` for the checkout. */
   path: string;
   kind: EntryKind;
-  /** The entries a multi-entry action acts on. */
   paths: string[];
   deleting?: boolean;
 };
@@ -292,7 +280,6 @@ function EntryMenu(props: MenuProps) {
   );
 }
 
-/** Edits a name in place: Enter applies it, a refusal keeps the field open saying why, and Esc or leaving cancels. */
 function NameField(props: { value: string; apply: (name: string) => Promise<unknown> }) {
   const stop = (event: Event) => event.stopPropagation();
   const stem = props.value.lastIndexOf(".") > 0 ? props.value.lastIndexOf(".") : props.value.length;
@@ -327,13 +314,11 @@ function NameField(props: { value: string; apply: (name: string) => Promise<unkn
   );
 }
 
-/** The checkout's tree: every row a file or folder to select, open, drag, and act on from its menu or the keyboard. */
 export function FileTree(props: { files: TaskFiles; task: TaskView; outside?: Outside }) {
   let tree!: HTMLDivElement;
   const files = () => props.files;
   const state = () => props.files.state;
 
-  /** The rows on screen, top to bottom, the new-entry field among them. */
   const shown = createMemo(() => {
     const rows = new Map<string, Row>();
     const order: string[] = [];
@@ -356,7 +341,6 @@ export function FileTree(props: { files: TaskFiles; task: TaskView; outside?: Ou
 
   const rowElement = (path: string) => tree.querySelector<HTMLElement>(`[data-path="${CSS.escape(path)}"]`);
   const kindOf = (path: string) => shown().rows.get(path)?.kind ?? "directory";
-  /** The entries an action on `path` covers: the selection when `path` is in it. */
   const coveredBy = (path: string) => (state().selected.includes(path) ? state().selected : [path]);
 
   const menu =
@@ -404,7 +388,6 @@ export function FileTree(props: { files: TaskFiles; task: TaskView; outside?: Ou
     onRightClick(`file:${row.path}`, () => rowElement(row.path) ?? tree, menu(row.path))(event);
   };
 
-  /** Where a drop at a point lands: the folder under it, a file's folder, or the checkout below the rows. */
   const dropDirAt = (x: number, y: number) =>
     document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drop-dir]")?.dataset.dropDir ?? null;
 

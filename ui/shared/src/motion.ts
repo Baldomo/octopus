@@ -11,7 +11,6 @@ export const SNAPPY: Spring = { response: 0.2, damping: 1 };
 /** What reduced motion keeps: one short fade in place of every move across the screen. */
 export const FADE_MS = 180;
 export const FADE: Spring = { response: FADE_MS / 1000, damping: 1 };
-/** A released throw lands where its speed would carry it this many seconds ahead. */
 export const PROJECT_S = 0.2;
 
 const query = matchMedia("(prefers-reduced-motion: reduce)");
@@ -25,7 +24,6 @@ const GIVE_SPAN_PX = 600;
 export const give = (over: number) => (over * GIVE) / (1 + Math.abs(over) / GIVE_SPAN_PX);
 export const ungive = (given: number) => given / (GIVE - Math.abs(given) / GIVE_SPAN_PX);
 
-/** The displacement left after `t` seconds of a spring released `from` its rest at 0 with velocity `v`. */
 function position({ response, damping }: Spring, from: number, v: number, t: number) {
   const omega = (2 * Math.PI) / response;
   if (damping >= 1) return Math.exp(-omega * t) * (from + (v + omega * from) * t);
@@ -34,7 +32,6 @@ function position({ response, damping }: Spring, from: number, v: number, t: num
   return Math.exp(-decay * t) * (from * Math.cos(wave * t) + ((v + decay * from) / wave) * Math.sin(wave * t));
 }
 
-/** Where a move from `from` to `to` stands `t` seconds in, or null once it has settled there. */
 export function standing(spring: Spring, from: number, to: number, velocity: number, t: number) {
   const distance = Math.abs(to - from) || 1;
   const left = position(spring, from - to, velocity, t);
@@ -44,10 +41,7 @@ export function standing(spring: Spring, from: number, to: number, velocity: num
 
 export type Running = { stop: () => void; done: Promise<void> };
 
-/**
- * Moves a value from `from` to `to` on `spring`, starting at `velocity` units a second, calling `apply` each frame and
- * last with `to`, on the page's thread. Stopping leaves it where it was.
- */
+/** Calls `apply` each frame and last with `to`; stopping leaves the value where it was. */
 export function animate(
   from: number,
   to: number,
@@ -78,7 +72,6 @@ export function animate(
   };
 }
 
-/** A spring from rest to rest as a CSS `linear()` easing and the time it takes to settle, for CSS and WAAPI. */
 const curves = new Map<Spring, { easing: string; duration: number }>();
 export function curve(spring: Spring): { easing: string; duration: number } {
   const known = curves.get(spring);
@@ -94,17 +87,13 @@ export function curve(spring: Spring): { easing: string; duration: number } {
   return shaped;
 }
 
-/** How long `spring` takes from rest to cover `share` of its way, in milliseconds. */
 export function reach(spring: Spring, share: number) {
   let t = 0;
   while (t < 3 && 1 - position(spring, 1, 0, t) < share) t += 0.005;
   return Math.round(t * 1000);
 }
 
-/**
- * Animates an element along a spring `delay` ms from now, holding its first keyframe until then, or under reduced
- * motion fades it over the keyframes' opacity alone.
- */
+/** Holds the first keyframe until `delay` ends; under reduced motion it fades over the keyframes' opacity alone. */
 export function play(element: Element, keyframes: Keyframe[], spring: Spring, delay = 0): Animation {
   if (reduced()) {
     const faded = keyframes.map((frame) => ({ opacity: frame.opacity ?? 1 }));

@@ -1,11 +1,13 @@
 //! The iOS and Android app: the client app's core behind one full-screen webview.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Context;
 use octopus_client::Identity;
 use octopus_client::servers::{Config, Servers};
 use octopus_shell::Client;
+use octopus_shell::hub::Hub;
 use tauri::{Manager, WebviewWindowBuilder};
 
 use crate::browser::{self, Shown};
@@ -31,11 +33,14 @@ pub fn run() {
             browser::phone_unbrowse,
             client_menu::phone_named,
             client_menu::phone_invite_key,
+            client_menu::phone_link_account,
             client_menu::phone_pair,
+            client_menu::phone_join,
             phone_insets,
             phone_settings,
             phone_feel,
-            phone_back_pops
+            phone_back_pops,
+            phone_redial
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -45,7 +50,7 @@ pub fn run() {
             let (phone, name) = Phone::load(config.clone(), || device::name(handle))?;
             let asking = handle.clone();
             let client = Client {
-                me: Identity::new(name, key),
+                me: Identity::open(name, key, &config)?,
                 servers: Servers::load(&config)?,
                 config,
                 microphone_access: Box::new(move || device::microphone(&asking)),
@@ -87,6 +92,12 @@ async fn phone_feel(app: tauri::AppHandle, feel: Feel) -> Result<(), String> {
 #[tauri::command]
 async fn phone_back_pops(app: tauri::AppHandle, pops: bool) -> Result<(), String> {
     device::back_pops(&app, pops).map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+async fn phone_redial(hub: tauri::State<'_, Arc<Hub>>) -> Result<(), String> {
+    hub.redial().await;
+    Ok(())
 }
 
 /// Every server pinned the old key, so a phone with a new one starts as one that never paired.

@@ -54,19 +54,16 @@ fn traffic_lights() -> ConfigPosition {
     ConfigPosition { x: TRAFFIC_LIGHTS_INSET, y: midline - APPKIT_LIGHT_BELOW_GIVEN_Y }
 }
 
-/// From the float layer's corner to the far edges of every rect, in the UI's CSS pixels at `zoom`.
-fn from_corner(rects: impl Iterator<Item = Bounds>, zoom: Zoom) -> Bounds {
+/// The float layer's rect, from its corner to the far edges of every surface in the UI's CSS pixels at `zoom`, and
+/// the rects in it that take the pointer.
+pub(crate) fn float_cover(surfaces: &[Floated], zoom: Zoom) -> (Bounds, Vec<Bounds>) {
     let top = title_bar_height() / zoom.scale();
-    let (right, bottom) = rects.fold((0.0_f64, top), |(right, bottom), rect| {
+    let drawn = surfaces.iter().flat_map(|surface| [surface.input, surface.drawn]);
+    let (right, bottom) = drawn.fold((0.0_f64, top), |(right, bottom), rect| {
         (right.max(rect.x + rect.width), bottom.max(rect.y + rect.height))
     });
-    Bounds { x: 0.0, y: top, width: right, height: bottom - top }
-}
-
-/// The float layer's rect and the rects in it that take the pointer, for the surfaces that are out.
-pub(crate) fn float_cover(surfaces: &[Floated], zoom: Zoom) -> (Bounds, Vec<Bounds>) {
-    let drawn = surfaces.iter().flat_map(|surface| [surface.input, surface.drawn]);
-    (from_corner(drawn, zoom), surfaces.iter().map(|surface| surface.input).collect())
+    let cover = Bounds { x: 0.0, y: top, width: right, height: bottom - top };
+    (cover, surfaces.iter().map(|surface| surface.input).collect())
 }
 
 /// Gives the window `appearance`, the OS appearance when it names no theme.
@@ -90,11 +87,6 @@ pub(crate) struct Layers {
     ui: Arc<UiStore>,
     /// The page on screen, at its rect in the UI's CSS pixels.
     page: Arc<Mutex<Option<(Webview, Bounds)>>>,
-}
-
-fn viewport(window: &Window) -> tauri::Result<Viewport> {
-    let size = window.inner_size()?.to_logical::<f64>(window.scale_factor()?);
-    Ok(Viewport { width: size.width, height: size.height })
 }
 
 /// Runs `act` in one turn of the main thread, so every native change it makes lands in the same frame.
@@ -222,7 +214,8 @@ impl Layers {
     }
 
     fn resize(&self) -> tauri::Result<()> {
-        self.ui.resize(viewport(&self.window)?);
+        let size = self.window.inner_size()?.to_logical::<f64>(self.window.scale_factor()?);
+        self.ui.resize(Viewport { width: size.width, height: size.height });
         Ok(())
     }
 
@@ -262,7 +255,6 @@ impl Layers {
         })
     }
 
-    /// The rect of the page on screen, in the UI's CSS pixels.
     pub(crate) fn page_bounds(&self) -> Option<Bounds> {
         lock(&self.page).as_ref().map(|(_, bounds)| *bounds)
     }
@@ -334,7 +326,6 @@ mod host {
         OVERLAY.with(|overlay| overlay.get().expect("the base webview is adopted first").clone())
     }
 
-    /// Runs `act` on the main thread with the webview's widget.
     fn with_widget(webview: &Webview, act: impl FnOnce(gtk::Widget) + Send + 'static) -> tauri::Result<()> {
         webview.with_webview(move |platform| act(platform.inner().upcast()))
     }

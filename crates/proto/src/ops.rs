@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::account::{Account, AccountId, Signed};
 use crate::device::PublicKey;
 use crate::frames::Op;
 use crate::pairing::{Invite, Proof};
+use crate::remote::RelayUrl;
 use crate::schema::{Field, record};
 use crate::types::{
     AgentStatus, BrowserId, BrowserTarget, CheckoutKind, Color, Hooks, PtyId, SessionId, SessionStart, Task, TaskId,
@@ -96,24 +98,35 @@ pub struct Offer {
     pub expires_at: i64,
 }
 
-/// A client the server has pinned.
+/// A member device of an account the server trusts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct PairedClient {
-    /// The name the client last gave.
+    /// The name the device last gave, else the one its account gives it.
     pub name: String,
-    /// The key the client is pinned by, which is who it is.
+    /// The device's key, which is who it is.
     #[ts(type = "string")]
     pub key: PublicKey,
+    /// Whether this server runs on the device's machine, which reaches it over its local socket.
+    pub hosts: bool,
     pub connected: bool,
     /// When one of its connections last opened or closed, in milliseconds since 1970; null if it never connected.
     pub seen_at: Option<i64>,
 }
 
+/// An account the server trusts, and its member devices.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct PairedAccount {
+    #[ts(type = "string")]
+    pub account: AccountId,
+    pub devices: Vec<PairedClient>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Clients {
-    pub clients: Vec<PairedClient>,
+pub struct Accounts {
+    pub accounts: Vec<PairedAccount>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -124,28 +137,64 @@ pub struct Paired {
     pub proof: Proof,
 }
 
+/// The server as a device of the account lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hosted {
+    pub key: PublicKey,
+    pub relay: RelayUrl,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Synced {
+    /// The account merged with the server's log of it.
+    pub account: Account,
+    pub server: Hosted,
+}
+
 op!(
     /// Show a one-time invite that pairs one client with this server.
     PairingOffer = "pairing.offer" -> Offer {}
 );
 op!(
-    /// List the clients this server has paired with.
-    PairingList = "pairing.list" -> Clients {}
+    /// List the accounts this server trusts and their devices.
+    PairingList = "pairing.list" -> Accounts {}
 );
 op!(
-    /// Forget a paired client, closing its open connections and freeing its locks; it pairs again only with a new invite.
+    /// Stop trusting an account, closing its devices' connections and freeing their locks; it pairs again only with a new invite.
     PairingForget = "pairing.forget" -> Done {
-        /// The name the client last gave.
-        client: String,
+        /// The account's id.
+        account: AccountId,
     }
 );
 op!(
-    /// Pair with an invite's code: the one request an unpaired client may send, on its connection's first stream.
+    /// Pair with an invite's code: one of the two requests an unpaired device may send, on its connection's first stream.
     PairingPair = "pairing.pair" -> Paired {
         /// The client's name, as terminal lock holders see it.
         client: String,
         /// The client's proof that it holds the code.
         proof: Proof,
+        /// The client's account, which the server trusts once the code is proved.
+        account: Account,
+    }
+);
+op!(
+    /// Merge this device's account, and the accounts it left, into the server's logs, and return the merged account.
+    AccountSync = "account.sync" -> Synced {
+        account: Account,
+        /// Each account this device left, so a server that trusted one follows it.
+        former: Vec<Account>,
+    }
+);
+op!(
+    /// Join a trusted account with a link's invite: one of the two requests an unpaired device may send.
+    AccountJoin = "account.join" -> Synced {
+        /// The id of the account the link names.
+        account: AccountId,
+        /// The device's `join` entry.
+        join: Signed,
     }
 );
 

@@ -4,7 +4,6 @@ const TOAST_MS = 1800;
 
 const [said, setSaid] = createSignal<{ message: JSX.Element; nth: number } | null>(null);
 
-/** Confirms what an action did, briefly, at the foot of the sidebar or the board. */
 export function toast(message: JSX.Element) {
   const nth = (said()?.nth ?? 0) + 1;
   setSaid({ message, nth });

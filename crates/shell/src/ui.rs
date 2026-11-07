@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::Context;
-use octopus_client::servers::{Config, create_parent};
+use octopus_client::servers::{Config, read_text, write_text};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use ts_rs::TS;
@@ -94,6 +94,7 @@ pub enum Modal {
     Palette,
     NewTask,
     PairServer,
+    JoinAccount,
     Shortcuts,
 }
 
@@ -349,17 +350,12 @@ pub struct UiStore {
 
 fn load_prefs(config: &Config) -> anyhow::Result<Prefs> {
     let path = config.file(PREFS_FILE);
-    match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text).with_context(|| format!("parse {}", path.display())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Prefs::default()),
-        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
-    }
+    let Some(text) = read_text(&path)? else { return Ok(Prefs::default()) };
+    serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))
 }
 
 fn save_prefs(config: &Config, prefs: &Prefs) -> anyhow::Result<()> {
-    let path = config.file(PREFS_FILE);
-    create_parent(&path)?;
-    std::fs::write(&path, serde_json::to_string_pretty(prefs)?).with_context(|| format!("write {}", path.display()))
+    write_text(&config.file(PREFS_FILE), &serde_json::to_string_pretty(prefs)?)
 }
 
 impl UiStore {

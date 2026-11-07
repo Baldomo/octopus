@@ -11,11 +11,12 @@ mod terminal;
 pub mod types;
 pub mod ui;
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::Instant;
 
 use octopus_client::Identity;
 use octopus_client::servers::{Config, Servers};
+pub use octopus_proto::lock;
 use serde::Serialize;
 
 use crate::microphone::AskAccess;
@@ -26,10 +27,6 @@ use crate::commands::Launched;
 use crate::hub::Hub;
 use crate::terminal::Terminals;
 use crate::ui::UiStore;
-
-pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
-}
 
 /// A count or duration for the UI, which a `u32` always holds in practice.
 pub(crate) fn saturate(n: impl TryInto<u32>) -> u32 {
@@ -84,5 +81,5 @@ pub struct Client {
 pub fn start(app: &AppHandle, client: Client, launch_problem: Option<String>) {
     let Client { config, me, servers, microphone_access } = client;
     app.manage(UiStore::load(app.clone(), config.clone(), launch_problem));
-    app.manage(Hub::start(app.clone(), config, me, servers.servers, microphone_access));
+    app.manage(Hub::start(app.clone(), config, me, servers, microphone_access));
 }

@@ -16,12 +16,6 @@ pub use unit::{ServerRun, Service};
 pub struct Registration {
     pub service: String,
     pub unit: PathBuf,
-}
-
-#[derive(Serialize)]
-pub struct Installed {
-    #[serde(flatten)]
-    pub registration: Registration,
     pub microphone: microphone::Outcome,
 }
 
@@ -35,7 +29,7 @@ fn run(program: &str, args: &[&str]) -> anyhow::Result<String> {
 }
 
 /// The server installs whatever becomes of the Octopus Microphone.
-pub fn install(service: &Service) -> anyhow::Result<Installed> {
+pub fn install(service: &Service) -> anyhow::Result<Registration> {
     let unit = manager::unit_path(&service.id)?;
     for directory in [&unit, &service.log].map(|path| path.parent().expect("an absolute file path has a directory")) {
         std::fs::create_dir_all(directory).with_context(|| format!("create {}", directory.display()))?;
@@ -46,19 +40,12 @@ pub fn install(service: &Service) -> anyhow::Result<Installed> {
         eprintln!("octopus: installed without the Octopus Microphone: {reason}");
     }
     manager::register(&service.id, &unit)?;
-    Ok(Installed { registration: Registration { service: service.id.clone(), unit }, microphone })
-}
-
-#[derive(Serialize)]
-pub struct Uninstalled {
-    #[serde(flatten)]
-    pub registration: Registration,
-    pub microphone: microphone::Outcome,
+    Ok(Registration { service: service.id.clone(), unit, microphone })
 }
 
 /// The terminal host and its agents keep running; they end with the machine. The user's input comes back, and the
 /// Octopus Microphone goes with the machine's last server.
-pub fn uninstall(name: &str) -> anyhow::Result<Uninstalled> {
+pub fn uninstall(name: &str) -> anyhow::Result<Registration> {
     let id = unit::service_id(name)?;
     let unit = manager::unit_path(&id)?;
     let terminal_host = microphone::terminal_host(&unit);
@@ -67,5 +54,5 @@ pub fn uninstall(name: &str) -> anyhow::Result<Uninstalled> {
     if let microphone::Outcome::Failed { reason } = &microphone {
         eprintln!("octopus: uninstalled, leaving the Octopus Microphone: {reason}");
     }
-    Ok(Uninstalled { registration: Registration { service: id, unit }, microphone })
+    Ok(Registration { service: id, unit, microphone })
 }

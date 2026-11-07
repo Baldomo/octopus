@@ -7,7 +7,6 @@ import { newTaskSection, openTask, report, serverLabel, setNewTaskSection, showM
 
 const PARENTS = ["none", "open task"] as const;
 
-/** The new-task form: every op field is on screen, prefilled from the open task where it has one. */
 export function NewTask() {
   const draft = newTaskDraft(newTaskSection());
   setNewTaskSection(null);

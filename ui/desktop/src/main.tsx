@@ -4,7 +4,7 @@ import { backend, events } from "@octopus/shared/backend.ts";
 import inter from "@fontsource-variable/inter/files/inter-latin-wght-normal.woff2?url";
 import { loadFonts } from "@octopus/shared/fonts.ts";
 import { mount } from "@octopus/shared/mount.ts";
-import { applyBoot, applyModel, applyUi, report, setServers } from "@octopus/shared/state.ts";
+import { applyBoot, applyModel, applyUi, report, setAccount, setServers } from "@octopus/shared/state.ts";
 import { applyFilesChanged } from "@octopus/shared/taskFiles.ts";
 import { setWindowShown, windowFocused } from "@octopus/shared/terminalSession.ts";
 import { bindKeys } from "./keys";
@@ -18,6 +18,7 @@ async function start() {
   await Promise.all([
     events.model(applyModel),
     events.servers(setServers),
+    events.account(setAccount),
     events.ui(applyUi),
     events.filesChanged(applyFilesChanged),
     events.windowShown(setWindowShown),

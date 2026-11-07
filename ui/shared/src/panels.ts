@@ -1,10 +1,7 @@
 import { createMemo, For, type JSX } from "solid-js";
 import type { PanelView } from "./generated";
 
-/**
- * One child per panel, kept by the panel's id while its fields change. A child unmounting with its panel gone from the
- * list still reads the panel as it last was.
- */
+/** A child unmounting with its panel gone from the list still reads the panel as it last was. */
 export function EachPanel(props: { panels: PanelView[]; children: (panel: () => PanelView) => JSX.Element }) {
   return For({
     get each() {

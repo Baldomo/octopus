@@ -3,10 +3,11 @@ use std::time::Instant;
 
 use octopus_client::CallError;
 use octopus_proto::Error;
+use octopus_proto::account::{AccountId, Link};
 use octopus_proto::device::PublicKey;
 use octopus_proto::ops::{
     Entry, EntryKind, FileCopy, FileCreate, FileDelete, FileList, FileMove, FileSearch, FileWrite, Match, Offer,
-    PairedClient, PairingForget, PairingList, PairingOffer, TaskArchive, TaskCreate, TaskFocus, TaskMove, TaskRename,
+    PairedAccount, PairingForget, PairingList, PairingOffer, TaskArchive, TaskCreate, TaskFocus, TaskMove, TaskRename,
     TaskSetParent, TermClaim, TermClose, TermOpen, TermResize, TermTakeLock, WorkspaceAdd, WorkspaceRemove,
 };
 use octopus_proto::pairing::Invite;
@@ -19,7 +20,7 @@ use tauri::{Runtime, State};
 use tokio::io::AsyncReadExt;
 use ts_rs::TS;
 
-use crate::hub::{Hub, Model, ServerView};
+use crate::hub::{AccountView, Hub, Model, ServerView};
 use crate::task_lists::{TaskRef, auto_swatch};
 use crate::terminal::Terminals;
 use crate::ui::{Ui, UiAct, UiStore};
@@ -43,6 +44,7 @@ pub(crate) struct Boot {
     /// This client's device key, which every server it is paired with knows it by.
     #[ts(type = "string")]
     pub key: PublicKey,
+    pub account: AccountView,
     pub servers: Vec<ServerView>,
     pub model: Model,
     pub ui: Ui,
@@ -50,7 +52,8 @@ pub(crate) struct Boot {
 
 #[tauri::command]
 pub fn boot(hub: Hubbed, ui: Uis) -> Boot {
-    Boot { me: hub.me.name(), key: hub.me.key.public(), servers: hub.servers(), model: hub.model(), ui: ui.ui() }
+    let (me, key, account) = (hub.me.name(), hub.me.key.public(), hub.account());
+    Boot { me, key, account, servers: hub.servers(), model: hub.model(), ui: ui.ui() }
 }
 
 #[tauri::command]
@@ -76,17 +79,56 @@ pub async fn server_pair(hub: Hubbed<'_>, invite: Invite) -> Result<String, Stri
 #[tauri::command]
 pub async fn server_offer(hub: Hubbed<'_>, server: String) -> Result<ShownOffer, String> {
     let offer = hub.call(&server, &PairingOffer {}).await?;
-    Ok(ShownOffer { qr: octopus_client::qr::svg(&offer.invite), offer })
+    let qr = octopus_client::qr::svg(&offer.invite).map_err(|error| format!("{error:#}"))?;
+    Ok(ShownOffer { qr, offer })
 }
 
 #[tauri::command]
-pub async fn server_clients(hub: Hubbed<'_>, server: String) -> Result<Vec<PairedClient>, String> {
-    Ok(hub.call(&server, &PairingList {}).await?.clients)
+pub async fn server_accounts(hub: Hubbed<'_>, server: String) -> Result<Vec<PairedAccount>, String> {
+    Ok(hub.call(&server, &PairingList {}).await?.accounts)
 }
 
 #[tauri::command]
-pub async fn server_revoke(hub: Hubbed<'_>, server: String, client: String) -> Result<(), String> {
-    hub.call(&server, &PairingForget { client }).await.map(drop)
+pub async fn server_revoke(hub: Hubbed<'_>, server: String, account: AccountId) -> Result<(), String> {
+    hub.call(&server, &PairingForget { account }).await.map(drop)
+}
+
+/// A link as the window shows it, beside the link drawn as an SVG QR code.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+pub(crate) struct ShownLink {
+    pub link: String,
+    /// When the link stops joining, in milliseconds since 1970.
+    pub expires_at: i64,
+    pub qr: String,
+}
+
+#[tauri::command]
+pub async fn account_link(hub: Hubbed<'_>) -> Result<ShownLink, String> {
+    let (link, expires_at) = hub.link().await.map_err(|error| format!("{error:#}"))?;
+    let qr = octopus_client::qr::svg(&link).map_err(|error| format!("{error:#}"))?;
+    Ok(ShownLink { qr, link: link.to_string(), expires_at })
+}
+
+/// Joins the account the link names, naming the part of the link that is wrong.
+#[tauri::command]
+pub async fn account_join(hub: Hubbed<'_>, link: String) -> Result<(), String> {
+    let link: Link = link.trim().parse()?;
+    octopus_client::servers::join(&link, &hub.me).await.map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub fn account_remove(hub: Hubbed, device: String) -> Result<(), String> {
+    hub.remove_device(&device).map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub fn account_leave(hub: Hubbed) -> Result<(), String> {
+    hub.start_afresh(true).map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub fn account_start_over(hub: Hubbed) -> Result<(), String> {
+    hub.start_afresh(false).map_err(|error| format!("{error:#}"))
 }
 
 #[tauri::command]

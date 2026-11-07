@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { COMMANDS, EVENTS } from "./generated";
 import type {
+  AccountView,
   Boot,
   Entry,
   EntryKind,
@@ -9,8 +10,9 @@ import type {
   Match,
   Model,
   NewTask,
+  ShownLink,
   ShownOffer,
-  PairedClient,
+  PairedAccount,
   PtyId,
   ServerView,
   Swatch,
@@ -22,7 +24,6 @@ import type {
   WorkspaceId,
 } from "./generated";
 
-/** Every command of the client app's core, which the app adds as its `octopus` plugin. */
 const octopus = (command: (typeof COMMANDS)[number]) => `plugin:octopus|${command}`;
 
 const UTF8 = new TextDecoder("utf-8", { fatal: true });
@@ -37,13 +38,22 @@ export const backend = {
   /** Resolves to the paired server's name. */
   serverPair: (invite: string) => invoke<string>(octopus("server_pair"), { invite }),
   serverOffer: (server: string) => invoke<ShownOffer>(octopus("server_offer"), { server }),
-  serverClients: (server: string) => invoke<PairedClient[]>(octopus("server_clients"), { server }),
-  serverRevoke: (server: string, client: string) => invoke<void>(octopus("server_revoke"), { server, client }),
+  serverAccounts: (server: string) => invoke<PairedAccount[]>(octopus("server_accounts"), { server }),
+  /** Stops the server trusting the account, which is its id in full. */
+  serverRevoke: (server: string, account: string) => invoke<void>(octopus("server_revoke"), { server, account }),
+  /** A fresh link to this account, held by a reachable server for 10 minutes. */
+  accountLink: () => invoke<ShownLink>(octopus("account_link")),
+  /** Joins the account the link names, bringing this client's servers along. */
+  accountJoin: (link: string) => invoke<void>(octopus("account_join"), { link }),
+  /** Removes the device whose key, in hex, is `device`. */
+  accountRemove: (device: string) => invoke<void>(octopus("account_remove"), { device }),
+  accountLeave: () => invoke<void>(octopus("account_leave")),
+  accountStartOver: () => invoke<void>(octopus("account_start_over")),
   /** Resyncs every connected server, rejecting with each one's problem. */
   serversRefresh: () => invoke<void>(octopus("servers_refresh")),
-  /** Renames the server in this client's list only. */
+  /** Renames the server on every device of the account. */
   serverRename: (server: string, name: string) => invoke<void>(octopus("server_rename"), { server, name }),
-  /** Forgets the server in this client's list only. */
+  /** Forgets the server on every device of the account. */
   serverForget: (server: string) => invoke<void>(octopus("server_forget"), { server }),
   /** A null swatch adds the workspace with the auto color. */
   workspaceAdd: (server: string, name: string, root: string, swatch: Swatch | null) =>
@@ -103,6 +113,8 @@ export const events = {
   model: (handle: (model: Model) => void) => listen<Model>(EVENTS.model, (event) => handle(event.payload)),
   servers: (handle: (servers: ServerView[]) => void) =>
     listen<ServerView[]>(EVENTS.servers, (event) => handle(event.payload)),
+  account: (handle: (account: AccountView) => void) =>
+    listen<AccountView>(EVENTS.account, (event) => handle(event.payload)),
   filesChanged: (handle: (changed: FilesChanged[]) => void) =>
     listen<FilesChanged[]>(EVENTS.filesChanged, (event) => handle(event.payload)),
   ui: (handle: (ui: Ui) => void) => listen<Ui>(EVENTS.ui, (event) => handle(event.payload)),

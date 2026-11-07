@@ -11,7 +11,6 @@ import { act, openView, report } from "./state";
 type Editor = import("monaco-editor").editor.IStandaloneCodeEditor;
 type Shown = { files: TaskFiles; path: string } | undefined;
 
-/** A tab names its file, and the fewest trailing directories that tell it from another open tab of the same name. */
 function EditorTabs(props: { files: TaskFiles; visible: boolean; drag: LiftOnDrag }) {
   const tabs = createMemo(() => {
     const { tabs, dirty } = props.files.state;
@@ -54,7 +53,6 @@ const CODE = (
   </svg>
 );
 
-/** The selected file's path, each part revealing itself in the tree, and the switch between its code and its render. */
 function FileHead(props: { files: TaskFiles; path: string }) {
   const parts = () => props.path.split("/");
   const rendered = () => props.files.state.rendered[props.path] === true;

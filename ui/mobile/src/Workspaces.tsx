@@ -8,7 +8,7 @@ import { feel } from "./feel";
 import { Icon } from "./Icon";
 import { back, go, screen, showInSheet } from "./nav";
 import { Chev, Field, Flab, Gap, Mi, Note, Path, Sep, ServerDot, Why } from "./parts";
-import { Rename } from "./Rename";
+import { RenameItem } from "./Rename";
 import { Sheet, SheetHead } from "./Sheet";
 
 /** The 12 hues across and 4 tones down; the current color ringed and the auto color dotted, which picks auto. */
@@ -35,11 +35,9 @@ function Matrix(props: { on: Swatch | null; auto: Swatch | undefined; pick: (swa
 
 const SectionDot = () => <i class="dot srv" style={{ background: "var(--ws)" }} />;
 
-/** A section's menu: a new task in it, its board, its rename and color, and removing it from each server. */
 export function SectionMenu(props: { name: string }) {
   const section = () => model.lists.sections.find((shown) => shown.name === props.name);
   const workspaces = () => model.lists.workspaces.filter((workspace) => workspace.name === props.name);
-  const [renaming, setRenaming] = createSignal(false);
   const live = (shown: Section, server: string) =>
     shown.groups.reduce((count, group) => count + group.rows.filter((row) => row.at.server === server).length, 0);
   return (
@@ -71,20 +69,7 @@ export function SectionMenu(props: { name: string }) {
             >
               Open board
             </Mi>
-            <Show
-              when={renaming()}
-              fallback={
-                <Mi slot={<Icon name="pen" />} tap={() => setRenaming(true)}>
-                  Rename…
-                </Mi>
-              }
-            >
-              <Rename
-                value={shown().name}
-                apply={(name) => backend.sectionRename(shown().name, name).then(back)}
-                done={() => setRenaming(false)}
-              />
-            </Show>
+            <RenameItem value={shown().name} apply={(name) => backend.sectionRename(shown().name, name).then(back)} />
             <Flab>color</Flab>
             <Matrix
               on={shown().swatch}

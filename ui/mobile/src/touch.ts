@@ -60,7 +60,6 @@ const ROW_DELAY_MS = 60;
 /** How far past its edges a finger can slide and still tap what it pressed, as far as UIKit's controls reach. */
 const REACH_PX = 70;
 
-/** What the finger pressed, whether the finger is on it, and whether it has shown pressed yet. */
 type Tap = { element: HTMLElement; on: boolean; shown: boolean; timer?: ReturnType<typeof setTimeout> };
 
 const show = (tap: Tap, on: boolean) => {
@@ -90,15 +89,15 @@ const unpress = (tap: Tap) => {
   tap.element.removeAttribute("data-pressed");
 };
 
-const reaches = (tap: Tap, at: Point) => {
-  const box = tap.element.getBoundingClientRect();
+export const reaches = (element: Element, at: Point, margin: number) => {
+  const box = element.getBoundingClientRect();
   return (
-    at.x >= box.left - REACH_PX &&
-    at.x <= box.right + REACH_PX &&
-    at.y >= box.top - REACH_PX &&
-    at.y <= box.bottom + REACH_PX
+    at.x >= box.left - margin && at.x <= box.right + margin && at.y >= box.top - margin && at.y <= box.bottom + margin
   );
 };
+
+export const fingerIn = (touches: TouchList, id: number | null | undefined) =>
+  [...touches].find((each) => each.identifier === id);
 
 /**
  * Whether WebKit's mouse events for the last tap are still to come, which they are for a lift that never moved, and
@@ -144,8 +143,6 @@ export const keepTouch = () => {
   dropTap(touch);
 };
 
-const ours = (touches: TouchList) => [...touches].find((each) => each.identifier === touch?.id);
-
 /** Touch events keep going to the element a touch started on, even once it leaves the page, so they are heard there. */
 const listen = ({ target }: Tracked) => {
   target.addEventListener("touchmove", move as EventListener, { passive: false });
@@ -165,7 +162,7 @@ const cancel = (stale: Tracked) => {
 };
 
 const move = (event: TouchEvent) => {
-  const finger = ours(event.touches);
+  const finger = fingerIn(event.touches, touch?.id);
   if (touch === null || finger === undefined || touch.owner === "native" || touch.owner === "kept") return;
   const at = { x: finger.clientX, y: finger.clientY };
   touch.track.add(at.x, at.y);
@@ -182,11 +179,11 @@ const move = (event: TouchEvent) => {
   }
   event.preventDefault();
   if (touch.owner !== "free") touch.owner.move(at);
-  else if (touch.tap) show(touch.tap, reaches(touch.tap, at));
+  else if (touch.tap) show(touch.tap, reaches(touch.tap.element, at, REACH_PX));
 };
 
 const end = (event: TouchEvent) => {
-  if (touch === null || ours(event.changedTouches) === undefined) return;
+  if (touch === null || fingerIn(event.changedTouches, touch.id) === undefined) return;
   const { owner: held, track, tap } = touch;
   release(touch);
   synthesizing = tap !== null && event.type === "touchend" && held === "undecided";
