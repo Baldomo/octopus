@@ -24,3 +24,20 @@ test("a stream that reopens under a lock this client held claims it back", () =>
   claim.ended(true);
   assert.equal(claim.opened(), true);
 });
+
+test("a claim is under way from the look until it settles", () => {
+  const claim = lockClaim();
+  claim.looked();
+  assert.equal(claim.opened(), true);
+  assert.equal(claim.pending(), true);
+  claim.settled();
+  assert.equal(claim.pending(), false);
+});
+
+test("a look whose stream ends before it opens claims nothing later", () => {
+  const claim = lockClaim();
+  claim.looked();
+  claim.ended(false);
+  assert.equal(claim.pending(), false);
+  assert.equal(claim.opened(), false);
+});

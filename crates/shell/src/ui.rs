@@ -20,6 +20,17 @@ pub const UI_EVENT: &str = "ui";
 pub const SHOWN_EVENT: &str = "window-shown";
 /// The window came into focus.
 pub const FOCUSED_EVENT: &str = "window-focused";
+pub const FILE_DRAG_EVENT: &str = "file-drag";
+
+/// Files from the system dragged over the window, at a point in the UI's CSS pixels; a drop carries the files' paths
+/// on this machine.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FileDrag {
+    Over { x: f64, y: f64 },
+    Drop { paths: Vec<String>, x: f64, y: f64 },
+    Leave,
+}
 
 const PREFS_FILE: &str = "app.json";
 /// How many opened tasks stay mounted, so switching among them skips the mount.

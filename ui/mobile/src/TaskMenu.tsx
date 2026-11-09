@@ -37,11 +37,11 @@ function Facts(props: { view: TaskView; panel: PtyId | null }) {
           }
         </Id>
       </span>
-      <Show when={props.view.task.checkout.kind === "worktree" && props.view.task.checkout}>
-        {(worktree) => (
+      <Show when={props.view.task.checkout.kind !== "root" && props.view.task.checkout}>
+        {(branched) => (
           <span class="chip">
             <Icon name="branch" />
-            <span class="mono">{worktree().branch}</span>
+            <span class="mono">{branched().branch}</span>
           </span>
         )}
       </Show>

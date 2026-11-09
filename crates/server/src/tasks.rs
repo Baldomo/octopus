@@ -1,6 +1,6 @@
 //! The task tree and its states: creating, moving, nesting, renaming and archiving tasks, and the view each publishes.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use octopus_proto::Error;
 use octopus_proto::ops::{
@@ -86,13 +86,18 @@ impl Server {
         };
         let id = TaskId::random();
         let root = PathBuf::from(&workspace.root);
-        let (directory, checkout) = match op.checkout {
-            CheckoutKind::Root => (root, Checkout::Root),
-            CheckoutKind::Worktree => {
+        let branch = || checkouts::branch_for(&root, &op.title, &id);
+        let checkout = match op.checkout {
+            CheckoutKind::Root => Checkout::Root,
+            CheckoutKind::Worktree => Checkout::Worktree { branch: branch()? },
+            CheckoutKind::Copy => Checkout::Copy { branch: branch()? },
+        };
+        let directory = match checkout {
+            Checkout::Root => root,
+            Checkout::Worktree { .. } | Checkout::Copy { .. } => {
                 let directory = self.worktrees.join(&workspace.name).join(&id.0);
-                let branch = checkouts::branch_for(&root, &op.title, &id)?;
-                checkouts::create(&root, &directory, &branch)?;
-                (directory, Checkout::Worktree { branch })
+                checkouts::create(&root, &directory, &checkout)?;
+                directory
             }
         };
         let mut state = lock(&self.state);
@@ -114,16 +119,26 @@ impl Server {
         Ok(TaskCreated { task: row.id, rev: row.rev })
     }
 
+    /// A reopened task whose worktree is gone gets it back, made outside the lock since a copy clones its files.
     pub(crate) fn task_move(&self, op: TaskMove) -> Result<Revised, Error> {
+        let missing = {
+            let state = lock(&self.state);
+            let row = state.store.task(&op.task)?;
+            let directory = PathBuf::from(&row.directory);
+            if !row.state.is_live() && op.state.is_live() && !directory.exists() {
+                Some((PathBuf::from(state.store.workspace(&row.workspace)?.root), directory, row.checkout))
+            } else {
+                None
+            }
+        };
+        if let Some((root, directory, checkout)) = missing {
+            checkouts::create(&root, &directory, &checkout)?;
+        }
         let mut state = lock(&self.state);
         let mut row = state.store.task(&op.task)?;
         let reopening = !row.state.is_live() && op.state.is_live();
-        if reopening && let Checkout::Worktree { branch } = &row.checkout {
-            let directory = PathBuf::from(&row.directory);
-            if !directory.exists() {
-                let root = PathBuf::from(state.store.workspace(&row.workspace)?.root);
-                checkouts::create(&root, &directory, branch)?;
-            }
+        if reopening && !Path::new(&row.directory).exists() {
+            return Err(Error::conflict(format!("{}'s worktree went while it was made; move it again", row.id)));
         }
         let effect = apply_move(&mut row, op.state, now());
         let rev = state.store.save_task(&mut row)?;

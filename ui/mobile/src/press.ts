@@ -112,6 +112,7 @@ export function repeats(write: () => void) {
       finger = null;
       element.removeAttribute("data-pressed");
     };
+    onCleanup(stop);
     const ours = (touches: TouchList) => fingerIn(touches, finger);
     element.addEventListener(
       "touchstart",

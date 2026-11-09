@@ -82,9 +82,9 @@ async fn a_client_rearranges_a_checkout_without_reaching_past_it() {
     laptop.call(&gone).await.expect("file.delete");
     assert!(!checkout.join("docs copy").exists());
 
-    laptop.upload(task.clone(), "logo.png".into(), &[0, 159, 146, 150]).await.expect("upload");
+    laptop.upload(task.clone(), "logo.png".into(), 4, &[0, 159, 146, 150][..]).await.expect("upload");
     assert_eq!(std::fs::read(checkout.join("logo.png")).expect("uploaded"), [0u8, 159, 146, 150]);
-    let again = laptop.upload(task.clone(), "logo.png".into(), b"x").await;
+    let again = laptop.upload(task.clone(), "logo.png".into(), 1, &b"x"[..]).await;
     assert!(matches!(refused(again), Error::Conflict { .. }));
     let mut short = laptop
         .open_data_stream(&Stream::Upload { task: task.clone(), bytes: 10, path: "short".into() })

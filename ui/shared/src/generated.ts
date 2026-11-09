@@ -18,9 +18,9 @@ started: boolean, };
 
 export type TaskState = "pinned" | "temporary" | "completed" | "cancelled";
 
-export type Checkout = { "kind": "root" } | { "kind": "worktree", branch: string, };
+export type Checkout = { "kind": "root" } | { "kind": "worktree", branch: string, } | { "kind": "copy", branch: string, };
 
-export type CheckoutKind = "root" | "worktree";
+export type CheckoutKind = "root" | "worktree" | "copy";
 
 export type AgentStatus = "working" | "waiting" | "idle";
 
@@ -296,11 +296,13 @@ export type Bounds = { x: number, y: number, width: number, height: number, };
 
 export type Floated = { input: Bounds, drawn: Bounds, };
 
+export type FileDrag = { "kind": "over", x: number, y: number, } | { "kind": "drop", paths: Array<string>, x: number, y: number, } | { "kind": "leave" };
+
 export const TASK_STATES = ["pinned","temporary","completed","cancelled"] as const;
 
 export const LIVE_STATES = ["pinned","temporary"] as const;
 
-export const CHECKOUTS = ["root","worktree"] as const;
+export const CHECKOUTS = ["root","worktree","copy"] as const;
 
 export const HUES = ["red","orange","amber","lime","green","mint","teal","sky","blue","indigo","violet","pink"] as const;
 
@@ -324,4 +326,4 @@ export const VERSION = "0.0.0" as const;
 
 export const COMMANDS = ["boot","ready","ui_act","quit","server_pair","server_offer","server_accounts","server_revoke","account_link","account_join","account_remove","account_leave","account_start_over","servers_refresh","server_rename","server_forget","workspace_add","workspace_remove","section_rename","section_color","auto_color","task_focus","task_move","task_set_parent","task_rename","task_archive","task_create","term_attach","term_input","term_detach","term_open","term_close","term_claim","term_take_lock","term_resize","file_list","file_read","file_write","file_create","file_move","file_copy","file_delete","file_upload","file_search"] as const;
 
-export const EVENTS = {"account":"account","filesChanged":"files_changed","microphoneDenied":"microphone_denied","model":"model","servers":"servers","ui":"ui","windowFocused":"window-focused","windowShown":"window-shown"} as const;
+export const EVENTS = {"account":"account","fileDrag":"file-drag","filesChanged":"files_changed","microphoneDenied":"microphone_denied","model":"model","servers":"servers","ui":"ui","windowFocused":"window-focused","windowShown":"window-shown"} as const;

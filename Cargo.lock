@@ -4373,6 +4373,7 @@ dependencies = [
  "alacritty_terminal",
  "anyhow",
  "ignore",
+ "libc",
  "nix 0.31.3",
  "notify",
  "octopus-proto",

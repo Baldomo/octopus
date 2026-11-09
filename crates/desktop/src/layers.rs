@@ -14,18 +14,22 @@
 //! The zoom scales base and float but no page, and leaves the title bar at its height in points, so the traffic lights
 //! stay on its midline. The UI measures in its CSS pixels; every rect becomes points here, at the native boundary.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use tauri::utils::config::{LogicalPosition as ConfigPosition, WindowConfig};
 use tauri::webview::WebviewBuilder;
 use tauri::{
-    LogicalPosition, LogicalSize, Manager, Theme, Webview, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent,
+    DragDropEvent, LogicalPosition, LogicalSize, Manager, PhysicalPosition, Theme, Webview, WebviewEvent, WebviewUrl,
+    WebviewWindowBuilder, Window, WindowEvent,
 };
 
 use octopus_shell::client_menu::{Appearance, Zoom};
-use octopus_shell::lock;
-use octopus_shell::ui::{Bounds, FOCUSED_EVENT, Floated, Native, SHOWN_EVENT, UiStore, Viewport};
+use octopus_shell::ui::{
+    Bounds, FILE_DRAG_EVENT, FOCUSED_EVENT, FileDrag, Floated, Native, SHOWN_EVENT, UiStore, Viewport,
+};
+use octopus_shell::{Dropped, lock};
 
 /// The label of the window and of its base webview, as `tauri.conf.json` declares them.
 pub(crate) const BASE: &str = "main";
@@ -64,6 +68,35 @@ pub(crate) fn float_cover(surfaces: &[Floated], zoom: Zoom) -> (Bounds, Vec<Boun
     });
     let cover = Bounds { x: 0.0, y: top, width: right, height: bottom - top };
     (cover, surfaces.iter().map(|surface| surface.input).collect())
+}
+
+/// Whether `url` is the UI's own page or a frame it renders in place, the only places a UI layer may be.
+fn the_ui(url: &tauri::Url) -> bool {
+    matches!(url.scheme(), "tauri" | "about")
+}
+
+/// A drag over the base layer, which reports its point in points despite the type, as the UI sees it: a drag
+/// carrying no files, as of text or a link, is none of its business.
+fn file_drag(event: &DragDropEvent, zoom: Zoom, carrying_files: &AtomicBool, dropped: &Dropped) -> Option<FileDrag> {
+    let at = |position: &PhysicalPosition<f64>| (position.x / zoom.scale(), position.y / zoom.scale());
+    let (x, y) = match event {
+        DragDropEvent::Enter { paths, position } => {
+            carrying_files.store(!paths.is_empty(), Ordering::Relaxed);
+            at(position)
+        }
+        DragDropEvent::Over { position } | DragDropEvent::Drop { position, .. } => at(position),
+        _ => return Some(FileDrag::Leave),
+    };
+    if !carrying_files.load(Ordering::Relaxed) {
+        return None;
+    }
+    Some(match event {
+        DragDropEvent::Drop { paths, .. } => {
+            dropped.add(paths);
+            FileDrag::Drop { paths: paths.iter().map(|path| path.to_string_lossy().into_owned()).collect(), x, y }
+        }
+        _ => FileDrag::Over { x, y },
+    })
 }
 
 /// Gives the window `appearance`, the OS appearance when it names no theme.
@@ -138,14 +171,16 @@ impl Layers {
         let config =
             app.config().app.windows.iter().find(|window| window.label == BASE).context("tauri.conf.json window")?;
         let config = WindowConfig { traffic_light_position: Some(traffic_lights()), ..config.clone() };
-        let base: Webview = WebviewWindowBuilder::from_config(app, &config)?.visible(false).build()?.as_ref().clone();
+        let base = WebviewWindowBuilder::from_config(app, &config)?.on_navigation(the_ui).visible(false).build()?;
+        let base: Webview = base.as_ref().clone();
         let window = base.window();
         let native = ui.native();
         appear(&window, &base, native.appearance)?;
         base.set_zoom(native.zoom.scale())?;
         window.show()?;
         host::adopt_base(&base)?;
-        let float = WebviewBuilder::new(FLOAT, WebviewUrl::App("index.html".into())).transparent(true);
+        let float =
+            WebviewBuilder::new(FLOAT, WebviewUrl::App("index.html".into())).transparent(true).on_navigation(the_ui);
         let float = add_child(&window, float, Some(points(float_cover(&native.surfaces, native.zoom).0, native.zoom)))?;
         float.set_zoom(native.zoom.scale())?;
         #[cfg(target_os = "macos")]
@@ -165,6 +200,16 @@ impl Layers {
         layers.resize()?;
         watch_shown(window.clone());
         let watcher = Arc::clone(&layers);
+        let dragged = Arc::clone(&layers);
+        let carrying_files = AtomicBool::new(false);
+        layers.base.on_webview_event(move |event| {
+            if let WebviewEvent::DragDrop(drag) = event {
+                let dropped = dragged.window.state::<Dropped>();
+                if let Some(drag) = file_drag(drag, dragged.ui.native().zoom, &carrying_files, &dropped) {
+                    octopus_shell::emit(dragged.window.app_handle(), FILE_DRAG_EVENT, drag);
+                }
+            }
+        });
         window.on_window_event(move |event| {
             let handled = match event {
                 WindowEvent::Resized(_) => watcher.resize().map_err(|error| ("lay out", error)),

@@ -6,6 +6,7 @@ import type {
   Boot,
   Entry,
   EntryKind,
+  FileDrag,
   FilesChanged,
   Match,
   Model,
@@ -27,7 +28,6 @@ import type {
 const octopus = (command: (typeof COMMANDS)[number]) => `plugin:octopus|${command}`;
 
 const UTF8 = new TextDecoder("utf-8", { fatal: true });
-const asciiEscape = (char: string) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`;
 const fileBytes = (at: TaskRef, path: string) => invoke<ArrayBuffer>(octopus("file_read"), { at, path });
 
 export const backend = {
@@ -101,11 +101,8 @@ export const backend = {
   fileCopy: (at: TaskRef, from: string, to: string) => invoke<void>(octopus("file_copy"), { at, from, to }),
   /** `trash` sends it to the trash of the server's machine; otherwise it is gone for good. */
   fileDelete: (at: TaskRef, path: string, trash: boolean) => invoke<void>(octopus("file_delete"), { at, path, trash }),
-  /** Creates a file of `bytes`; its header carries JSON, so every character past ASCII travels escaped. */
-  fileUpload: (at: TaskRef, path: string, bytes: ArrayBuffer) =>
-    invoke<void>(octopus("file_upload"), bytes, {
-      headers: { upload: JSON.stringify({ at, path }).replace(/[^\x20-\x7e]/g, asciiEscape) },
-    }),
+  /** Copies `local`, a file or folder on this machine, to the new `path`. */
+  fileUpload: (at: TaskRef, path: string, local: string) => invoke<void>(octopus("file_upload"), { at, path, local }),
   fileSearch: (at: TaskRef, pattern: string) => invoke<Match[]>(octopus("file_search"), { at, pattern }),
 };
 
@@ -121,6 +118,7 @@ export const events = {
   windowShown: (handle: (shown: boolean) => void) =>
     listen<boolean>(EVENTS.windowShown, (event) => handle(event.payload)),
   windowFocused: (handle: () => void) => listen(EVENTS.windowFocused, handle),
+  fileDrag: (handle: (drag: FileDrag) => void) => listen<FileDrag>(EVENTS.fileDrag, (event) => handle(event.payload)),
   microphoneDenied: (handle: (denied: boolean) => void) =>
     listen<boolean>(EVENTS.microphoneDenied, (event) => handle(event.payload)),
 };

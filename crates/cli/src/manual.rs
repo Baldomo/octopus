@@ -196,7 +196,10 @@ impl FileVerb {
                 let connection = connect(&server).await?;
                 let mut content = Vec::new();
                 tokio::io::stdin().read_to_end(&mut content).await.context("read stdin")?;
-                connection.upload(TaskId(task), path, &content).await.map_err(call_error)?;
+                connection
+                    .upload(TaskId(task), path, content.len() as u64, content.as_slice())
+                    .await
+                    .map_err(call_error)?;
                 print(&octopus_proto::ops::Done {})
             }
         }

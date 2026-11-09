@@ -341,10 +341,15 @@ impl Connection {
     }
 
     /// Sends `content` as a new file of a task's checkout, resolving once the server has landed it.
-    pub async fn upload(&self, task: TaskId, path: String, content: &[u8]) -> Result<(), CallError> {
-        let bytes = content.len() as u64;
+    pub async fn upload(
+        &self,
+        task: TaskId,
+        path: String,
+        bytes: u64,
+        mut content: impl AsyncRead + Unpin,
+    ) -> Result<(), CallError> {
         let mut opened = self.open_data_stream(&Stream::Upload { task, bytes, path }).await?;
-        opened.write_all(content).await.context("send the upload")?;
+        tokio::io::copy(&mut content, &mut opened).await.context("send the upload")?;
         opened.shutdown().await.context("finish the upload")?;
         match octopus_proto::frames::read_outcome(&mut opened).await.context("hear the upload land")? {
             Outcome::Ok(_) => Ok(()),

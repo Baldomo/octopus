@@ -4,9 +4,12 @@ import { backend } from "./backend";
 import { AGENT_PANEL, type PanelView, type PtyId, type TaskRef, type TaskView } from "./generated";
 import { Glyph } from "./Glyph";
 import { keepInView } from "./keepInView";
+import { onFileDrag, pastesSafely, shellQuoted } from "./fileDrag";
 import { EachPanel } from "./panels";
 import { commands, hint, mac } from "./commands";
-import { act, model, serverLabel, ui } from "./state";
+import { act, isLocal, model, serverLabel, ui } from "./state";
+import { filesOf } from "./taskFiles";
+import { toast } from "./Toast";
 import { type LinkTarget, openLinks, type OpenUrl } from "./terminalLinks";
 import { readOnlyLabel, terminalSession, windowShown } from "./terminalSession";
 
@@ -29,11 +32,20 @@ export const openShell = (at: TaskRef, key: string, directory: string) =>
 
 export type OpenLink = (task: TaskView, url: string, target: LinkTarget) => void;
 
+/** Where files on this machine are on the task's server: there already when it runs here, else copied into the
+ * checkout's root. */
+async function onServer(task: TaskView, locals: string[]) {
+  if (isLocal(task.at.server)) return locals;
+  const copies = await filesOf(task).bringIn(locals, ".");
+  return copies.map((copy) => `${task.task.directory}/${copy}`);
+}
+
 /** The holder fits the PTY to its pane; every other client draws it at the holder's size, cropped and scrollable. */
-function Term(props: { at: TaskRef; panel: PanelView; visible: boolean; resumable: boolean; openLink: OpenUrl }) {
+function Term(props: { task: TaskView; panel: PanelView; visible: boolean; resumable: boolean; openLink: OpenUrl }) {
   let host!: HTMLDivElement;
-  const session = terminalSession({ at: props.at, panel: () => props.panel, shown: () => props.visible });
-  const { xterm, mine } = session;
+  let pane!: HTMLDivElement;
+  const session = terminalSession({ at: props.task.at, panel: () => props.panel, shown: () => props.visible });
+  const { xterm, mine, claimed } = session;
 
   xterm.attachCustomKeyEventHandler((event) => {
     const input = CHORD_INPUT[chord(event)];
@@ -46,6 +58,18 @@ function Term(props: { at: TaskRef; panel: PanelView; visible: boolean; resumabl
   });
   xterm.onData(session.input);
   openLinks(xterm, props.openLink);
+  const pastable = () => {
+    if (!props.panel.running) toast(`${props.panel.name} has ended`);
+    else if (!mine()) toast("Take over the terminal to drop files into it");
+    return props.panel.running && mine();
+  };
+  onFileDrag((drag, under) => {
+    if (drag.kind !== "drop" || under === null || !pane.contains(under) || !pastable()) return;
+    if (!drag.paths.every(pastesSafely))
+      return toast("A path with a line break or a control character can't be pasted");
+    const typed = onServer(props.task, drag.paths);
+    act(typed.then((paths) => paths.length > 0 && pastable() && xterm.paste(paths.map(shellQuoted).join(" "))));
+  });
 
   onMount(() => {
     session.open(host);
@@ -64,11 +88,11 @@ function Term(props: { at: TaskRef; panel: PanelView; visible: boolean; resumabl
   });
 
   return (
-    <div class="term-panel" style={{ display: props.visible ? "" : "none" }}>
-      <div class="term" classList={{ cropped: !mine() }}>
+    <div class="term-panel" ref={pane} style={{ display: props.visible ? "" : "none" }}>
+      <div class="term" classList={{ cropped: !claimed() }}>
         <div class="term-host" ref={host} />
       </div>
-      <Show when={props.panel.running && !mine()}>
+      <Show when={props.panel.running && !claimed()}>
         <div class="readonly">
           <span>{readOnlyLabel(props.panel)}</span>
           <span class="spacer" />
@@ -81,7 +105,7 @@ function Term(props: { at: TaskRef; panel: PanelView; visible: boolean; resumabl
         <div class="readonly">
           <span>The agent has ended</span>
           <span class="spacer" />
-          <button class="btn live" onClick={() => act(backend.taskFocus(props.at))}>
+          <button class="btn live" onClick={() => act(backend.taskFocus(props.task.at))}>
             Resume
           </button>
         </div>
@@ -194,7 +218,7 @@ function Stack(props: { key: string; openLink: OpenLink }) {
             <EachPanel panels={panels()}>
               {(panel) => (
                 <Term
-                  at={open().at}
+                  task={open()}
                   panel={panel()}
                   visible={shown() && selected()?.id === panel().id}
                   resumable={open().live && panel().name === AGENT_PANEL && !panel().running}

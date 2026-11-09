@@ -180,6 +180,7 @@ fn task_row(row: &Row) -> rusqlite::Result<TaskRow> {
         checkout: match wire_column(row, "checkout")? {
             CheckoutKind::Root => Checkout::Root,
             CheckoutKind::Worktree => Checkout::Worktree { branch: row.get("branch")? },
+            CheckoutKind::Copy => Checkout::Copy { branch: row.get("branch")? },
         },
         harness: row.get("harness")?,
         session: Session { id: SessionId(row.get("session")?), started: row.get("session_started")? },
@@ -499,10 +500,7 @@ impl Store {
                 row.session.id.0,
                 row.session.started,
                 row.directory,
-                match &row.checkout {
-                    Checkout::Root => None,
-                    Checkout::Worktree { branch } => Some(branch),
-                },
+                row.checkout.branch(),
                 row.ended_at,
                 row.archived_at,
                 row.rev.cast_signed()
@@ -526,7 +524,7 @@ impl Store {
     }
 
     pub fn worktrees_ended_by(&self, cutoff: i64) -> Result<Vec<TaskRow>, Error> {
-        let sql = "SELECT * FROM tasks WHERE checkout = 'worktree' AND ended_at IS NOT NULL AND ended_at <= ?1";
+        let sql = "SELECT * FROM tasks WHERE branch IS NOT NULL AND ended_at IS NOT NULL AND ended_at <= ?1";
         select(&self.db, sql, [cutoff], task_row)
     }
 

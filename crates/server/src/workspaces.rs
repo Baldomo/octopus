@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use octopus_proto::ops::{
     Revised, WorkspaceAdd, WorkspaceCreated, WorkspaceRemove, WorkspaceRename, WorkspaceSetColor,
 };
-use octopus_proto::types::Checkout;
 use octopus_proto::{Error, Event};
 
 use crate::{Server, checkouts, lock, nonempty};
@@ -63,7 +62,7 @@ impl Server {
             state.forget_terminals(&task.id);
         }
         let root = PathBuf::from(&workspace.root);
-        for task in tasks.iter().filter(|task| matches!(task.checkout, Checkout::Worktree { .. })) {
+        for task in tasks.iter().filter(|task| task.checkout.branch().is_some()) {
             let directory = PathBuf::from(&task.directory);
             if directory.exists() {
                 checkouts::remove(&root, &directory)?;

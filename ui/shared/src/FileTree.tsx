@@ -1,10 +1,10 @@
 import { batch, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import { backend } from "./backend";
 import { mac } from "./commands";
 import type { EntryKind, TaskView } from "./generated";
 import { keepInView } from "./keepInView";
+import { onFileDrag } from "./fileDrag";
 import { closeMenu, Head, Item, onRightClick, openMenu, Sep } from "./Menu";
-import { toast } from "./Toast";
+import { each, said, toast } from "./Toast";
 import { act, isLocal, serverLabel } from "./state";
 import { freeName, join, nameOf, parentOf, within, type TaskFiles } from "./taskFiles";
 import { openShell } from "./Terminals";
@@ -54,25 +54,11 @@ function startDraft(files: TaskFiles, next: Draft) {
   });
 }
 
-const said = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const where = (dir: string) => (dir === "." ? "the checkout" : dir);
 
 async function vacant(files: TaskFiles, dir: string, name: string) {
   if ((await files.names(dir)).has(name)) throw new Error(`${where(dir)} already has ${name}`);
   return join(dir, name);
-}
-
-async function each<T>(items: T[], op: (item: T) => Promise<unknown>) {
-  let done = 0;
-  for (const item of items) {
-    try {
-      await op(item);
-      done++;
-    } catch (error) {
-      toast(said(error));
-    }
-  }
-  return done;
 }
 
 const outermost = (paths: string[]) =>
@@ -118,36 +104,6 @@ const absolute = (task: TaskView, path: string) =>
 async function copyPaths(task: TaskView, paths: string[], full: boolean) {
   await navigator.clipboard.writeText(paths.map((path) => (full ? absolute(task, path) : path)).join("\n"));
   toast(`Copied ${paths.length === 1 ? (full ? "the path" : "the relative path") : plural(paths.length, "path")}`);
-}
-
-const children = (dir: FileSystemDirectoryEntry) =>
-  new Promise<FileSystemEntry[]>((resolve, reject) => {
-    const reader = dir.createReader();
-    const all: FileSystemEntry[] = [];
-    const next = () =>
-      reader.readEntries((batch) => (batch.length === 0 ? resolve(all) : (all.push(...batch), next())), reject);
-    next();
-  });
-const fileOf = (entry: FileSystemFileEntry) => new Promise<File>((resolve, reject) => entry.file(resolve, reject));
-
-async function upload(files: TaskFiles, entry: FileSystemEntry, path: string): Promise<void> {
-  if (entry.isDirectory) {
-    await backend.fileCreate(files.at, path, "directory");
-    const inside = await children(entry as FileSystemDirectoryEntry);
-    for (const child of inside) await upload(files, child, join(path, child.name));
-  } else {
-    await files.upload(path, await (await fileOf(entry as FileSystemFileEntry)).arrayBuffer());
-  }
-}
-
-async function bringIn(files: TaskFiles, entries: FileSystemEntry[], dir: string) {
-  const taken = await files.names(dir);
-  const done = await each(entries, (entry) => {
-    const free = freeName(entry.name, taken);
-    taken.add(free);
-    return upload(files, entry, join(dir, free));
-  });
-  landed(files, dir, done, "Copied");
 }
 
 /** Deleting confirms in place: a server on this machine sends entries to its trash, another one deletes them. */
@@ -451,26 +407,17 @@ export function FileTree(props: { files: TaskFiles; task: TaskView; outside?: Ou
     window.addEventListener("keydown", escape, { capture: true });
   };
 
-  const fromOutside = (event: DragEvent) => event.dataTransfer?.types.includes("Files") === true;
-  const dragOver = (event: DragEvent) => {
-    if (!fromOutside(event)) return;
-    event.preventDefault();
-    event.dataTransfer!.dropEffect = "copy";
-    aim(dropDirAt(event.clientX, event.clientY) ?? ".");
-  };
-  const dragLeave = (event: DragEvent) => {
-    if (!tree.contains(event.relatedTarget as Node | null)) aim(null);
-  };
-  const drop = (event: DragEvent) => {
-    if (!fromOutside(event)) return;
-    event.preventDefault();
-    const dir = target() ?? ".";
-    aim(null);
-    const entries = [...(event.dataTransfer?.items ?? [])]
-      .map((item) => item.webkitGetAsEntry())
-      .filter((entry) => entry !== null);
-    act(bringIn(files(), entries, dir));
-  };
+  onFileDrag((drag, under) => {
+    const dir =
+      drag.kind !== "leave" && under !== null && tree.contains(under) ? (dropDirAt(drag.x, drag.y) ?? ".") : null;
+    aim(drag.kind === "over" ? dir : null);
+    if (drag.kind === "drop" && dir !== null)
+      act(
+        files()
+          .bringIn(drag.paths, dir)
+          .then((copies) => landed(files(), dir, copies.length, "Copied")),
+      );
+  });
 
   const keys = (event: KeyboardEvent) => {
     if (draft() !== null || event.target !== tree) return;
@@ -568,9 +515,6 @@ export function FileTree(props: { files: TaskFiles; task: TaskView; outside?: Ou
         files().select([], null);
         onRightClick("file:.", () => tree, menu("."))(event);
       }}
-      onDragOver={dragOver}
-      onDragLeave={dragLeave}
-      onDrop={drop}
     >
       <For each={shown().order}>
         {(path) => {

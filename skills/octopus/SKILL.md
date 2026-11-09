@@ -78,7 +78,7 @@ Create a task.
 - `--title <title>`: The task's title.
 - `--parent <parent>`: The parent task's id; none for a root task.
 - `--state pinned|temporary|completed|cancelled`: The task's state.
-- `--checkout root|worktree`: Where the task's files live: the workspace root, or a worktree of its own.
+- `--checkout root|worktree|copy`: Where the task's files live.
 - `--harness <harness>`: The harness that runs the task's agent.
 - `--session <session>`: An existing session's id for the agent to resume; fresh for a fresh session.
 

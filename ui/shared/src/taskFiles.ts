@@ -3,6 +3,7 @@ import { backend } from "./backend";
 import type { Entry, EntryKind, FilesChanged, TaskRef, TaskView } from "./generated";
 import { moveTo } from "./sectionOrder";
 import { report } from "./state";
+import { each } from "./Toast";
 
 type Monaco = typeof import("./monaco");
 type Model = import("monaco-editor").editor.ITextModel;
@@ -178,8 +179,19 @@ export class TaskFiles {
     this.set("selected", (selected) => selected.filter((selected) => !within(selected, path)));
   }
 
-  upload(path: string, bytes: ArrayBuffer) {
-    return backend.fileUpload(this.at, path, bytes).then(() => this.relist(path));
+  /** Copies files and folders of a drop into `dir`, each under a name `dir` lacks; resolves to the copies, and
+   * says why each other one failed. */
+  async bringIn(locals: string[], dir: string) {
+    const taken = await this.names(dir);
+    const copies: string[] = [];
+    await each(locals, async (local) => {
+      const name = freeName(nameOf(local), taken);
+      taken.add(name);
+      const copy = join(dir, name);
+      await backend.fileUpload(this.at, copy, local).finally(() => this.relist(copy));
+      copies.push(copy);
+    });
+    return copies;
   }
 
   collapseAll() {

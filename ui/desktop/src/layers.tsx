@@ -174,7 +174,8 @@ export function Docked() {
         <Board />
       </div>
       <StatusBar />
-      <div class="edge" classList={{ handle: !ui.sidebar }} onPointerEnter={() => showSidebar(true)} />
+      {/* A pointer back from a page reaches the edge with no pointerenter, as this webview never saw it leave. */}
+      <div class="edge" classList={{ handle: !ui.sidebar }} onPointerMove={() => ui.sidebar || showSidebar(true)} />
     </div>
   );
 }

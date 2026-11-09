@@ -1,9 +1,10 @@
 //! Where a task's files live: its worktree's branch, creation and removal, and the watch on its checkout.
 
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use octopus_proto::types::TaskId;
+use octopus_proto::types::{Checkout, TaskId};
 use octopus_proto::{Error, Event};
 
 use crate::store::TaskRow;
@@ -26,12 +27,16 @@ fn run_git(repo: &Path, args: &[&str]) -> Result<Output, Error> {
         .map_err(|error| Error::internal(format!("run git: {error}")))
 }
 
-fn git(repo: &Path, args: &[&str]) -> Result<(), Error> {
+fn git_output(repo: &Path, args: &[&str]) -> Result<Vec<u8>, Error> {
     let output = run_git(repo, args)?;
     if output.status.success() {
-        return Ok(());
+        return Ok(output.stdout);
     }
     Err(Error::conflict(format!("git {}: {}", args.join(" "), String::from_utf8_lossy(&output.stderr).trim())))
+}
+
+fn git(repo: &Path, args: &[&str]) -> Result<(), Error> {
+    git_output(repo, args).map(drop)
 }
 
 fn branch_exists(repo: &Path, branch: &str) -> Result<bool, Error> {
@@ -52,12 +57,81 @@ pub(crate) fn branch_for(repo: &Path, title: &str, task: &TaskId) -> Result<Stri
     if branch_exists(repo, &branch)? { Ok(format!("{branch}-{}", &task.0[TaskId::PREFIX.len()..])) } else { Ok(branch) }
 }
 
-pub fn create(repo: &Path, directory: &Path, branch: &str) -> Result<(), Error> {
-    let directory = directory.to_string_lossy();
-    if branch_exists(repo, branch)? {
-        git(repo, &["worktree", "add", &directory, branch])
+/// A copy that fails to fill leaves no directory, and no branch it made.
+pub fn create(repo: &Path, directory: &Path, checkout: &Checkout) -> Result<(), Error> {
+    let (branch, copy) = match checkout {
+        Checkout::Root => return Ok(()),
+        Checkout::Worktree { branch } => (branch, false),
+        Checkout::Copy { branch } => (branch, true),
+    };
+    let made_branch = !branch_exists(repo, branch)?;
+    let target = directory.to_string_lossy();
+    if made_branch {
+        git(repo, &["worktree", "add", "-b", branch, &target])?;
     } else {
-        git(repo, &["worktree", "add", "-b", branch, &directory])
+        git(repo, &["worktree", "add", &target, branch])?;
+    }
+    if !copy {
+        return Ok(());
+    }
+    clone_ignored(repo, directory).map_err(|error| {
+        let undone = remove(repo, directory)
+            .and_then(|()| if made_branch { git(repo, &["branch", "-D", branch]) } else { Ok(()) });
+        match undone {
+            Ok(()) => error,
+            Err(undo) => Error::conflict(format!("{error}; undoing the copy failed too: {undo}")),
+        }
+    })
+}
+
+/// Clones each file and folder git ignores in the root into the worktree, where it shares the root's blocks until
+/// either side writes; an entry the worktree already holds stays.
+fn clone_ignored(repo: &Path, worktree: &Path) -> Result<(), Error> {
+    let listed = git_output(repo, &["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"])?;
+    for entry in listed.split(|byte| *byte == 0).filter(|entry| !entry.is_empty()) {
+        let relative: PathBuf = Path::new(std::ffi::OsStr::from_bytes(entry)).components().collect();
+        let target = worktree.join(&relative);
+        if target.symlink_metadata().is_ok() {
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| Error::conflict(format!("create {}: {error}", parent.display())))?;
+        }
+        clone(&repo.join(&relative), &target).map_err(|error| {
+            Error::conflict(format!(
+                "clone {} into the copy: {error}; a copy needs {} and {} on one file system that clones files",
+                relative.display(),
+                repo.display(),
+                worktree.display()
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+fn clone(from: &Path, to: &Path) -> std::io::Result<()> {
+    /// `<sys/clonefile.h>`: a link is cloned as the link, not as what it points to.
+    const CLONE_NOFOLLOW: u32 = 0x0001;
+    let path = |path: &Path| std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(std::io::Error::other);
+    let (from, to) = (path(from)?, path(to)?);
+    // SAFETY: both are NUL-terminated paths that outlive the call.
+    if unsafe { libc::clonefile(from.as_ptr(), to.as_ptr(), CLONE_NOFOLLOW) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn clone(from: &Path, to: &Path) -> std::io::Result<()> {
+    let output = Command::new("cp").args(["-a", "--reflink=always"]).arg(from).arg(to).output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(String::from_utf8_lossy(&output.stderr).trim().to_string()))
     }
 }
 

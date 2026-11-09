@@ -23,6 +23,7 @@ use crate::microphone::AskAccess;
 use tauri::plugin::TauriPlugin;
 use tauri::{AppHandle, Emitter, Manager, Runtime, Wry};
 
+pub use crate::commands::Dropped;
 use crate::commands::Launched;
 use crate::hub::Hub;
 use crate::terminal::Terminals;
@@ -62,6 +63,7 @@ pub fn plugin() -> TauriPlugin<Wry> {
         .setup(move |app, _| {
             app.manage(Launched(launched));
             app.manage(Terminals::default());
+            app.manage(Dropped::default());
             app.manage(Arc::new(pages::Pages::default()));
             Ok(())
         })

@@ -58,6 +58,40 @@ async fn a_worktree_lives_on_its_branch_until_its_lifetime_after_the_task_ends()
     assert_eq!(git(&directory, &["branch", "--show-current"]), "task/strict-serde");
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_copy_starts_with_the_roots_ignored_files_and_gets_them_again_when_it_reopens() {
+    let (dir, running) = server().await;
+    let repo = repo(dir.path());
+    std::fs::write(repo.join(".gitignore"), "target/\n.env\n").expect("write .gitignore");
+    git(&repo, &["add", ".gitignore"]);
+    git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "ignore"]);
+    std::fs::create_dir(repo.join("target")).expect("mkdir target");
+    std::fs::write(repo.join("target").join("built"), "cache").expect("write build output");
+    std::fs::write(repo.join(".env"), "KEY=1").expect("write .env");
+    std::fs::write(repo.join("draft.md"), "untracked").expect("write untracked file");
+    let laptop = connect(&running, "laptop").await;
+    let workspace = workspace(&laptop, &repo).await;
+
+    let id = create(&laptop, &workspace, CheckoutKind::Copy, "none").await;
+    let view = task(&laptop, &id).await;
+    let copy = PathBuf::from(&view.directory);
+    assert_eq!(view.checkout, Checkout::Copy { branch: "task/strict-serde".into() });
+    assert_eq!(git(&copy, &["branch", "--show-current"]), "task/strict-serde");
+    let read = |path: PathBuf| std::fs::read_to_string(path).expect("read cloned file");
+    assert_eq!((read(copy.join("target/built")), read(copy.join(".env"))), ("cache".into(), "KEY=1".into()));
+    assert!(!copy.join("draft.md").exists());
+    std::fs::write(copy.join("target/built"), "rebuilt").expect("write in the copy");
+    assert_eq!(read(repo.join("target/built")), "cache");
+
+    laptop.call(&TaskMove { task: id.clone(), state: TaskState::Completed }).await.expect("complete");
+    let ended_at = task(&laptop, &id).await.ended_at.expect("ended_at");
+    let due = running.server.remove_expired_worktrees(ended_at + WORKTREE_LIFETIME_MS).expect("sweep");
+    assert_eq!((due.removed, due.failed.len()), (vec![id.clone()], 0));
+    laptop.call(&TaskMove { task: id.clone(), state: TaskState::Pinned }).await.expect("reopen");
+    assert_eq!(read(copy.join("target/built")), "cache");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_workspace_renames_and_recolors_in_place_and_goes_with_its_tasks_once_none_is_live() {
     let (dir, running) = server().await;

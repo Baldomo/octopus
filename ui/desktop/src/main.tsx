@@ -2,6 +2,7 @@ import "virtual:design.css";
 import "./app.css";
 import { backend, events } from "@octopus/shared/backend.ts";
 import inter from "@fontsource-variable/inter/files/inter-latin-wght-normal.woff2?url";
+import { fileDragged } from "@octopus/shared/fileDrag.ts";
 import { loadFonts } from "@octopus/shared/fonts.ts";
 import { mount } from "@octopus/shared/mount.ts";
 import { applyBoot, applyModel, applyUi, report, setAccount, setServers } from "@octopus/shared/state.ts";
@@ -23,6 +24,7 @@ async function start() {
     events.filesChanged(applyFilesChanged),
     events.windowShown(setWindowShown),
     events.windowFocused(windowFocused),
+    layer === "base" && events.fileDrag(fileDragged),
   ]);
   applyBoot(await backend.boot());
   mount(() => (layer === "float" ? <Floating /> : <Docked />), document.body);

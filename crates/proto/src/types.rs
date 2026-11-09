@@ -168,12 +168,14 @@ impl TaskState {
     }
 }
 
-/// Where a task's files live: the workspace root, or a worktree of its own on its branch.
+/// Where a task's files live: the workspace root, or a worktree of its own on its branch, which a copy starts with
+/// the workspace root's ignored files cloned in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Checkout {
     Root,
     Worktree { branch: String },
+    Copy { branch: String },
 }
 
 impl Checkout {
@@ -181,6 +183,14 @@ impl Checkout {
         match self {
             Self::Root => CheckoutKind::Root,
             Self::Worktree { .. } => CheckoutKind::Worktree,
+            Self::Copy { .. } => CheckoutKind::Copy,
+        }
+    }
+
+    pub fn branch(&self) -> Option<&str> {
+        match self {
+            Self::Root => None,
+            Self::Worktree { branch } | Self::Copy { branch } => Some(branch),
         }
     }
 }
@@ -191,10 +201,11 @@ impl Checkout {
 pub enum CheckoutKind {
     Root,
     Worktree,
+    Copy,
 }
 
 impl CheckoutKind {
-    pub const ALL: [Self; 2] = [Self::Root, Self::Worktree];
+    pub const ALL: [Self; 3] = [Self::Root, Self::Worktree, Self::Copy];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

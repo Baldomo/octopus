@@ -65,6 +65,7 @@ export function cellSize(xterm: Terminal): Size {
 type TerminalSession = {
   xterm: Terminal;
   mine: () => boolean;
+  claimed: () => boolean;
   shown: () => boolean;
   sgrMouse: () => boolean;
   input: (keys: string) => void;
@@ -98,6 +99,8 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
   /** Whether the server has this client's stream open, so a claim always reaches it showing the terminal. */
   const [attached, setAttached] = createSignal(false);
   const claim = lockClaim();
+  /** Holding the lock or claiming it, so a look draws the terminal as held here from the first frame. */
+  const claimed = () => mine() || claim.pending();
   let generation = 0;
   const [drops, setDrops] = createSignal(0);
 
@@ -129,7 +132,7 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
     if (current === generation && !ended) {
       attachment = opened;
       setAttached(true);
-      if (claim.opened()) claimUnlessTaken();
+      if (claim.opened()) claimIfFree();
     } else if (current !== generation) act(backend.termDetach(opened));
   };
   const detach = () => {
@@ -155,30 +158,47 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
       unlessOutrun(backend.termResize(props.at, id, size.cols, size.rows), mine);
     }, PANE_SETTLES_MS);
   };
-  const atPaneSize = (send: (size: Cells) => Promise<void>, what: string, stillMine: () => boolean) => {
+  const sentAtPaneSize = (send: (size: Cells) => Promise<void>, what: string, stillMine: () => boolean) => {
     const size = pane();
     if (size) unlessOutrun(send(size), stillMine);
     else report(`the terminal's pane has no size to ${what} the terminal at yet`);
+    return size !== undefined;
   };
   const takenByOther = () => {
     const { lock_holder, held_here } = props.panel();
     return lock_holder !== null && !held_here;
   };
-  const claimUnlessTaken = () => {
-    const { id, running } = props.panel();
-    if (takenByOther() || !running) return;
-    atPaneSize(
-      (size) => backend.termClaim(props.at, id, size.cols, size.rows),
-      "claim",
-      () => !takenByOther(),
-    );
+  const claimable = () => !takenByOther() && props.panel().running;
+  const claimIfFree = () => {
+    const sent =
+      claimable() &&
+      sentAtPaneSize(
+        (size) =>
+          backend.termClaim(props.at, props.panel().id, size.cols, size.rows).catch((error) => {
+            claim.settled();
+            throw error;
+          }),
+        "claim",
+        () => !takenByOther(),
+      );
+    if (!sent) claim.settled();
   };
+  createEffect(
+    on(
+      [() => props.panel().lock_holder?.name, () => props.panel().held_here, () => props.panel().running],
+      claim.settled,
+      { defer: true },
+    ),
+  );
 
   const streaming = createMemo(() => shown() && windowShown() && serverView(props.at.server)?.reachable === true);
   createEffect(
     on([streaming, drops], ([stream]) => {
       if (!stream) return;
-      attach().catch(report);
+      attach().catch((error) => {
+        claim.ended(false);
+        report(error);
+      });
       onCleanup(detach);
     }),
   );
@@ -187,9 +207,9 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
   });
   createEffect(
     on([() => shown() && windowShown(), windowFocuses], ([looking]) => {
-      if (!looking) return;
-      if (attached()) claimUnlessTaken();
-      else if (streaming()) claim.looked();
+      if (!looking || !streaming() || !claimable()) return;
+      claim.looked();
+      if (attached() && claim.opened()) claimIfFree();
     }),
   );
   createEffect(
@@ -206,13 +226,14 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
   return {
     xterm,
     mine,
+    claimed,
     shown,
     sgrMouse: sgr.on,
     input: (keys) => {
       if (attachment !== null) act(backend.termInput(attachment, keys));
     },
     take: () =>
-      atPaneSize(
+      sentAtPaneSize(
         (size) => backend.termTakeLock(props.at, props.panel().id, size.cols, size.rows),
         "take",
         () => true,

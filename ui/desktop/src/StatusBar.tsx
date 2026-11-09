@@ -2,7 +2,7 @@ import { Show } from "solid-js";
 import type { Checkout } from "@octopus/shared/generated.ts";
 import { openView, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
 
-const checkoutLabel = (checkout: Checkout) => (checkout.kind === "worktree" ? checkout.branch : "root checkout");
+const checkoutLabel = (checkout: Checkout) => (checkout.kind === "root" ? "root checkout" : checkout.branch);
 
 export function StatusBar() {
   return (

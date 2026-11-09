@@ -1,4 +1,6 @@
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use octopus_client::CallError;
@@ -15,12 +17,13 @@ use octopus_proto::types::{
     CheckoutKind, Color, PtyId, ReadDir, SessionStart, Stream, Swatch, TaskId, TaskState, WorkspaceId,
 };
 use serde::{Deserialize, Serialize};
-use tauri::ipc::{Channel, InvokeBody, InvokeResponseBody, Response};
+use tauri::ipc::{Channel, InvokeResponseBody, Response};
 use tauri::{Runtime, State};
 use tokio::io::AsyncReadExt;
 use ts_rs::TS;
 
 use crate::hub::{AccountView, Hub, Model, ServerView};
+use crate::lock;
 use crate::task_lists::{TaskRef, auto_swatch};
 use crate::terminal::Terminals;
 use crate::ui::{Ui, UiAct, UiStore};
@@ -333,24 +336,52 @@ pub async fn file_delete(hub: Hubbed<'_>, at: TaskRef, path: String, trash: bool
     hub.call(&at.server, &FileDelete { task: at.task, path, trash }).await.map(drop)
 }
 
-/// Where an upload's bytes go, in its `upload` header as JSON with every character past ASCII escaped.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Upload {
-    at: TaskRef,
-    path: String,
+/// The files and folders dropped onto the window, the only ones on this machine a client copies to a server.
+#[derive(Default)]
+pub struct Dropped(Mutex<HashSet<PathBuf>>);
+
+impl Dropped {
+    pub fn add(&self, paths: &[PathBuf]) {
+        lock(&self.0).extend(paths.iter().cloned());
+    }
 }
 
-/// Creates a file from the raw body of the call, byte for byte.
+/// Copies `local`, a dropped file or folder, to the new `path` of the task's checkout, a folder with every file and
+/// folder in it.
 #[tauri::command]
-pub async fn file_upload(hub: Hubbed<'_>, request: tauri::ipc::Request<'_>) -> Result<(), String> {
-    let header = request.headers().get("upload").ok_or("an upload names its file in the upload header")?;
-    let Upload { at, path } = serde_json::from_slice(header.as_bytes()).map_err(|error| error.to_string())?;
-    let InvokeBody::Raw(bytes) = request.body() else {
-        return Err("an upload's bytes come as the raw body".into());
-    };
+pub async fn file_upload(
+    hub: Hubbed<'_>,
+    dropped: State<'_, Dropped>,
+    at: TaskRef,
+    path: String,
+    local: PathBuf,
+) -> Result<(), String> {
+    if !lock(&dropped.0).contains(&local) {
+        return Err(format!("{} was not dropped onto the window", local.display()));
+    }
     let connection = hub.connection(&at.server)?;
-    connection.upload(at.task, path, bytes).await.map_err(|error| hub.failure(&at.server, error))
+    let mut pending = vec![(path, local, true)];
+    while let Some((path, local, top)) = pending.pop() {
+        let read = |error: std::io::Error| format!("{}: {error}", local.display());
+        let entry = if top { tokio::fs::metadata(&local).await } else { tokio::fs::symlink_metadata(&local).await };
+        let entry = entry.map_err(read)?;
+        if entry.is_dir() {
+            hub.call(&at.server, &FileCreate { task: at.task.clone(), path: path.clone(), kind: EntryKind::Directory })
+                .await?;
+            let mut inside = tokio::fs::read_dir(&local).await.map_err(read)?;
+            while let Some(child) = inside.next_entry().await.map_err(read)? {
+                let name = child.file_name().to_string_lossy().into_owned();
+                pending.push((format!("{path}/{name}"), child.path(), false));
+            }
+        } else if entry.is_file() {
+            let content = tokio::fs::File::open(&local).await.map_err(read)?;
+            let upload = connection.upload(at.task.clone(), path, entry.len(), content).await;
+            upload.map_err(|error| hub.failure(&at.server, error))?;
+        } else {
+            return Err(format!("{} is neither a file nor a folder", local.display()));
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]

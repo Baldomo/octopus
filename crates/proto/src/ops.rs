@@ -277,7 +277,7 @@ op!(
         parent: Option<TaskId>,
         /// The task's state.
         state: TaskState,
-        /// Where the task's files live: the workspace root, or a worktree of its own.
+        /// Where the task's files live.
         checkout: CheckoutKind,
         /// The harness that runs the task's agent.
         harness: String,

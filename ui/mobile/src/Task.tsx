@@ -82,7 +82,7 @@ function PhoneTerm(props: {
   let sink!: HTMLTextAreaElement;
   const [opened, setOpened] = createSignal(false);
   const session = terminalSession({ at: props.at, panel: () => props.panel, shown: () => props.visible && opened() });
-  const { xterm, mine } = session;
+  const { xterm, mine, claimed } = session;
   xterm.options.disableStdin = true;
   xterm.options.cursorInactiveStyle = "block";
   xterm.options.fontFamily = TERMINAL_FONT;
@@ -93,7 +93,7 @@ function PhoneTerm(props: {
   const [screen, setScreen] = createSignal<Size>({ width: 0, height: 0 });
   const [pan, setPan] = createSignal({ x: 0, y: 0 });
   const [ctrl, setCtrl] = createSignal(false);
-  const cropped = () => !mine() && (screen().width > view().width || screen().height > view().height);
+  const cropped = () => !claimed() && (screen().width > view().width || screen().height > view().height);
   const most = () => ({
     x: Math.max(screen().width - view().width, 0),
     y: Math.max(screen().height - view().height, 0),
@@ -356,7 +356,7 @@ function PhoneTerm(props: {
     xterm.options.theme = {
       ...xterm.options.theme,
       background: color("--bg"),
-      foreground: color(mine() ? "--term-text" : "--dim"),
+      foreground: color(claimed() ? "--term-text" : "--dim"),
       cursor: color("--text"),
       cursorAccent: color("--bg"),
       selectionBackground: color("--select"),
@@ -390,7 +390,7 @@ function PhoneTerm(props: {
       <div
         ref={pane}
         class="term"
-        classList={{ held: !mine(), stale: !live() }}
+        classList={{ held: !claimed(), stale: !live() }}
         onTouchStart={(event) => {
           const touch = event.touches[0];
           from = touch === undefined ? null : { x: touch.clientX, y: touch.clientY };
@@ -493,6 +493,7 @@ function PhoneTerm(props: {
                     <Icon name="kbd" />
                   </button>
                 </Match>
+                <Match when={claimed()}>{null}</Match>
                 <Match when={props.panel.running}>
                   <Id>{props.panel.lock_holder?.name ?? "lock free"}</Id>
                   <button class="btn" onClick={session.take}>

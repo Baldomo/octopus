@@ -22,8 +22,8 @@ use crate::task_lists::{Column, Glyph, Lists, Row, Section, TaskRef, WorkspaceRe
 use crate::task_view::{PanelView, TaskView};
 use crate::terminal::TermScreen;
 use crate::ui::{
-    Bounds, FOCUSED_EVENT, Floated, Modal, Prefs, Reveal, SHOWN_EVENT, Split, Surface, UI_EVENT, Ui, UiAct, View,
-    Viewport,
+    Bounds, FILE_DRAG_EVENT, FOCUSED_EVENT, FileDrag, Floated, Modal, Prefs, Reveal, SHOWN_EVENT, Split, Surface,
+    UI_EVENT, Ui, UiAct, View, Viewport,
 };
 
 /// Where the rendered file lives, relative to the workspace root.
@@ -102,6 +102,7 @@ pub fn render() -> String {
         NewTask,
         Bounds,
         Floated,
+        FileDrag,
     );
     let constants = [
         constant("TASK_STATES", &TaskState::ALL),
@@ -128,6 +129,7 @@ pub fn render() -> String {
                 "ui": UI_EVENT,
                 "windowShown": SHOWN_EVENT,
                 "windowFocused": FOCUSED_EVENT,
+                "fileDrag": FILE_DRAG_EVENT,
                 "microphoneDenied": MICROPHONE_DENIED_EVENT,
             }),
         ),
