@@ -1,8 +1,8 @@
 import { createResource, createSignal, For, Show } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
-import type { Section, Swatch } from "@octopus/shared/generated.ts";
+import type { Swatch } from "@octopus/shared/generated.ts";
 import { pickSwatch, sameSwatch, SWATCHES } from "@octopus/shared/swatches.ts";
-import { act, model, report, serverLabel, serverView, servers } from "@octopus/shared/state.ts";
+import { act, model, report, sectionView, serverLabel, serverView, servers, tasksOn } from "@octopus/shared/state.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
 import { Icon } from "./Icon";
@@ -36,10 +36,8 @@ function Matrix(props: { on: Swatch | null; auto: Swatch | undefined; pick: (swa
 const SectionDot = () => <i class="dot srv" style={{ background: "var(--ws)" }} />;
 
 export function SectionMenu(props: { name: string }) {
-  const section = () => model.lists.sections.find((shown) => shown.name === props.name);
+  const section = () => sectionView(props.name);
   const workspaces = () => model.lists.workspaces.filter((workspace) => workspace.name === props.name);
-  const live = (shown: Section, server: string) =>
-    shown.groups.reduce((count, group) => count + group.rows.filter((row) => row.at.server === server).length, 0);
   return (
     <Sheet>
       <Show when={section()}>
@@ -80,7 +78,7 @@ export function SectionMenu(props: { name: string }) {
             <Sep />
             <For each={workspaces()}>
               {(workspace) => {
-                const count = () => live(shown(), workspace.server);
+                const count = () => tasksOn(shown(), workspace.server);
                 const reachable = () => serverView(workspace.server)?.reachable === true;
                 const why = () => (!reachable() ? "unreachable" : count() > 0 ? `${count()} live` : null);
                 return (

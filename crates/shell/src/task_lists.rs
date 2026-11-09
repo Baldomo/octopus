@@ -230,6 +230,20 @@ pub(crate) mod tests {
     use super::*;
     use octopus_proto::types::{Checkout, Session, SessionId, Workspace};
 
+    #[test]
+    fn a_task_shows_its_agent_while_live_and_how_it_ended_after() {
+        let mut working = task("tsk_1", "wsp_a", None, "t", TaskState::Temporary);
+        working.agent = Agent::Running { status: AgentStatus::Working };
+        let mut cancelled = working.clone();
+        cancelled.state = TaskState::Cancelled;
+        let mut missing = task("tsk_1", "wsp_a", None, "t", TaskState::Pinned);
+        missing.agent = Agent::HarnessUnknown;
+        assert_eq!(
+            [Glyph::of(&working), Glyph::of(&cancelled), Glyph::of(&missing)],
+            [Glyph::Working, Glyph::Cancelled, Glyph::Idle]
+        );
+    }
+
     pub fn task(id: &str, workspace: &str, parent: Option<&str>, title: &str, state: TaskState) -> Task {
         Task {
             id: TaskId(id.into()),
@@ -366,20 +380,6 @@ pub(crate) mod tests {
         assert!(
             AUTO_HUES.iter().all(|hue| picks.iter().any(|swatch| swatch.hue == *hue)),
             "auto spreads over every hue it may take"
-        );
-    }
-
-    #[test]
-    fn a_task_shows_its_agent_while_live_and_how_it_ended_after() {
-        let mut working = task("tsk_1", "wsp_a", None, "t", TaskState::Temporary);
-        working.agent = Agent::Running { status: AgentStatus::Working };
-        let mut cancelled = working.clone();
-        cancelled.state = TaskState::Cancelled;
-        let mut missing = task("tsk_1", "wsp_a", None, "t", TaskState::Pinned);
-        missing.agent = Agent::HarnessUnknown;
-        assert_eq!(
-            [Glyph::of(&working), Glyph::of(&cancelled), Glyph::of(&missing)],
-            [Glyph::Working, Glyph::Cancelled, Glyph::Idle]
         );
     }
 }

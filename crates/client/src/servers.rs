@@ -180,29 +180,6 @@ impl Servers {
         servers.save(config)?;
         Ok(servers)
     }
-
-    /// Lists the server named `from` as `to`, which no other listed server may be called.
-    pub fn rename(&mut self, from: &str, to: &str) -> anyhow::Result<Server> {
-        if from != to && self.servers.iter().any(|known| known.name == to) {
-            bail!("a server named {to} is already listed");
-        }
-        let renamed = Server { name: to.to_string(), address: self.get(from)?.address.clone() };
-        renamed.validate()?;
-        let index = self.servers.iter().position(|known| known.name == from).expect("get found it");
-        self.servers[index] = renamed.clone();
-        Ok(renamed)
-    }
-
-    /// Drops the server and its pin from this client's list.
-    pub fn forget(&mut self, name: &str) -> anyhow::Result<()> {
-        self.get(name)?;
-        self.servers.retain(|known| known.name != name);
-        Ok(())
-    }
-
-    pub fn get(&self, name: &str) -> anyhow::Result<&Server> {
-        self.servers.iter().find(|server| server.name == name).ok_or_else(|| no_server(name))
-    }
 }
 
 impl Identity {
@@ -340,7 +317,8 @@ pub fn rename(config: &Config, me: &Identity, from: &str, to: &str) -> anyhow::R
     Server { name: to.to_string(), address: server.address.clone() }.validate()?;
     match server.address {
         Address::Local { .. } => {
-            locals.rename(from, to)?;
+            let known = locals.servers.iter_mut().find(|known| known.name == from).expect("reach found it here");
+            known.name = to.to_string();
             locals.save(config)
         }
         Address::Remote { key, .. } => {
@@ -362,7 +340,7 @@ pub fn forget(config: &Config, me: &Identity, name: &str) -> anyhow::Result<()> 
     let server = locals.reach(me, name)?;
     match server.address {
         Address::Local { .. } => {
-            locals.forget(name)?;
+            locals.servers.retain(|known| known.name != name);
             locals.save(config)
         }
         Address::Remote { key, .. } => me.account.append(&me.key, Change::ForgetServer { server: key }),

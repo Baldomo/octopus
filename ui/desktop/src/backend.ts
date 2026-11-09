@@ -1,5 +1,5 @@
 import { invoke as invokeAny, type InvokeArgs } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { on } from "@octopus/shared/backend.ts";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { BrowserId, TaskRef } from "@octopus/shared/generated.ts";
 import { BACKGROUND_BROWSER_PANEL, NEW_BROWSER_PANEL } from "@octopus/shared/generated.ts";
@@ -49,11 +49,6 @@ export const desktop = {
   /** Opens an `http` or `https` URL in the system's browser. */
   openOutside: openUrl,
 };
-
-const on =
-  <T>(event: string) =>
-  (handle: (payload: T) => void) =>
-    listen<T>(event, (heard) => handle(heard.payload));
 
 export const desktopEvents = {
   browserPaged: on<Paged>(EVENTS.browserPaged),

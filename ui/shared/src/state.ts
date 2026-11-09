@@ -1,20 +1,23 @@
 import { createRoot, createSelector, createSignal } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { backend } from "./backend";
-import type {
-  AccountView,
-  Appearance,
-  Boot,
-  Model,
-  Modal,
-  Prefs,
-  ServerView,
-  Surface,
-  TaskView,
-  Ui,
-  UiAct,
-  View,
-  ZoomStep,
+import {
+  LIVE_STATES,
+  type AccountView,
+  type Appearance,
+  type Boot,
+  type Model,
+  type Modal,
+  type Prefs,
+  type Section,
+  type ServerView,
+  type Surface,
+  type TaskState,
+  type TaskView,
+  type Ui,
+  type UiAct,
+  type View,
+  type ZoomStep,
 } from "./generated";
 import { inSectionOrder } from "./sectionOrder";
 
@@ -129,6 +132,14 @@ export const openView = (): TaskView | undefined => {
 };
 
 export const serverView = (name: string) => servers().find((server) => server.name === name);
+
+export const sectionView = (name: string | null | undefined) =>
+  model.lists.sections.find((section) => section.name === name);
+
+export const tasksOn = (section: Section, server: string) =>
+  section.groups.reduce((count, group) => count + group.rows.filter((row) => row.at.server === server).length, 0);
+
+export const isLive = (state: TaskState) => LIVE_STATES.some((live) => live === state);
 
 export const isLocal = (name: string) => serverView(name)?.relay === null;
 

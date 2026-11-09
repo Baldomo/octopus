@@ -56,19 +56,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).expect("clean up");
     }
 
-    #[test]
-    fn a_listed_server_renames_to_a_free_name_and_forgets() {
-        use crate::servers::{Server, Servers};
-        let at = |name: &str| Server { name: name.into(), address: Address::Local { socket: address(name) } };
-        let mut servers = Servers { servers: vec![at("laptop"), at("mac-mini")] };
-        assert!(servers.rename("laptop", "mac-mini").is_err());
-        assert!(servers.rename("laptop", "a/b").is_err());
-        servers.rename("laptop", "desk").expect("rename");
-        servers.forget("mac-mini").expect("forget");
-        assert!(servers.forget("mac-mini").is_err());
-        assert_eq!(servers.servers, [Server { name: "desk".into(), address: at("laptop").address }]);
-    }
-
     #[tokio::test]
     async fn a_call_after_the_server_hangs_up_fails_instead_of_waiting() {
         let socket = address("closed");

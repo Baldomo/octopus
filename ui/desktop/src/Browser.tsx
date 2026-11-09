@@ -52,14 +52,16 @@ const page = (task: string, panel: BrowserId): Page | undefined => pages[task]?.
 const setPage = (task: string, panel: BrowserId, change: Partial<Page>) =>
   setPages(produce((all) => ((all[task] ??= {})[panel] = { ...blank, ...all[task]?.[panel], ...change })));
 
-desktopEvents
-  .browserPaged(({ task, panel, url, loading, back, forward, tunnel }) =>
+act(
+  desktopEvents.browserPaged(({ task, panel, url, loading, back, forward, tunnel }) =>
     setPage(task, panel, { url, loading, back, forward, tunnel, ...(loading ? { failed: null } : {}) }),
-  )
-  .catch(report);
-desktopEvents
-  .browserFailed(({ task, panel, url, error }) => setPage(task, panel, { failed: { url, error }, loading: false }))
-  .catch(report);
+  ),
+);
+act(
+  desktopEvents.browserFailed(({ task, panel, url, error }) =>
+    setPage(task, panel, { failed: { url, error }, loading: false }),
+  ),
+);
 
 /** Native webview calls run in the order the UI makes them, so a page exists before it is placed or closed. */
 let queue: Promise<unknown> = Promise.resolve();

@@ -3,13 +3,13 @@ import { Portal } from "solid-js/web";
 import { backend } from "@octopus/shared/backend.ts";
 import { AGENT_PANEL, type PanelView, type PtyId, type TaskRef, type TaskView } from "@octopus/shared/generated.ts";
 import { ago, clock, ticking } from "@octopus/shared/time.ts";
-import { act, model, report, scale, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
+import { act, model, scale, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
 import { clickReport, type ScreenCell, wheelReport } from "@octopus/shared/mouseReports.ts";
 import { cellSize, type Size, terminalSession } from "@octopus/shared/terminalSession.ts";
 import { colors, scheme } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
 import { animateList } from "@octopus/shared/flip.ts";
-import { EachPanel } from "@octopus/shared/panels.ts";
+import { EachPanel, taskPanels } from "@octopus/shared/panels.ts";
 import { Icon } from "./Icon";
 import { onPainted } from "./motion";
 import { micDenied, openSheet } from "./nav";
@@ -21,7 +21,7 @@ import { type Scroll, scroller } from "./scroll";
 import { TERMINAL_FONT } from "./symbols";
 import { type Cell, charAt, termSelection, wrappedLine } from "./termSelect";
 import { slidingThumb } from "./thumb";
-import { notify } from "./Toast";
+import { copy, notify } from "./Toast";
 import { COMMIT_PX, owns, type Gesture } from "./touch";
 
 /**
@@ -552,13 +552,7 @@ function Missing(props: { open: TaskView }) {
               <b>{props.open.task.harness}</b> is not installed on {server()}.
             </Para>
             <Gap n={2} />
-            <div
-              class="cmd wrap"
-              role="button"
-              onClick={() =>
-                navigator.clipboard.writeText(command()).then(() => notify("Copied the install command"), report)
-              }
-            >
+            <div class="cmd wrap" role="button" onClick={() => act(copy(command(), "the install command"))}>
               <span class="name">{command()}</span>
               <Slot>
                 <Icon name="copy" />
@@ -576,16 +570,12 @@ function Missing(props: { open: TaskView }) {
 function TaskScreen(props: { open: TaskView }) {
   const now = ticking();
   const [chosen, setChosen] = createSignal<PtyId | null>(null);
-  const panels = () => props.open.panels;
-  const agent = () => panels().find((panel) => panel.name === AGENT_PANEL);
-  const shells = () => panels().filter((panel) => panel.name !== AGENT_PANEL);
-  const selected = () => shells().find((panel) => panel.id === chosen()) ?? agent();
+  const { panels, agent, shells, selected, agentOn } = taskPanels(() => props.open, chosen);
   const choose = (panel: PtyId | null) => {
     if (panel !== chosen()) feel("select");
     setChosen(panel);
   };
 
-  const agentOn = () => selected() === agent();
   const missing = () => ["harness_unknown", "harness_not_installed"].includes(props.open.task.agent.kind);
   const reach = () => reachOf(props.open.at, selected(), now());
   const live = () => reach().is === "reachable";

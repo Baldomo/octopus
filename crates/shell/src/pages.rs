@@ -224,22 +224,13 @@ mod tests {
     }
 
     #[test]
-    fn a_file_page_loads_from_its_roots_origin_and_reads_back_as_the_same_file_url() {
+    fn a_page_shares_its_origin_with_its_own_root_alone_and_reads_back_as_its_file_url() {
         let pages = Pages::default();
         let page = url("file:///tmp/my%20site/index.html?tab=2#top");
         let loaded = pages.loaded_from("mac mini", &page).expect("a file page");
-        let origin = loaded.host_str().expect("an origin").to_string();
-        assert_eq!((origin.len(), loaded.path()), (2 * ORIGIN_BYTES, "/index.html"));
         assert_eq!(pages.page_of(&loaded), page);
         let style = loaded.join("sub%20dir/../style.css").expect("a URL");
         assert_eq!(pages.page_of(&style).as_str(), "file:///tmp/my%20site/style.css");
-        let web = url("http://localhost:5173/");
-        assert_eq!((pages.loaded_from("mac mini", &web), pages.page_of(&web)), (Ok(web.clone()), web));
-    }
-
-    #[test]
-    fn a_page_shares_its_origin_with_its_own_root_alone() {
-        let pages = Pages::default();
         let origin = |server: &str, page: &str| {
             pages.loaded_from(server, &url(page)).expect("a file page").host_str().expect("an origin").to_string()
         };

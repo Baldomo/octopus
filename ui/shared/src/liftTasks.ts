@@ -17,7 +17,7 @@ import {
 } from "./lift";
 import { curve, play, PROJECT_S, reduced, SNAPPY } from "./motion";
 import { moveTo, placeAmong } from "./sectionOrder";
-import { arrange, arranged, model, orderSections, report, sections, ui } from "./state";
+import { arrange, arranged, model, orderSections, report, sectionView, sections, ui } from "./state";
 
 type Aim = { state: TaskState; under: TaskView | null };
 
@@ -94,7 +94,7 @@ export const lift =
   (element, from, surface) => {
     const { list, free, throws, covered, zoom, feel } = surface;
     endLift();
-    const shown = model.lists.sections.find((each) => each.name === section);
+    const shown = sectionView(section);
     const rowsOf = (state: TaskState | undefined) =>
       (free ? shown?.columns : shown?.groups)?.find((each) => each.state === state)?.rows ?? [];
     const own = rowsOf(stateOf(element));

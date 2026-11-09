@@ -100,20 +100,17 @@ impl ServerVerb {
             Self::Add { name, socket } => {
                 print(&Servers::remember(&Config::user()?, KnownServer { name, address: Address::Local { socket } })?)
             }
-            Self::Rename { server, name } => {
-                let config = Config::user()?;
-                let me = Identity::load(&config)?;
-                servers::rename(&config, &me, &server, &name)?;
-                account::sync_everywhere(&config, &me).await
-            }
-            Self::Forget { server } => {
-                let config = Config::user()?;
-                let me = Identity::load(&config)?;
-                servers::forget(&config, &me, &server)?;
-                account::sync_everywhere(&config, &me).await
-            }
+            Self::Rename { server, name } => synced(|config, me| servers::rename(config, me, &server, &name)).await,
+            Self::Forget { server } => synced(|config, me| servers::forget(config, me, &server)).await,
         }
     }
+}
+
+async fn synced(change: impl FnOnce(&Config, &Identity) -> anyhow::Result<()>) -> anyhow::Result<()> {
+    let config = Config::user()?;
+    let me = Identity::load(&config)?;
+    change(&config, &me)?;
+    account::sync_everywhere(&config, &me).await
 }
 
 #[derive(Subcommand)]

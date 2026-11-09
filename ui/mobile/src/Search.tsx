@@ -1,7 +1,7 @@
 import { createSignal, For, type JSX } from "solid-js";
 import { fileMatches } from "@octopus/shared/fileMatches.ts";
-import type { Appearance } from "@octopus/shared/generated.ts";
-import { act, model, setAppearance, ui } from "@octopus/shared/state.ts";
+import { APPEARANCES } from "@octopus/shared/ClientMenu.tsx";
+import { act, model, openView, setAppearance } from "@octopus/shared/state.ts";
 import { filesOf, nameOf } from "@octopus/shared/taskFiles.ts";
 import { Icon } from "./Icon";
 import { onPainted } from "./motion";
@@ -14,17 +14,10 @@ const MATCHED_LINES = 1000;
 
 type Result = { slot: JSX.Element; label: string; where?: string; run: () => void };
 
-const APPEARANCE: [Appearance, string][] = [
-  ["system", "System"],
-  ["light", "Light"],
-  ["dark", "Dark"],
-];
-
 export function Search() {
   const [query, setQuery] = createSignal("");
   const needle = () => query().trim().toLowerCase();
-  const opened = () => (ui.prefs.open === null ? undefined : model.tasks[ui.prefs.open]);
-  const matches = fileMatches(() => opened()?.at, query, MATCHED_LINES);
+  const matches = fileMatches(() => openView()?.at, query, MATCHED_LINES);
   const paths = () => [...new Set(matches().map((match) => match.path))].slice(0, PER_GROUP);
   let field!: HTMLInputElement;
   onPainted(() => field.focus({ preventScroll: true }));
@@ -42,7 +35,7 @@ export function Search() {
             run: () => openTask(view.key, view.at),
           }));
   const files = (): Result[] => {
-    const open = opened();
+    const open = openView();
     if (open === undefined) return [];
     return paths().map((path) => ({
       slot: <Icon name="file" />,
@@ -58,7 +51,7 @@ export function Search() {
     [
       { slot: <Icon name="plus" />, label: "New task", run: () => openSheet({ is: "newtask", section: null }) },
       { slot: <Icon name="qr" />, label: "Pair a server…", run: () => go({ at: "scan", reading: "invite" }) },
-      ...APPEARANCE.map(([appearance, name]) => ({
+      ...APPEARANCES.map(([appearance, name]) => ({
         slot: <Icon name="sun" />,
         label: `Appearance: ${name}`,
         run: () => {

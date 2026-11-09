@@ -6,7 +6,7 @@ import type { LiftOnDrag } from "./lift";
 import { MenuHost } from "./Menu";
 import { Toast } from "./Toast";
 import { filesOf, loadMonaco, nameOf, renderable, tabHints, type TaskFiles } from "./taskFiles";
-import { act, openView, report } from "./state";
+import { act, openView } from "./state";
 
 type Editor = import("monaco-editor").editor.IStandaloneCodeEditor;
 type Shown = { files: TaskFiles; path: string } | undefined;
@@ -151,7 +151,7 @@ export function Files(props: { visible: boolean; drag: LiftOnDrag; outside?: Out
     editor.setModel(buffer?.model ?? null);
     if (buffer?.view) editor.restoreViewState(buffer.view);
   };
-  createEffect(on(active, (next) => show(next).catch(report)));
+  createEffect(on(active, (next) => act(show(next))));
 
   return (
     <div class="files" tabIndex={-1}>

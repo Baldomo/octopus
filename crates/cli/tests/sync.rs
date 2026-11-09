@@ -11,8 +11,8 @@ use octopus_proto::{Event, Push};
 #[tokio::test(flavor = "multi_thread")]
 async fn clients_moving_tasks_at_once_converge_on_one_server_state() {
     let (dir, running) = server().await;
-    let laptop = connect(&running, "laptop").await;
-    let desk = connect(&running, "desk").await;
+    let laptop = connect(&running.socket, "laptop").await;
+    let desk = connect(&running.socket, "desk").await;
     let mut pushes = laptop.pushes();
     let mut cache = Cache::from_snapshot(laptop.call(&SessionSync { since_rev: None }).await.expect("sync"));
 

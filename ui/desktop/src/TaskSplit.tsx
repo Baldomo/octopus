@@ -1,6 +1,6 @@
 import { createEffect, createSignal, on, type JSX } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
-import { report, resetSplit, ui } from "@octopus/shared/state.ts";
+import { act, report, resetSplit, ui } from "@octopus/shared/state.ts";
 import { desktop } from "./backend";
 import { holds, MIDDLE } from "./detent";
 
@@ -32,7 +32,7 @@ export function TaskSplit(props: { shown: boolean; surface: JSX.Element; termina
     const { left, width, middleOpen } = columns();
     const share = Math.min(1, Math.max(0, (x - left - divider.offsetWidth / 2) / width));
     const catches = middleOpen && holds((share - MIDDLE) * width, centered());
-    if (catches && !centered()) desktop.hapticAlignment().catch(report);
+    if (catches && !centered()) act(desktop.hapticAlignment());
     setCentered(catches);
     setDragged(catches ? MIDDLE : share);
   };

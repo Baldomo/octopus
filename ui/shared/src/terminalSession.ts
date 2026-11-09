@@ -48,9 +48,6 @@ export const [windowShown, setWindowShown] = createSignal(true);
 const [windowFocuses, setWindowFocuses] = createSignal(0);
 export const windowFocused = () => setWindowFocuses((count) => count + 1);
 
-export const readOnlyLabel = (panel: PanelView) =>
-  panel.lock_holder === null ? "read-only · lock free" : `read-only · held by ${panel.lock_holder.name}`;
-
 type Cells = { cols: number; rows: number };
 export type Size = { width: number; height: number };
 type Core = { _charSizeService: { measure: () => void }; _renderService: { dimensions: { css: { cell: Size } } } };
@@ -62,19 +59,7 @@ export function cellSize(xterm: Terminal): Size {
   return core._renderService.dimensions.css.cell;
 }
 
-type TerminalSession = {
-  xterm: Terminal;
-  mine: () => boolean;
-  claimed: () => boolean;
-  shown: () => boolean;
-  sgrMouse: () => boolean;
-  input: (keys: string) => void;
-  take: () => void;
-  fit: () => void;
-  open: (pane: HTMLElement) => void;
-};
-
-export function terminalSession(props: { at: TaskRef; panel: () => PanelView; shown: () => boolean }): TerminalSession {
+export function terminalSession(props: { at: TaskRef; panel: () => PanelView; shown: () => boolean }) {
   const mine = createMemo(() => props.panel().held_here);
   const shown = createMemo(props.shown);
   const xterm = new Terminal({
@@ -229,7 +214,7 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
     claimed,
     shown,
     sgrMouse: sgr.on,
-    input: (keys) => {
+    input: (keys: string) => {
       if (attachment !== null) act(backend.termInput(attachment, keys));
     },
     take: () =>
@@ -239,7 +224,7 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
         () => true,
       ),
     fit,
-    open: (pane) => {
+    open: (pane: HTMLElement) => {
       xterm.open(pane);
       try {
         const webgl = new WebglAddon();

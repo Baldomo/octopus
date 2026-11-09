@@ -6,7 +6,7 @@ import { desktop, desktopEvents } from "./backend";
 import { Browser, forgetBrowsersExcept, openLink } from "./Browser";
 import { ClientMenu } from "@octopus/shared/ClientMenu.tsx";
 import { Files } from "@octopus/shared/Files.tsx";
-import { filesOf, forgetFilesExcept } from "@octopus/shared/taskFiles.ts";
+import { filesOf, forgetFilesExcept, nameOf, parentOf } from "@octopus/shared/taskFiles.ts";
 import { commands, hint } from "@octopus/shared/commands.ts";
 import { NewTask } from "@octopus/shared/NewTask.tsx";
 import { JoinAccount, PairServer } from "@octopus/shared/PairServer.tsx";
@@ -241,7 +241,7 @@ function Modal(props: { modal: ModalName }) {
 export function Floating() {
   const sidebar = floating({ name: "sidebar", modal: holdsKeyboard, out: () => ui.sidebar });
   const unlisten = desktopEvents.browserDownloaded(({ path, success }) => {
-    const [folder, name] = [path.slice(0, path.lastIndexOf("/")), path.slice(path.lastIndexOf("/") + 1)];
+    const [folder, name] = [parentOf(path), nameOf(path)];
     if (success)
       toast(
         <>

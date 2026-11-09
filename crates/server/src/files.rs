@@ -8,7 +8,7 @@ use octopus_proto::Error;
 use octopus_proto::ops::{Entry, EntryKind, Match};
 
 use octopus_proto::types::{ReadDir, TaskId};
-use tokio::io::{AsyncReadExt, Take};
+use tokio::io::{AsyncRead, AsyncReadExt, Take};
 
 use crate::{Server, lock};
 
@@ -155,8 +155,8 @@ pub fn create(checkout: &Path, path: &str, kind: EntryKind) -> Result<(), Error>
 
 /// A new file whose bytes gather beside it until they all arrive, so a broken upload leaves nothing at its path.
 pub struct Upload {
-    pub gathering: tempfile::NamedTempFile,
-    pub bytes: u64,
+    gathering: tempfile::NamedTempFile,
+    bytes: u64,
     target: PathBuf,
 }
 
@@ -171,7 +171,23 @@ pub fn upload(checkout: &Path, path: &str, bytes: u64) -> Result<Upload, Error> 
 }
 
 impl Upload {
-    pub fn land(self) -> Result<(), Error> {
+    /// Lands the upload once exactly its declared bytes arrive and the client finishes its stream; a short or long
+    /// one lands nothing, and a long one stops being read one byte past its size.
+    pub async fn receive<R: AsyncRead + Unpin>(self, input: R) -> Result<(), Error> {
+        let gathering = self.gathering.as_file().try_clone().map_err(Error::internal)?;
+        let mut file = tokio::fs::File::from_std(gathering);
+        let bytes = self.bytes;
+        let arrived = tokio::io::copy(&mut input.take(bytes + 1), &mut file)
+            .await
+            .map_err(|error| Error::internal(format!("upload: {error}")))?;
+        if arrived != bytes {
+            return Err(Error::invalid(format!("the upload carried {arrived} bytes, not its declared {bytes}")));
+        }
+        file.sync_all().await.map_err(Error::internal)?;
+        tokio::task::spawn_blocking(move || self.land()).await.expect("server work does not panic")
+    }
+
+    fn land(self) -> Result<(), Error> {
         self.gathering.persist_noclobber(&self.target).map(drop).map_err(|refused| io(&self.target, refused.error))
     }
 }
@@ -286,9 +302,5 @@ impl Server {
             ReadDir::Page(root) if Path::new(root).is_absolute() => Ok(PathBuf::from(root)),
             ReadDir::Page(root) => Err(Error::invalid(format!("{root} is no absolute directory"))),
         }
-    }
-
-    pub(crate) fn upload_file(&self, task: &TaskId, path: &str, bytes: u64) -> Result<Upload, Error> {
-        upload(&self.checkout_dir(task)?, path, bytes)
     }
 }

@@ -15,7 +15,7 @@ async fn a_client_works_on_a_tasks_files_through_its_server() {
     let (dir, running) = server().await;
     let checkout = dir.path().join("repo");
     std::fs::create_dir(&checkout).expect("mkdir");
-    let laptop = connect(&running, "laptop").await;
+    let laptop = connect(&running.socket, "laptop").await;
     let workspace = workspace(&laptop, &checkout).await;
     let task = create(&laptop, &workspace, CheckoutKind::Root, "none").await;
     let mut pushes = laptop.pushes();
@@ -48,9 +48,6 @@ async fn a_client_works_on_a_tasks_files_through_its_server() {
     })
     .await;
     assert_eq!(pushed.expect("no file.changed for notes.md"), task);
-
-    let outside = laptop.call(&FileList { task, path: "../".into() }).await;
-    assert!(matches!(refused(outside), Error::InvalidArgs { .. }));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -60,7 +57,7 @@ async fn a_client_rearranges_a_checkout_without_reaching_past_it() {
     std::fs::create_dir(&checkout).expect("mkdir");
     std::fs::create_dir(dir.path().join("secret")).expect("mkdir");
     std::os::unix::fs::symlink(dir.path().join("secret"), checkout.join("out")).expect("symlink");
-    let laptop = connect(&running, "laptop").await;
+    let laptop = connect(&running.socket, "laptop").await;
     let workspace = workspace(&laptop, &checkout).await;
     let task = create(&laptop, &workspace, CheckoutKind::Root, "none").await;
     let (create, rename, copy) = (
@@ -103,6 +100,7 @@ async fn a_client_rearranges_a_checkout_without_reaching_past_it() {
         laptop.call(&copy("docs", "docs link/again")).await.map(drop),
         laptop.call(&create("out/planted", EntryKind::File)).await.map(drop),
         laptop.call(&FileList { task: task.clone(), path: "out".into() }).await.map(drop),
+        laptop.call(&FileList { task: task.clone(), path: "../".into() }).await.map(drop),
         laptop.call(&copy("logo.png", "out/logo.png")).await.map(drop),
         laptop.call(&FileDelete { task: task.clone(), path: ".".into(), trash: false }).await.map(drop),
     ] {

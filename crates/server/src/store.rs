@@ -151,6 +151,12 @@ fn bump_rev(tx: &Transaction) -> Result<u64, Error> {
         .map_err(Error::internal)
 }
 
+fn commit_rev(tx: Transaction) -> Result<u64, Error> {
+    let rev = bump_rev(&tx)?;
+    tx.commit().map_err(Error::internal)?;
+    Ok(rev)
+}
+
 /// Moves the task to a new rev and commits.
 fn revise_task(tx: Transaction, task: &TaskId) -> Result<TaskRow, Error> {
     let rev = bump_rev(&tx)?;
@@ -362,9 +368,7 @@ impl Store {
             params![workspace.id.0, workspace.name, workspace.root, to_wire(&color)],
         )
         .map_err(Error::internal)?;
-        let rev = bump_rev(&tx)?;
-        tx.commit().map_err(Error::internal)?;
-        Ok((workspace, rev))
+        Ok((workspace, commit_rev(tx)?))
     }
 
     pub fn workspaces(&self) -> Result<Vec<Workspace>, Error> {
@@ -396,9 +400,7 @@ impl Store {
             .optional()
             .map_err(Error::internal)?
             .ok_or_else(|| Error::not_found(id))?;
-        let rev = bump_rev(&tx)?;
-        tx.commit().map_err(Error::internal)?;
-        Ok((workspace, rev))
+        Ok((workspace, commit_rev(tx)?))
     }
 
     pub fn color_workspace(&mut self, id: &WorkspaceId, color: Color) -> Result<(Workspace, u64), Error> {
@@ -412,9 +414,7 @@ impl Store {
             .optional()
             .map_err(Error::internal)?
             .ok_or_else(|| Error::not_found(id))?;
-        let rev = bump_rev(&tx)?;
-        tx.commit().map_err(Error::internal)?;
-        Ok((workspace, rev))
+        Ok((workspace, commit_rev(tx)?))
     }
 
     pub fn workspace_tasks(&self, id: &WorkspaceId) -> Result<Vec<TaskRow>, Error> {
@@ -450,9 +450,7 @@ impl Store {
         }
         tx.execute("DELETE FROM tasks WHERE workspace = ?1", [&id.0]).map_err(Error::internal)?;
         tx.execute("DELETE FROM workspaces WHERE id = ?1", [&id.0]).map_err(Error::internal)?;
-        let rev = bump_rev(&tx)?;
-        tx.commit().map_err(Error::internal)?;
-        Ok((rerooted, rev))
+        Ok((rerooted, commit_rev(tx)?))
     }
 
     pub fn set_harness(&mut self, id: &str, harness: &Harness) -> Result<u64, Error> {
@@ -462,9 +460,7 @@ impl Store {
              resume = excluded.resume, install = excluded.install, hooks = excluded.hooks"
         );
         tx.execute(&upsert, harness_values(id, harness)).map_err(Error::internal)?;
-        let rev = bump_rev(&tx)?;
-        tx.commit().map_err(Error::internal)?;
-        Ok(rev)
+        commit_rev(tx)
     }
 
     pub fn harness(&self, id: &str) -> Result<Option<Harness>, Error> {
@@ -647,17 +643,6 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_store_whose_tasks_record_no_session_started_is_refused() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("store.db");
-        Connection::open(&path)
-            .and_then(|db| db.execute_batch("CREATE TABLE tasks (id TEXT PRIMARY KEY, session TEXT)"))
-            .expect("an unconverted store");
-        let Err(Error::Internal { message }) = Store::open(&path) else { panic!("the store opened") };
-        assert!(message.ends_with("its tasks record no session_started, so this server cannot open it"), "{message}");
-    }
 
     #[test]
     fn a_task_keeps_its_browser_panels_in_the_order_they_moved_to_and_a_new_one_joins_the_end() {

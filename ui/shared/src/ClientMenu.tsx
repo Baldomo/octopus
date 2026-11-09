@@ -8,6 +8,7 @@ import { ServerMenu } from "./ServerMenu";
 import { VERSION } from "./generated";
 import {
   account,
+  act,
   harnesses,
   me,
   report,
@@ -87,7 +88,7 @@ export function accountModes() {
 function Account() {
   const now = ticking();
   const { mode, setMode, shownLink, removing, done } = accountModes();
-  const copyLink = (shown: ShownLink) => copy(shown.link, "the link").catch(report);
+  const copyLink = (shown: ShownLink) => act(copy(shown.link, "the link"));
   copyOnShortcut(shownLink, copyLink);
   const Join = () => <Item run={() => showModal("join_account")}>Join an account…</Item>;
   return (
@@ -101,7 +102,7 @@ function Account() {
           <>
             <div class="mh label">Removed from this account</div>
             <Join />
-            <Item run={() => backend.accountStartOver().catch(report)}>Start over</Item>
+            <Item run={() => act(backend.accountStartOver())}>Start over</Item>
           </>
         }
       >

@@ -1,7 +1,7 @@
 import { For, Show, type JSX } from "solid-js";
 import type { Glyph as Status, ServerView } from "@octopus/shared/generated.ts";
 import { turning } from "@octopus/shared/Glyph.tsx";
-import { model } from "@octopus/shared/state.ts";
+import { sectionView } from "@octopus/shared/state.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
 import { Icon, type IconName } from "./Icon";
@@ -11,7 +11,7 @@ import { slidingThumb } from "./thumb";
 
 /** The color of the section named `name`, faint while the model lists none by that name. */
 export const sectionColor = (name: string | undefined) => {
-  const section = model.lists.sections.find((shown) => shown.name === name);
+  const section = sectionView(name);
   return section === undefined ? "var(--faint)" : swatchColor(section.swatch);
 };
 

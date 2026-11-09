@@ -6,7 +6,17 @@ import { backend, events } from "@octopus/shared/backend.ts";
 import { loadFonts } from "@octopus/shared/fonts.ts";
 import { mount } from "@octopus/shared/mount.ts";
 import type { Appearance } from "@octopus/shared/generated.ts";
-import { applyBoot, applyModel, applyUi, report, servers, setAccount, setServers, ui } from "@octopus/shared/state.ts";
+import {
+  act,
+  applyBoot,
+  applyModel,
+  applyUi,
+  report,
+  servers,
+  setAccount,
+  setServers,
+  ui,
+} from "@octopus/shared/state.ts";
 import { setWindowShown, windowShown } from "@octopus/shared/terminalSession.ts";
 import { applyFilesChanged, forgetFilesExcept } from "@octopus/shared/taskFiles.ts";
 import { Board } from "./Board";
@@ -117,7 +127,7 @@ function Sheets() {
   );
 }
 
-const redial = () => phone.redial().catch(report);
+const redial = () => act(phone.redial());
 
 /** One network change fires several events, and each redial ends the dials under way. */
 const REDIAL_SETTLE_MS = 1000;

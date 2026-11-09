@@ -72,6 +72,11 @@ impl Screen {
             None => Err(Refusal::Free),
         }
     }
+
+    /// Whether `client` holds the lock and shows the terminal nowhere.
+    fn held_unshown(&self, client: &Client) -> bool {
+        self.holder.as_ref() == Some(client) && !self.viewers.contains_key(client)
+    }
 }
 
 impl Terminal {
@@ -125,6 +130,15 @@ impl Terminal {
         Ok(resized || moved)
     }
 
+    /// Gives `client` the lock from whoever holds it, sized to `cols`×`rows`; reports whether the screen changed.
+    pub fn take(&self, client: &Client, cols: u16, rows: u16) -> Result<bool, Refusal> {
+        let mut screen = lock(&self.screen);
+        let resized = self.set_size(&mut screen, cols, rows)?;
+        let moved = screen.holder.as_ref() != Some(client);
+        screen.holder = Some(client.clone());
+        Ok(resized || moved)
+    }
+
     pub fn show(&self, client: &Client) {
         let mut screen = lock(&self.screen);
         *screen.viewers.entry(client.clone()).or_default() += 1;
@@ -163,19 +177,15 @@ impl Terminal {
         lock(&self.screen).holder.clone()
     }
 
-    /// Whether `client` holds the lock and shows the terminal nowhere.
     pub(crate) fn held_unshown(&self, client: &Client) -> bool {
-        let screen = lock(&self.screen);
-        screen.holder.as_ref() == Some(client) && !screen.viewers.contains_key(client)
+        lock(&self.screen).held_unshown(client)
     }
 
     /// Frees the lock when `client` holds it, shows the terminal nowhere, and has not shown it again since `shows`
     /// was read; reports whether it did.
     pub(crate) fn free_if_unshown(&self, client: &Client, shows: u64) -> bool {
         let mut screen = lock(&self.screen);
-        let unshown = screen.holder.as_ref() == Some(client)
-            && !screen.viewers.contains_key(client)
-            && screen.shows.get(client).copied().unwrap_or(0) == shows;
+        let unshown = screen.held_unshown(client) && screen.shows.get(client).copied().unwrap_or(0) == shows;
         if unshown {
             screen.holder = None;
         }
@@ -190,15 +200,6 @@ impl Terminal {
             screen.holder = None;
         }
         held
-    }
-
-    /// Gives `client` the lock from whoever holds it, sized to `cols`×`rows`; reports whether the screen changed.
-    pub fn take(&self, client: &Client, cols: u16, rows: u16) -> Result<bool, Refusal> {
-        let mut screen = lock(&self.screen);
-        let resized = self.set_size(&mut screen, cols, rows)?;
-        let moved = screen.holder.as_ref() != Some(client);
-        screen.holder = Some(client.clone());
-        Ok(resized || moved)
     }
 
     fn set_size(&self, screen: &mut Screen, cols: u16, rows: u16) -> Result<bool, Error> {
@@ -585,7 +586,7 @@ impl Server {
         }
     }
 
-    pub(crate) fn terminal(&self, id: &PtyId) -> Option<Arc<Terminal>> {
-        lock(&self.state).terminal_by_id(id).map(|(_, terminal)| terminal)
+    pub(crate) fn terminal(&self, id: &PtyId) -> Result<Arc<Terminal>, Error> {
+        lock(&self.state).terminal_by_id(id).map(|(_, terminal)| terminal).ok_or_else(|| Error::not_found(id))
     }
 }

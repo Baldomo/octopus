@@ -9,9 +9,9 @@ import { Group } from "./Group";
 import { isMenuOpen, MenuHost, menuTrigger, onRightClick } from "@octopus/shared/Menu.tsx";
 import { backend } from "@octopus/shared/backend.ts";
 import { isRenaming, RenameInput, startRename } from "@octopus/shared/SidebarControls.tsx";
-import { isLive, TaskMenu } from "@octopus/shared/TaskMenus.tsx";
+import { TaskMenu } from "@octopus/shared/TaskMenus.tsx";
 import { Toast } from "@octopus/shared/Toast.tsx";
-import { model, openTask, serverLabel, ui } from "@octopus/shared/state.ts";
+import { isLive, openTask, sectionView, serverLabel, ui } from "@octopus/shared/state.ts";
 
 const ON_BOARD: Within = { stage: ".tasks-view", list: ".pane", free: true };
 
@@ -69,7 +69,7 @@ function BoardColumn(props: { section: string; column: Column }) {
 }
 
 export function Board() {
-  const section = () => model.lists.sections.find((candidate) => candidate.name === ui.prefs.board);
+  const section = () => sectionView(ui.prefs.board);
   return (
     <div class="pane" ref={animateList(".gh, .tcard, .drophint")}>
       <Show when={section()} fallback={<div class="empty">Pick a section in the sidebar to see its tasks.</div>}>

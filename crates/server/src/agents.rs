@@ -98,9 +98,7 @@ impl Server {
             _ => return Err(Error::conflict(format!("the agent of {} is not running", row.id))),
         }
         row.session.started |= op.status == AgentStatus::Working;
-        let rev = state.store.save_task(&mut row)?;
-        self.publish_task(&state, &row);
-        Ok(Revised { rev })
+        self.save_and_publish(&mut state, &mut row)
     }
 
     /// Starts the agent of a live task whose agent is not running. The login shell runs outside the state lock, so a
@@ -119,10 +117,7 @@ impl Server {
             }
             (PathBuf::from(&row.directory), state.store.harness(&row.harness)?)
         };
-        let started = match harness {
-            Some(harness) => Some((harness, login::resolve(&directory)?)),
-            None => None,
-        };
+        let started = harness.map(|harness| login::resolve(&directory).map(|env| (harness, env))).transpose()?;
         let mut state = lock(&self.state);
         let mut row = state.store.task(&op.task)?;
         if !row.state.is_live() || state.agent_running(&row.id) {

@@ -10,7 +10,7 @@ import { Chev, Gap, Id, Mi, Para, Sep, ServerDot, Why } from "./parts";
 import { RenameItem } from "./Rename";
 import { Sheet, SheetHead } from "./Sheet";
 import { reachOf } from "./reach";
-import { notify } from "./Toast";
+import { copy } from "./Toast";
 
 function Facts(props: { view: TaskView; panel: PtyId | null }) {
   const now = ticking();
@@ -61,7 +61,6 @@ function Facts(props: { view: TaskView; panel: PtyId | null }) {
 
 export function TaskMenu(props: { taskKey: string; open: { panel: PtyId | null } | null }) {
   const view = () => model.tasks[props.taskKey];
-  const copyId = (id: string) => navigator.clipboard.writeText(id).then(() => notify("Copied the task id"), report);
   return (
     <Sheet>
       <Show when={view()}>
@@ -107,7 +106,7 @@ export function TaskMenu(props: { taskKey: string; open: { panel: PtyId | null }
               )}
             </For>
             <Sep />
-            <Mi slot={<Icon name="copy" />} tap={() => copyId(view().task.id)}>
+            <Mi slot={<Icon name="copy" />} tap={() => act(copy(view().task.id, "the task id"))}>
               Copy task id
             </Mi>
             <Mi

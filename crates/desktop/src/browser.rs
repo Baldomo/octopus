@@ -186,32 +186,25 @@ impl Browsers {
 
     /// Loads the panel's `url` into its webview, created hidden and blank on its first page so that it is watched
     /// before it loads, unless the webview already loaded this `load`; `show_page` puts it on screen.
-    pub async fn load(
-        &self,
-        app: &AppHandle,
-        hub: &Arc<Hub>,
-        at: &TaskRef,
-        panel: &BrowserId,
-        url: &str,
-        load: u64,
-    ) -> Result<(), String> {
+    pub async fn load(&self, at: &TaskRef, panel: &BrowserId, url: &str, load: u64) -> Result<(), String> {
         let key = panel_key(at, panel);
         if lock(&self.rendered).get(&key).is_some_and(|rendered| rendered.load == load) {
             return Ok(());
         }
         let page = web_page(url)?;
-        self.hold_tunnel(hub, &at.server, &key, &page).await?;
-        let loaded = app.state::<Arc<Pages>>().loaded_from(&at.server, &page)?;
+        self.hold_tunnel(&at.server, &key, &page).await?;
+        let loaded = self.app.state::<Arc<Pages>>().loaded_from(&at.server, &page)?;
         let mut rendered = lock(&self.rendered);
         let rendered = match rendered.entry(key) {
             Entry::Occupied(existing) => existing.into_mut(),
-            Entry::Vacant(first) => first.insert(Rendered { webview: self.create(app, at, panel)?, load }),
+            Entry::Vacant(first) => first.insert(Rendered { webview: self.create(at, panel)?, load }),
         };
         rendered.load = load;
         rendered.webview.navigate(loaded).map_err(failed)
     }
 
-    fn create(&self, app: &AppHandle, at: &TaskRef, panel: &BrowserId) -> Result<Webview, String> {
+    fn create(&self, at: &TaskRef, panel: &BrowserId) -> Result<Webview, String> {
+        let app = &self.app;
         let label = format!("browser-{}", self.next.fetch_add(1, Ordering::Relaxed));
         let blank = WebviewUrl::External(Url::parse("about:blank").expect("about:blank is a URL"));
         let page = Arc::new(Mutex::new(Page::default()));
@@ -286,7 +279,8 @@ impl Browsers {
 
     /// Holds the tunnel to the page's port for the panel `key`, when the page is on a loopback host of a server on
     /// another machine.
-    async fn hold_tunnel(&self, hub: &Arc<Hub>, server: &str, key: &str, page: &Url) -> Result<(), String> {
+    async fn hold_tunnel(&self, server: &str, key: &str, page: &Url) -> Result<(), String> {
+        let hub = self.app.state::<Arc<Hub>>();
         let Some(port) = hub.tunneled_port(server, page) else { return Ok(()) };
         let mut tunnels = self.tunnels.lock().await;
         match tunnels.get_mut(&port) {
@@ -340,8 +334,7 @@ impl Browsers {
 /// A frame of the page navigating to a loopback port of a server on another machine reaches it through a tunnel
 /// held before the navigation goes on.
 fn hold_while_navigating(app: &AppHandle, at: &TaskRef, key: &str, url: &Url) {
-    let hub = Arc::clone(app.state::<Arc<Hub>>().inner());
-    let held = tauri::async_runtime::block_on(app.state::<Browsers>().hold_tunnel(&hub, &at.server, key, url));
+    let held = tauri::async_runtime::block_on(app.state::<Browsers>().hold_tunnel(&at.server, key, url));
     if let Err(problem) = held {
         app.state::<Arc<UiStore>>().report(problem);
     }

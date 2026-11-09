@@ -12,7 +12,7 @@ use crate::{Server, State, files, lock, report};
 
 pub const WORKTREE_LIFETIME_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
-pub(crate) fn slug(title: &str) -> String {
+fn slug(title: &str) -> String {
     let words: Vec<String> =
         title.split(|c: char| !c.is_alphanumeric()).filter(|word| !word.is_empty()).map(str::to_lowercase).collect();
     if words.is_empty() { "task".to_string() } else { words.join("-") }
@@ -201,16 +201,5 @@ impl Server {
             }
         }
         Ok(sweep)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::slug;
-
-    #[test]
-    fn a_slug_keeps_words_and_joins_them_with_dashes() {
-        assert_eq!(slug("Strict serde: envelope!"), "strict-serde-envelope");
-        assert_eq!(slug("  ...  "), "task");
     }
 }

@@ -70,7 +70,6 @@ pub(crate) fn task_views(
                         panel: panel.clone(),
                     })
                     .collect();
-                let viewed = Task { panels: Vec::new(), ..task.clone() };
                 let at = TaskRef { server: server.clone(), task: task.id.clone() };
                 let view = TaskView {
                     key: at.key(),
@@ -78,7 +77,7 @@ pub(crate) fn task_views(
                     crumbs: crumbs(cache, task),
                     live: task.state.is_live(),
                     glyph: Glyph::of(task),
-                    task: viewed,
+                    task: task.clone(),
                     panels,
                     at,
                 };

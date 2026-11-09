@@ -1,7 +1,7 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
 import type { Column, Row } from "@octopus/shared/generated.ts";
 import { statusWord } from "@octopus/shared/Glyph.tsx";
-import { model, serverLabel } from "@octopus/shared/state.ts";
+import { sectionView, serverLabel } from "@octopus/shared/state.ts";
 import { keepInView } from "@octopus/shared/keepInView.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
@@ -56,7 +56,7 @@ function Card(props: { row: Row; section: string; column: Column }) {
  * state slides its column in from the side of its tab, and a sideways swipe carries the columns with the finger.
  */
 export function Board(props: { section: string }) {
-  const section = () => model.lists.sections.find((shown) => shown.name === props.section);
+  const section = () => sectionView(props.section);
   const [chosen, setChosen] = createSignal(0);
   let track!: HTMLDivElement;
   /** Which column stands in view, fractional while the columns move. */

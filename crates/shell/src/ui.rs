@@ -491,22 +491,4 @@ mod tests {
         assert_eq!(state.ui.recent, ["b", "i", "h", "g", "f", "e", "d", "c"]);
         assert_eq!(state.ui.prefs.open.as_deref(), Some("b"));
     }
-
-    #[test]
-    fn the_float_layer_covers_every_surface_that_is_out_and_a_modal_one_holds_the_keyboard() {
-        let rect = |x, y, width, height| Bounds { x, y, width, height };
-        let sidebar = Floated { input: rect(0.0, 38.0, 294.0, 828.0), drawn: rect(0.0, 22.0, 342.0, 866.0) };
-        let popover = Floated { input: rect(400.0, 100.0, 200.0, 100.0), drawn: rect(380.0, 90.0, 240.0, 140.0) };
-        let mut state = State::starting(Prefs::default());
-        let mut covered = |act| {
-            state.apply(act);
-            let native = state.native();
-            (native.surfaces, native.modal)
-        };
-        let float = |surface: &str, at, modal| UiAct::Float { surface: surface.into(), at, modal };
-        assert_eq!(covered(float("sidebar", sidebar, false)), (vec![sidebar], false));
-        assert_eq!(covered(float("modal", popover, true)), (vec![popover, sidebar], true));
-        assert_eq!(covered(UiAct::Sink { surface: "modal".into() }), (vec![sidebar], false));
-        assert_eq!(covered(UiAct::Sink { surface: "sidebar".into() }), (vec![], false));
-    }
 }

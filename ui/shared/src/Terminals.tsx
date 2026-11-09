@@ -5,13 +5,13 @@ import { AGENT_PANEL, type PanelView, type PtyId, type TaskRef, type TaskView } 
 import { Glyph } from "./Glyph";
 import { keepInView } from "./keepInView";
 import { onFileDrag, pastesSafely, shellQuoted } from "./fileDrag";
-import { EachPanel } from "./panels";
+import { EachPanel, taskPanels } from "./panels";
 import { commands, hint, mac } from "./commands";
 import { act, isLocal, model, serverLabel, ui } from "./state";
 import { filesOf } from "./taskFiles";
 import { toast } from "./Toast";
 import { type LinkTarget, openLinks, type OpenUrl } from "./terminalLinks";
-import { readOnlyLabel, terminalSession, windowShown } from "./terminalSession";
+import { terminalSession, windowShown } from "./terminalSession";
 
 /** Shift+Enter sends ESC CR, which agents read as a newline; on macOS ⌥←/⌥→ move by word as in Terminal.app. */
 const CHORD_INPUT: Record<string, string> = {
@@ -31,6 +31,9 @@ export const openShell = (at: TaskRef, key: string, directory: string) =>
   backend.termOpen(at, directory).then((panel) => setChosen(key, panel));
 
 export type OpenLink = (task: TaskView, url: string, target: LinkTarget) => void;
+
+const readOnlyLabel = (panel: PanelView) =>
+  panel.lock_holder === null ? "read-only · lock free" : `read-only · held by ${panel.lock_holder.name}`;
 
 /** Where files on this machine are on the task's server: there already when it runs here, else copied into the
  * checkout's root. */
@@ -157,11 +160,7 @@ function Stack(props: { key: string; openLink: OpenLink }) {
   const task = () => model.tasks[props.key];
   const shown = () => ui.prefs.open === props.key && ui.prefs.view === "task";
   const choose = (panel: PtyId | null) => setChosen(props.key, panel);
-  const panels = () => task()?.panels ?? [];
-  const agent = () => panels().find((panel) => panel.name === AGENT_PANEL);
-  const shells = () => panels().filter((panel) => panel.name !== AGENT_PANEL);
-  const selected = () => shells().find((panel) => panel.id === chosen[props.key]) ?? agent();
-  const agentOn = () => selected() === agent();
+  const { panels, agent, shells, selected, agentOn } = taskPanels(task, () => chosen[props.key] ?? null);
   const missing = () => {
     const kind = task()?.task.agent.kind;
     return kind === "harness_unknown" || kind === "harness_not_installed";

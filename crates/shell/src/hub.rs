@@ -11,7 +11,7 @@ use octopus_proto::account::{Account, Change, Link as AccountLink};
 use octopus_proto::device::PublicKey;
 use octopus_proto::ops::{SessionSync, WorkspaceRename, WorkspaceSetColor};
 use octopus_proto::pairing::Invite;
-use octopus_proto::types::{Color, LockHolder, WorkspaceId};
+use octopus_proto::types::{Color, LockHolder, Task, WorkspaceId};
 use octopus_proto::{Event, Op, Push, now};
 use serde::Serialize;
 use tauri::{AppHandle, Url};
@@ -496,11 +496,10 @@ impl Hub {
         Ok(())
     }
 
-    pub(crate) fn harness_of(&self, at: &TaskRef) -> Result<String, String> {
+    pub fn task(&self, at: &TaskRef) -> Result<Task, String> {
         let state = lock(&self.state);
         let task = state.caches.get(&at.server).and_then(|cache| cache.tasks.get(&at.task));
-        task.map(|task| task.harness.clone())
-            .ok_or_else(|| format!("{} has no task {}", state.label(&at.server), at.task))
+        task.cloned().ok_or_else(|| format!("{} has no task {}", state.label(&at.server), at.task))
     }
 
     pub async fn call<O: Op>(&self, server: &str, op: &O) -> Result<O::Ok, String> {

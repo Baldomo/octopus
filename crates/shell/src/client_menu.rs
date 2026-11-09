@@ -114,13 +114,9 @@ mod tests {
     }
 
     #[test]
-    fn a_zoom_outside_the_steps_is_refused() {
+    fn zoom_steps_through_the_zooms_and_stops_at_either_end() {
         assert!(serde_json::from_str::<Zoom>("0").is_err());
         assert_eq!(serde_json::from_str::<Zoom>("125").ok(), Some(Zoom(125)));
-    }
-
-    #[test]
-    fn zoom_steps_through_the_zooms_and_stops_at_either_end() {
         let stepped = |from, step, times| (0..times).fold(Zoom(from), |zoom, _| zoom.step(step));
         assert_eq!(stepped(100, ZoomStep::In, 9), Zoom(150));
         assert_eq!(stepped(100, ZoomStep::Out, 9), Zoom(80));

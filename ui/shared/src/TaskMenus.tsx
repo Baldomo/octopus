@@ -1,10 +1,22 @@
 import { For, Show } from "solid-js";
 import { backend } from "./backend";
-import { LIVE_STATES, TASK_STATES, type Row, type Section, type TaskState } from "./generated";
+import { TASK_STATES, type Row, type TaskState } from "./generated";
 import { commands, hint } from "./commands";
 import { closeMenu, closing, Head, Item, Sep } from "./Menu";
 import { Matrix, startRename } from "./SidebarControls";
-import { act, model, report, serverLabel, serverView, setNewTaskSection, showBoard, showModal } from "./state";
+import {
+  act,
+  isLive,
+  tasksOn,
+  model,
+  report,
+  sectionView,
+  serverLabel,
+  serverView,
+  setNewTaskSection,
+  showBoard,
+  showModal,
+} from "./state";
 import { swatchColor } from "./tokens";
 import { copy, toast } from "./Toast";
 
@@ -13,14 +25,9 @@ export function newTaskIn(section: string) {
   showModal("new_task");
 }
 
-const liveOn = (section: Section, server: string) =>
-  section.groups.reduce((count, group) => count + group.rows.filter((row) => row.at.server === server).length, 0);
-
-export const isLive = (state: TaskState) => LIVE_STATES.some((live) => live === state);
-
 /** Finds its section by name on every model, so it follows changes made while it is open. */
 export function SectionMenu(props: { name: string }) {
-  const section = () => model.lists.sections.find((candidate) => candidate.name === props.name);
+  const section = () => sectionView(props.name);
   const workspaces = () => model.lists.workspaces.filter((workspace) => workspace.name === props.name);
   return (
     <Show when={section()}>
@@ -40,12 +47,12 @@ export function SectionMenu(props: { name: string }) {
           <Matrix
             current={section().swatch}
             auto={section().auto}
-            pick={(swatch) => backend.sectionColor(props.name, swatch).catch(report)}
+            pick={(swatch) => act(backend.sectionColor(props.name, swatch))}
           />
           <Sep />
           <For each={workspaces()}>
             {(workspace) => {
-              const live = () => liveOn(section(), workspace.server);
+              const live = () => tasksOn(section(), workspace.server);
               const why = () =>
                 !serverView(workspace.server)?.reachable ? "unreachable" : live() > 0 ? `${live()} live` : undefined;
               const remove = () =>

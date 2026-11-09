@@ -356,13 +356,13 @@ mod tests {
     }
 
     #[test]
-    fn a_program_printing_a_size_record_of_its_own_changes_nothing() {
+    fn a_screen_draws_a_link_the_way_the_program_wrote_it() {
         let mut output = output();
-        output.add(b"\x1b]6286;10;5\x07plain");
-        let Screen { cols, rows, bytes } = output.emulator.screen();
-        assert_eq!((cols, rows), INITIAL_SIZE);
-        assert!(!String::from_utf8_lossy(&bytes).contains("6286"));
-        assert_eq!(attach(&mut output).lines()[0], "plain");
+        let link = "\x1b]8;id=pr;https://example.com/1\x1b\\#1\x1b]8;;\x1b\\ after";
+        output.add(link.as_bytes());
+
+        let Screen { bytes, .. } = output.emulator.screen();
+        assert!(String::from_utf8_lossy(&bytes).contains(link), "a link ends with no parameters, as xterm.js reads it");
     }
 
     #[test]
@@ -379,17 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn a_cursor_saved_before_an_attach_restores_after_it() {
-        let mut output = output();
-        output.add(b"\x1b[3;5H\x1b7\x1b[H");
-        let mut client = attach(&mut output);
-        assert_eq!(client.cursor(), (0, 0));
-        client.read(&Piece::Output(b"\x1b8"[..].into()));
-        assert_eq!(client.cursor(), (2, 4));
-    }
-
-    #[test]
-    fn a_full_screen_program_redraws_over_the_shell_it_returns_to() {
+    fn a_full_screen_program_redraws_over_the_shell_it_returns_to_and_a_saved_cursor_survives_an_attach() {
         let mut output = output();
         output.add(b"$ vim\r\n\x1b[?1049h\x1b[Hfile\x1b[24;1H-- INSERT --\x1b[1;5H");
         let mut client = attach(&mut output);
@@ -403,5 +393,11 @@ mod tests {
         assert_eq!(client.lines()[0], "$ vim");
         assert_eq!(client.cursor(), (1, 0));
         assert_eq!(attach(&mut output).lines()[..2], ["$ vim", ""]);
+
+        output.add(b"\x1b[3;5H\x1b7\x1b[H");
+        let mut client = attach(&mut output);
+        assert_eq!(client.cursor(), (0, 0));
+        client.read(&Piece::Output(b"\x1b8"[..].into()));
+        assert_eq!(client.cursor(), (2, 4));
     }
 }

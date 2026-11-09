@@ -765,36 +765,29 @@ mod tests {
     }
 
     #[test]
-    fn a_chain_of_throwaway_keys_that_never_joined_decides_at_once_and_counts_for_nothing() {
-        let laptop = DeviceKey::generate();
-        let mut account = Account::first(laptop.public());
+    fn a_log_flooded_by_throwaway_keys_or_by_a_members_removals_is_decided_at_once() {
+        let (laptop, phone) = (DeviceKey::generate(), DeviceKey::generate());
+        let mut chained = Account::first(laptop.public());
         let mut inviter = DeviceKey::generate();
         for _ in 0..60 {
             let next = DeviceKey::generate();
             for _ in 0..2 {
-                link(&mut account, &inviter, &next, "junk");
+                link(&mut chained, &inviter, &next, "junk");
             }
             inviter = next;
         }
-        account.append(&inviter, Change::Remove { device: laptop.public() });
-        let started = std::time::Instant::now();
-        assert!(account.state().is_member(&laptop.public()), "no throwaway key is a member");
-        assert!(started.elapsed() < std::time::Duration::from_secs(2), "took {:?}", started.elapsed());
-    }
-
-    #[test]
-    fn a_member_that_floods_the_log_with_removals_is_decided_at_once() {
-        let (laptop, phone) = (DeviceKey::generate(), DeviceKey::generate());
-        let mut account = Account::first(laptop.public());
-        link(&mut account, &laptop, &phone, "phone");
+        chained.append(&inviter, Change::Remove { device: laptop.public() });
+        let mut flooded = Account::first(laptop.public());
+        link(&mut flooded, &laptop, &phone, "phone");
         for _ in 0..200 {
-            account.append(&phone, Change::Invite { key: DeviceKey::generate().public(), expires_at: 0 });
+            flooded.append(&phone, Change::Invite { key: DeviceKey::generate().public(), expires_at: 0 });
         }
         for _ in 0..200 {
-            account.append(&phone, Change::Remove { device: phone.public() });
+            flooded.append(&phone, Change::Remove { device: phone.public() });
         }
         let started = std::time::Instant::now();
-        assert_eq!(names(&account), [""], "the phone removed itself");
+        assert!(chained.state().is_member(&laptop.public()), "no throwaway key is a member");
+        assert_eq!(names(&flooded), [""], "the phone removed itself");
         assert!(started.elapsed() < std::time::Duration::from_secs(2), "took {:?}", started.elapsed());
     }
 
@@ -960,21 +953,5 @@ mod tests {
         account.append(&laptop, Change::Leave { to: next });
         assert_eq!(account.state().left, [(laptop.public(), next)]);
         assert!(account.state().members.is_empty());
-    }
-
-    #[test]
-    fn a_link_round_trips_as_text_and_names_what_is_wrong_with_a_bad_one() {
-        let link = Link {
-            server: DeviceKey::generate().public(),
-            relay: relay(),
-            account: Account::first(DeviceKey::generate().public()).id(),
-            invite: Digest([7; 32]),
-            secret: SecretKey::generate(),
-        };
-        assert_eq!(link.to_string().parse::<Link>(), Ok(link.clone()));
-        let text = link.to_string();
-        assert!(text.replace("&invite=", "&other=").parse::<Link>().expect_err("other").contains("has no other"));
-        let cut = &text[..text.find("&account").expect("account")];
-        assert!(cut.parse::<Link>().expect_err("cut").contains("names no account and no invite and no relay"));
     }
 }

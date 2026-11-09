@@ -196,17 +196,13 @@ mod os {
     }
 
     pub fn settings(app: &AppHandle) -> anyhow::Result<()> {
-        keeper(app).run_mobile_plugin::<IgnoredAny>("settings", ()).context("open the app's settings")?;
+        run::<IgnoredAny>(app, "settings", ()).context("open the app's settings")?;
         Ok(())
     }
 
     pub fn microphone(app: &AppHandle) -> anyhow::Result<bool> {
-        let answered: Answered = keeper(app).run_mobile_plugin("microphone", ()).context("ask for the microphone")?;
+        let answered: Answered = run(app, "microphone", ()).context("ask for the microphone")?;
         Ok(answered.granted)
-    }
-
-    fn keeper(app: &AppHandle) -> &PluginHandle<Wry> {
-        &app.state::<Keeper>().inner().0
     }
 
     pub fn run<T: serde::de::DeserializeOwned>(
@@ -214,7 +210,7 @@ mod os {
         command: &str,
         args: impl Serialize,
     ) -> anyhow::Result<T> {
-        Ok(keeper(app).run_mobile_plugin(command, args)?)
+        Ok(app.state::<Keeper>().0.run_mobile_plugin(command, args)?)
     }
 
     #[derive(Serialize)]
@@ -229,7 +225,7 @@ mod os {
     }
 
     pub fn kept(app: &AppHandle) -> anyhow::Result<Option<Vec<u8>>> {
-        let kept: Kept = keeper(app).run_mobile_plugin("kept", ()).context("open the sealed device key")?;
+        let kept: Kept = run(app, "kept", ()).context("open the sealed device key")?;
         kept.pkcs8
             .map(|pkcs8| STANDARD.decode(pkcs8).map_err(|error| anyhow!("the sealed device key: {error}")))
             .transpose()
@@ -237,17 +233,17 @@ mod os {
 
     pub fn keep(app: &AppHandle, pkcs8: &[u8]) -> anyhow::Result<()> {
         let pkcs8 = STANDARD.encode(pkcs8);
-        keeper(app).run_mobile_plugin::<IgnoredAny>("keep", Keep { pkcs8: &pkcs8 }).context("seal the device key")?;
+        run::<IgnoredAny>(app, "keep", Keep { pkcs8: &pkcs8 }).context("seal the device key")?;
         Ok(())
     }
 
     pub fn name(app: &AppHandle) -> anyhow::Result<String> {
-        let named: Named = keeper(app).run_mobile_plugin("name", ()).context("read the device's name")?;
+        let named: Named = run(app, "name", ()).context("read the device's name")?;
         Ok(named.name)
     }
 
     pub fn insets(app: &AppHandle) -> anyhow::Result<Option<super::Insets>> {
-        Ok(Some(keeper(app).run_mobile_plugin("insets", ()).context("read the page's insets")?))
+        Ok(Some(run(app, "insets", ()).context("read the page's insets")?))
     }
 
     #[derive(Serialize)]
@@ -259,7 +255,7 @@ mod os {
     fn show_bars(app: &AppHandle, appearance: Appearance) {
         let app = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            if let Err(error) = keeper(&app).run_mobile_plugin::<IgnoredAny>("bars", Bars { appearance }) {
+            if let Err(error) = run::<IgnoredAny>(&app, "bars", Bars { appearance }) {
                 eprintln!("octopus app: draw the system bars for the {appearance:?} appearance: {error}");
             }
         });

@@ -28,10 +28,10 @@ pub use octopus_proto::now;
 use octopus_proto::ops::{
     AccountSync, AgentReport, BrowserClose, BrowserMove, BrowserOpen, BrowserReport, Done, Entries, FileCopy,
     FileCreate, FileDelete, FileList, FileMove, FileSearch, FileWrite, HarnessSet, Matches, Offer, PairingForget,
-    PairingList, PairingOffer, SessionHello, SessionPing, SessionSync, Snapshot, TaskArchive, TaskCreate, TaskFocus,
-    TaskGet, TaskMove, TaskRename, TaskSetParent, TaskSetSession, TermClaim, TermClose, TermOpen, TermResize, TermSend,
-    TermTakeLock, Welcome, WorkspaceAdd, WorkspaceList, WorkspaceRemove, WorkspaceRename, WorkspaceSetColor,
-    Workspaces, Written,
+    PairingList, PairingOffer, Revised, SessionHello, SessionPing, SessionSync, Snapshot, TaskArchive, TaskCreate,
+    TaskFocus, TaskGet, TaskMove, TaskRename, TaskSetParent, TaskSetSession, TermClaim, TermClose, TermOpen,
+    TermResize, TermSend, TermTakeLock, Welcome, WorkspaceAdd, WorkspaceList, WorkspaceRemove, WorkspaceRename,
+    WorkspaceSetColor, Workspaces, Written,
 };
 use octopus_proto::remote::{Connection, RelayUrl};
 use octopus_proto::types::{AGENT_PANEL, AgentStatus, BrowserPanel, PtyId, TaskId};
@@ -97,6 +97,16 @@ pub(crate) use report;
 
 fn call<O: Op>(args: &serde_json::Value, handler: impl FnOnce(O) -> Result<O::Ok, Error>) -> Outcome {
     Outcome::from(parse_args::<O>(args).and_then(handler))
+}
+
+/// Hands each message to the server on a thread of its own, until the server goes.
+fn forward<T: Send + 'static>(me: Weak<Server>, rx: mpsc::Receiver<T>, on: fn(&Server, T)) {
+    std::thread::spawn(move || {
+        for message in rx {
+            let Some(server) = me.upgrade() else { break };
+            on(&server, message);
+        }
+    });
 }
 
 fn nonempty(what: &str, text: &str) -> Result<(), Error> {
@@ -176,21 +186,11 @@ impl Server {
             server.host.forget(&orphan)?;
         }
         server.mic.adopt(&adopted);
-        let listener = Weak::clone(&server.me);
-        std::thread::spawn(move || {
-            for (id, listening) in listening_changed {
-                let Some(server) = listener.upgrade() else { break };
-                server.listening_changed(&id, listening);
-            }
+        forward(Weak::clone(&server.me), listening_changed, |server, (id, listening)| {
+            server.listening_changed(&id, listening);
         });
         // Watcher callbacks only send here: a callback that owned the server could drop it on the watcher's own thread.
-        let publisher = Weak::clone(&server.me);
-        std::thread::spawn(move || {
-            for (task, path) in changed {
-                let Some(server) = publisher.upgrade() else { break };
-                server.file_changed(&task, &path);
-            }
-        });
+        forward(Weak::clone(&server.me), changed, |server, (task, path)| server.file_changed(&task, &path));
         Ok(server)
     }
 
@@ -278,6 +278,12 @@ impl Server {
 
     fn publish_task(&self, state: &State, row: &TaskRow) {
         self.publish(state, row.rev, Event::TaskUpdated { task: Box::new(state.view(row)) });
+    }
+
+    fn save_and_publish(&self, state: &mut State, row: &mut TaskRow) -> Result<Revised, Error> {
+        let rev = state.store.save_task(row)?;
+        self.publish_task(state, row);
+        Ok(Revised { rev })
     }
 
     /// Every change of a lock touches its task, so whether a remote client holds one is decided here.

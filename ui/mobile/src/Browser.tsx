@@ -1,5 +1,5 @@
 import { createResource, createSignal, onCleanup, Show } from "solid-js";
-import { model, report } from "@octopus/shared/state.ts";
+import { act, model, report } from "@octopus/shared/state.ts";
 import { Icon } from "./Icon";
 import { Circle, CrumbBar, Id, sectionColor } from "./parts";
 import { phone } from "./phone";
@@ -20,7 +20,7 @@ export function Browser(props: { taskKey: string }) {
       return phone.browse(shown.at.server, panel()!.url).catch((error) => report(error).then(() => undefined));
     },
   );
-  onCleanup(() => phone.unbrowse().catch(report));
+  onCleanup(() => act(phone.unbrowse()));
   const parts = () => {
     const url = new URL(panel()?.url ?? "about:blank");
     if (url.protocol === "file:") return { host: decodeURIComponent(url.pathname), path: "" };

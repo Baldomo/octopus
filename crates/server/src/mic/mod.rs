@@ -62,11 +62,8 @@ impl Shared {
     /// `pull` for a real-time thread: reports false, filling nothing, when the audio is locked elsewhere.
     #[cfg(target_os = "macos")]
     pub(crate) fn try_pull(&self, id: &PtyId, out: &mut [u8]) -> bool {
-        match self.audio.try_lock() {
-            Ok(mut audio) => drain(&mut audio, id, out),
-            Err(std::sync::TryLockError::Poisoned(poison)) => drain(&mut poison.into_inner(), id, out),
-            Err(std::sync::TryLockError::WouldBlock) => return false,
-        }
+        let Some(mut audio) = unpoisoned(self.audio.try_lock()) else { return false };
+        drain(&mut audio, id, out);
         true
     }
 
@@ -80,6 +77,16 @@ impl Shared {
         let excess = waiting.len().saturating_sub(buffered_bytes());
         let whole_samples = excess.div_ceil(MIC_FORMAT.bytes_per_sample) * MIC_FORMAT.bytes_per_sample;
         waiting.drain(..whole_samples.min(waiting.len()));
+    }
+}
+
+/// A lock taken without waiting; a poisoned one is taken all the same.
+#[cfg(target_os = "macos")]
+fn unpoisoned<T>(locked: std::sync::TryLockResult<T>) -> Option<T> {
+    match locked {
+        Ok(guard) => Some(guard),
+        Err(std::sync::TryLockError::Poisoned(poison)) => Some(poison.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
     }
 }
 

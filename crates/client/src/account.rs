@@ -188,7 +188,6 @@ impl Book {
 
     fn save(&self, kept: &Kept) -> anyhow::Result<()> {
         let Some(path) = &self.path else { return Ok(()) };
-        create_parent(path)?;
         let staged = path.with_extension(format!("json.{}.new", std::process::id()));
         std::fs::write(&staged, serde_json::to_string(kept)?).with_context(|| format!("write {}", staged.display()))?;
         std::fs::rename(&staged, path).with_context(|| format!("replace {}", path.display()))

@@ -3,7 +3,7 @@ import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import { createEffect, createResource, createSignal, on, onCleanup, Show, type JSX } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import { isLink } from "@octopus/shared/pairing.ts";
-import { account, me, report, setMe } from "@octopus/shared/state.ts";
+import { account, act, me, report, setMe } from "@octopus/shared/state.ts";
 import { shortKey } from "./format";
 import { feel } from "./feel";
 import { Icon } from "./Icon";
@@ -84,7 +84,7 @@ export function Scan(props: { reading: Reading }) {
       .finally(() => setScanning(false));
   };
   createEffect(on(scans, start));
-  onCleanup(() => scanning() && stopScanning().catch(report));
+  onCleanup(() => scanning() && act(stopScanning()));
   return (
     <>
       <Bar>

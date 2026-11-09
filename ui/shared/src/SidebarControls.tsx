@@ -2,7 +2,7 @@ import { createResource, createSignal, For, Show } from "solid-js";
 import { backend } from "./backend";
 import type { Swatch } from "./generated";
 import { anyMenuOpen } from "./Menu";
-import { model, report, serverLabel, servers } from "./state";
+import { act, model, serverLabel, servers } from "./state";
 import { pickSwatch, sameSwatch, SWATCHES } from "./swatches";
 import { swatchColor } from "./tokens";
 import { toast } from "./Toast";
@@ -34,7 +34,7 @@ export function RenameInput(props: { value: string; apply: (name: string) => Pro
         if (event.key !== "Enter") return;
         const name = event.currentTarget.value.trim();
         setRenaming(null);
-        if (name !== "" && name !== props.value) props.apply(name).catch(report);
+        if (name !== "" && name !== props.value) act(props.apply(name));
       }}
       onBlur={() => setRenaming(null)}
     />

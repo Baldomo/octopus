@@ -5,10 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::{
-    Running, SERVER, agent, connect, create, echo_agent, eventually, focus, holder_name, identity, read_until, send,
-    server, set_harness, start, task, workspace,
+    Running, SERVER, agent, connect, create, echo_agent, eventually, focus, holder_name, identity, read_until,
+    relayed_server, send, set_harness, task, workspace,
 };
-use octopus_client::account::Book;
 use octopus_client::servers::{self, Address, Servers};
 use octopus_client::tunnel::Tunnel;
 use octopus_client::{CallError, Connection, DataStream, Identity};
@@ -34,7 +33,7 @@ async fn device(connection: &Connection, of: &Identity) -> PairedClient {
 }
 
 async fn offer(running: &Running) -> Invite {
-    connect(running, "owner").await.call(&PairingOffer {}).await.expect("pairing.offer").invite
+    connect(&running.socket, "owner").await.call(&PairingOffer {}).await.expect("pairing.offer").invite
 }
 
 /// The server as a client reaches it through its relay alone.
@@ -46,13 +45,6 @@ async fn paired(running: &Running, me: &Identity) -> Connection {
     let listed = servers::pair(&offer(running).await, me).await.expect("pair");
     assert_eq!(listed, servers::Server { name: SERVER.into(), address: remote(running) });
     Connection::connect(&listed.address, me).await.expect("connect over iroh")
-}
-
-/// Another process of the device `of`, under `name`.
-fn twin(of: &Identity, name: &str) -> Identity {
-    let key = DeviceKey::from_pkcs8(of.key.pkcs8()).expect("same key");
-    let account = Book::memory(&key);
-    Identity::new(name.into(), key, account).expect("an identity")
 }
 
 /// A link through `running` that admits one device to `of`'s account.
@@ -69,8 +61,8 @@ fn forget(of: &Identity) -> PairingForget {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_connection_outlives_the_client_forgetting_its_endpoint_and_the_next_dial_works() {
-    let (_dir, running) = server().await;
-    let phone = identity("phone");
+    let (_dir, running) = relayed_server().await;
+    let phone = identity("phone", &DeviceKey::generate());
     let before = paired(&running, &phone).await;
     phone.forget_dialer().await;
     let after = Connection::connect(&remote(&running), &phone).await.expect("dial from a new endpoint");
@@ -80,8 +72,8 @@ async fn a_connection_outlives_the_client_forgetting_its_endpoint_and_the_next_d
 
 #[tokio::test(flavor = "multi_thread")]
 async fn only_a_client_that_spent_a_code_reaches_a_remote_server() {
-    let (_dir, running) = server().await;
-    let laptop = identity("laptop");
+    let (_dir, running) = relayed_server().await;
+    let laptop = identity("laptop", &DeviceKey::generate());
 
     let closed = Connection::connect(&remote(&running), &laptop).await.err().expect("no code is on offer");
     assert!(format!("{closed:#}").contains("no pairing code or link is on offer"), "{closed:#}");
@@ -90,12 +82,12 @@ async fn only_a_client_that_spent_a_code_reaches_a_remote_server() {
     let refused = Connection::connect(&remote(&running), &laptop).await.err().expect("an unpaired client is refused");
     assert!(format!("{refused:#}").contains("not paired"), "{refused:#}");
     servers::pair(&invite, &laptop).await.expect("pair");
-    let spent = servers::pair(&invite, &identity("desk")).await.expect_err("spent");
+    let spent = servers::pair(&invite, &identity("desk", &DeviceKey::generate())).await.expect_err("spent");
     assert!(format!("{spent:#}").contains("no pairing code or link is on offer"), "{spent:#}");
-    let (fresh, namesake) = (offer(&running).await, identity("laptop"));
+    let (fresh, namesake) = (offer(&running).await, identity("laptop", &DeviceKey::generate()));
     let refused = servers::pair(&fresh, &namesake).await;
     assert!(format!("{:#}", refused.expect_err("a namesake")).contains("belongs to another device"));
-    connect(&running, "owner").await.call(&forget(&laptop)).await.expect("forget");
+    connect(&running.socket, "owner").await.call(&forget(&laptop)).await.expect("forget");
     servers::pair(&fresh, &namesake).await.expect("the refusal left the code unspent");
     let laptop = namesake;
 
@@ -104,9 +96,9 @@ async fn only_a_client_that_spent_a_code_reaches_a_remote_server() {
     let client = device(&connection, &laptop).await;
     assert!(client.name == "laptop" && client.connected && client.seen_at.is_some(), "{client:?}");
     assert_eq!(client.key, laptop.key.public(), "the list carries the key the client is pinned by");
-    let unknown = connection.call(&forget(&identity("desk"))).await;
+    let unknown = connection.call(&forget(&identity("desk", &DeviceKey::generate()))).await;
     assert!(matches!(unknown, Err(CallError::Server(Error::NotFound { .. }))), "{unknown:?}");
-    let desk = twin(&laptop, "desk");
+    let desk = identity("desk", &laptop.key);
     let renamed = Connection::connect(&remote(&running), &desk).await.expect("a renamed client");
     let client = device(&renamed, &laptop).await;
     assert_eq!(client.name, "desk", "a paired client goes by the name its hello gives");
@@ -116,11 +108,13 @@ async fn only_a_client_that_spent_a_code_reaches_a_remote_server() {
     let list = || async { device(&connection, &laptop).await };
     eventually("the renamed connection closes", async || list().await.seen_at > seen_at).await;
     assert!(list().await.connected, "the device stays connected while its connection under the old name is open");
-    servers::pair(&offer(&running).await, &identity("phone")).await.expect("pair a phone");
-    let namesake = Connection::connect(&remote(&running), &twin(&laptop, "phone")).await.err().expect("a namesake");
+    servers::pair(&offer(&running).await, &identity("phone", &DeviceKey::generate())).await.expect("pair a phone");
+    let namesake =
+        Connection::connect(&remote(&running), &identity("phone", &laptop.key)).await.err().expect("a namesake");
     assert!(format!("{namesake:#}").contains("belongs to another device"), "{namesake:#}");
 
-    let second_process = Connection::connect(&remote(&running), &twin(&laptop, "laptop")).await.expect("a second");
+    let second_process =
+        Connection::connect(&remote(&running), &identity("laptop", &laptop.key)).await.expect("a second");
     for open in [&connection, &second_process] {
         open.call(&PairingList {}).await.expect("both processes of one device stay connected");
     }
@@ -128,8 +122,8 @@ async fn only_a_client_that_spent_a_code_reaches_a_remote_server() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_task_runs_over_iroh_and_a_stalled_file_transfer_never_blocks_its_terminal() {
-    let (dir, running) = server().await;
-    let laptop = paired(&running, &identity("laptop")).await;
+    let (dir, running) = relayed_server().await;
+    let laptop = paired(&running, &identity("laptop", &DeviceKey::generate())).await;
     let (id, _shown) = held_terminal(dir.path(), &laptop).await;
 
     let large = vec![b'x'; 8 << 20];
@@ -158,35 +152,47 @@ async fn held_terminal(dir: &Path, holder: &Connection) -> (TaskId, DataStream) 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_terminal_lock_follows_its_holders_key_and_not_a_name_it_gave_up() {
-    let (dir, running) = server().await;
-    let (laptop, phone) = (identity("laptop"), identity("phone"));
+    let (dir, running) = relayed_server().await;
+    let [laptop, phone, local_laptop] =
+        ["laptop", "phone", "laptop"].map(|name| identity(name, &DeviceKey::generate()));
     let holder = paired(&running, &laptop).await;
     paired(&running, &phone).await;
     let (id, _shown) = held_terminal(dir.path(), &holder).await;
+    let (on_socket, over_iroh) = (common::local(&running.socket), remote(&running));
 
-    let renamed = Connection::connect(&remote(&running), &twin(&laptop, "desk")).await.expect("rename the laptop");
+    let renamed = Connection::connect(&over_iroh, &identity("desk", &laptop.key)).await.expect("rename the laptop");
     let panel = task(&renamed, &id).await.panels.remove(0);
     assert_eq!(holder_name(&panel), Some("desk"), "the lock is labelled with its holder's new name");
-    let impostor = Connection::connect(&remote(&running), &twin(&phone, "laptop")).await.expect("a freed name");
     let write = TermSend { take_lock: false, ..send(&id, "agent", "x") };
-    let written = impostor.call(&write).await;
-    assert!(matches!(&written, Err(CallError::Server(Error::PtyLocked { holder })) if holder == "desk"), "{written:?}");
+    let impostor = Connection::connect(&over_iroh, &identity("laptop", &phone.key)).await.expect("a freed name");
+    let local = Connection::connect(&on_socket, &local_laptop).await.expect("connect on the socket");
+    for other in [&impostor, &local] {
+        let written = other.call(&write).await;
+        let refused = matches!(&written, Err(CallError::Server(Error::PtyLocked { holder })) if holder == "desk");
+        assert!(refused, "{written:?}");
+    }
+    let paired_lock = panel.lock_holder.expect("the paired laptop holds the lock");
+    assert!(laptop.holds(&paired_lock, &over_iroh) && !local_laptop.holds(&paired_lock, &on_socket));
     holder.call(&write).await.expect("the holder still writes under its old name");
 
     let claim = TermClaim { task: id.clone(), panel: "agent".into(), cols: panel.cols, rows: panel.rows };
     holder.call(&claim).await.expect("claim under the old name");
     holder.call(&send(&id, "agent", "x")).await.expect("take under the old name");
     assert_eq!(holder_name(&task(&holder, &id).await.panels[0]), Some("desk"));
+
+    local.call(&send(&id, "agent", "x")).await.expect("the local laptop takes the lock");
+    let local_lock = task(&local, &id).await.panels.remove(0).lock_holder.expect("the local laptop holds it");
+    assert!(local_laptop.holds(&local_lock, &on_socket) && !laptop.holds(&local_lock, &over_iroh));
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn forgetting_a_device_closes_its_connections_and_frees_every_lock_it_holds() {
-    let (dir, running) = server().await;
-    let laptop = identity("laptop");
+    let (dir, running) = relayed_server().await;
+    let laptop = identity("laptop", &DeviceKey::generate());
     let holder = paired(&running, &laptop).await;
     let (id, _shown) = held_terminal(dir.path(), &holder).await;
 
-    let owner = connect(&running, "owner").await;
+    let owner = connect(&running.socket, "owner").await;
     owner.call(&forget(&laptop)).await.expect("forget the laptop");
     assert_eq!(holder_name(&task(&owner, &id).await.panels[0]), None);
     let closed = tokio::time::timeout(Duration::from_secs(5), holder.closed()).await.expect("the connection closes");
@@ -196,32 +202,15 @@ async fn forgetting_a_device_closes_its_connections_and_frees_every_lock_it_hold
     assert_eq!(holder_name(&task(&owner, &id).await.panels[0]), None);
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_local_client_and_a_paired_one_of_one_name_each_hold_only_their_own_lock() {
-    let (dir, running) = server().await;
-    let (local_me, paired_me) = (identity("laptop"), identity("laptop"));
-    let local = connect(&running, "laptop").await;
-    let paired = paired(&running, &paired_me).await;
-    let (id, _shown) = held_terminal(dir.path(), &local).await;
-    let (on_socket, over_iroh) = (Address::Local { socket: running.socket.clone() }, remote(&running));
-
-    let local_lock = task(&local, &id).await.panels.remove(0).lock_holder.expect("the local client holds it");
-    assert!(local_me.holds(&local_lock, &on_socket) && !paired_me.holds(&local_lock, &over_iroh));
-    paired.call(&send(&id, "agent", "x")).await.expect("the paired client takes the lock");
-    let paired_lock = task(&local, &id).await.panels.remove(0).lock_holder.expect("the paired client holds it");
-    assert_ne!(local_lock, paired_lock, "two clients of one name hold two different locks");
-    assert!(paired_me.holds(&paired_lock, &over_iroh) && !local_me.holds(&paired_lock, &on_socket));
-}
-
 fn open(task: &TaskId, url: &str, panel: BrowserTarget) -> BrowserOpen {
     BrowserOpen { task: task.clone(), url: url.into(), panel }
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_browser_panel_is_task_state_and_its_localhost_page_tunnels_to_the_servers_port() {
-    let (dir, running) = server().await;
-    let laptop = Arc::new(paired(&running, &identity("laptop")).await);
-    let desk = connect(&running, "desk").await;
+    let (dir, running) = relayed_server().await;
+    let laptop = Arc::new(paired(&running, &identity("laptop", &DeviceKey::generate())).await);
+    let desk = connect(&running.socket, "desk").await;
     let mut pushes = desk.pushes();
     let workspace = workspace(&desk, dir.path()).await;
     let id = create(&desk, &workspace, CheckoutKind::Root, "none").await;
@@ -319,7 +308,7 @@ async fn a_browser_panel_is_task_state_and_its_localhost_page_tunnels_to_the_ser
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_connection_whose_device_proof_fails_is_closed_unread() {
-    let (_dir, running) = server().await;
+    let (_dir, running) = relayed_server().await;
     let relay = running.server.relay().clone();
     let forger = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .relay_mode(iroh::RelayMode::Custom(iroh::RelayMap::from(relay.clone())))
@@ -330,7 +319,7 @@ async fn a_connection_whose_device_proof_fails_is_closed_unread() {
     let connection = forger.connect(iroh::EndpointAddr::new(server).with_relay_url(relay), b"octopus/1").await;
     let connection = connection.expect("the handshake completes");
     let mut proof = connection.open_uni().await.expect("open the proof stream");
-    let unsigned = [identity("laptop").key.public().as_bytes().as_slice(), &[0u8; 64]].concat();
+    let unsigned = [identity("laptop", &DeviceKey::generate()).key.public().as_bytes().as_slice(), &[0u8; 64]].concat();
     proof.write_all(&unsigned).await.expect("send the proof");
     proof.finish().expect("finish the proof");
     let closed = tokio::time::timeout(Duration::from_secs(5), connection.closed()).await.expect("closed");
@@ -339,10 +328,9 @@ async fn a_connection_whose_device_proof_fails_is_closed_unread() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_linked_device_brings_its_servers_and_a_removal_shuts_it_out_of_every_one() {
-    let (laptop_dir, desk_dir) = (tempfile::tempdir().expect("tempdir"), tempfile::tempdir().expect("tempdir"));
-    let laptop_server = start(laptop_dir.path(), "server.sock", "host.sock").await;
-    let desk = start(desk_dir.path(), "server.sock", "host.sock").await;
-    let (laptop, phone) = (identity("laptop"), identity("phone"));
+    let (_laptop_dir, laptop_server) = relayed_server().await;
+    let (_desk_dir, desk) = relayed_server().await;
+    let (laptop, phone) = (identity("laptop", &DeviceKey::generate()), identity("phone", &DeviceKey::generate()));
     let on_laptop = Connection::connect(&common::local(&laptop_server.socket), &laptop).await.expect("connect");
     paired(&desk, &phone).await;
 
@@ -350,7 +338,8 @@ async fn a_linked_device_brings_its_servers_and_a_removal_shuts_it_out_of_every_
     let account = link.account;
     let spare = link.to_string().parse::<Link>().expect("a link");
     servers::join(&link, &phone).await.expect("join");
-    let spent = servers::join(&spare, &identity("tablet")).await.expect_err("a link joins one device");
+    let spent =
+        servers::join(&spare, &identity("tablet", &DeviceKey::generate())).await.expect_err("a link joins one device");
     assert!(format!("{spent:#}").contains("expires or is spent"), "{spent:#}");
     assert_eq!(phone.account.account().id(), account);
 
@@ -381,8 +370,12 @@ async fn a_linked_device_brings_its_servers_and_a_removal_shuts_it_out_of_every_
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_device_paired_to_the_links_server_joins_through_it_and_no_other_account_writes_into_this_one() {
-    let (_dir, running) = server().await;
-    let (laptop, tablet, stranger) = (identity("laptop"), identity("tablet"), identity("stranger"));
+    let (_dir, running) = relayed_server().await;
+    let (laptop, tablet, stranger) = (
+        identity("laptop", &DeviceKey::generate()),
+        identity("tablet", &DeviceKey::generate()),
+        identity("stranger", &DeviceKey::generate()),
+    );
     let on_laptop = Connection::connect(&common::local(&running.socket), &laptop).await.expect("connect");
     paired(&running, &tablet).await;
     let intruder = paired(&running, &stranger).await;

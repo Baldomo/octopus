@@ -106,21 +106,21 @@ export const backend = {
   fileSearch: (at: TaskRef, pattern: string) => invoke<Match[]>(octopus("file_search"), { at, pattern }),
 };
 
+export const on =
+  <T>(event: string) =>
+  (handle: (payload: T) => void) =>
+    listen<T>(event, (heard) => handle(heard.payload));
+
 export const events = {
-  model: (handle: (model: Model) => void) => listen<Model>(EVENTS.model, (event) => handle(event.payload)),
-  servers: (handle: (servers: ServerView[]) => void) =>
-    listen<ServerView[]>(EVENTS.servers, (event) => handle(event.payload)),
-  account: (handle: (account: AccountView) => void) =>
-    listen<AccountView>(EVENTS.account, (event) => handle(event.payload)),
-  filesChanged: (handle: (changed: FilesChanged[]) => void) =>
-    listen<FilesChanged[]>(EVENTS.filesChanged, (event) => handle(event.payload)),
-  ui: (handle: (ui: Ui) => void) => listen<Ui>(EVENTS.ui, (event) => handle(event.payload)),
-  windowShown: (handle: (shown: boolean) => void) =>
-    listen<boolean>(EVENTS.windowShown, (event) => handle(event.payload)),
-  windowFocused: (handle: () => void) => listen(EVENTS.windowFocused, handle),
-  fileDrag: (handle: (drag: FileDrag) => void) => listen<FileDrag>(EVENTS.fileDrag, (event) => handle(event.payload)),
-  microphoneDenied: (handle: (denied: boolean) => void) =>
-    listen<boolean>(EVENTS.microphoneDenied, (event) => handle(event.payload)),
+  model: on<Model>(EVENTS.model),
+  servers: on<ServerView[]>(EVENTS.servers),
+  account: on<AccountView>(EVENTS.account),
+  filesChanged: on<FilesChanged[]>(EVENTS.filesChanged),
+  ui: on<Ui>(EVENTS.ui),
+  windowShown: on<boolean>(EVENTS.windowShown),
+  windowFocused: on<void>(EVENTS.windowFocused),
+  fileDrag: on<FileDrag>(EVENTS.fileDrag),
+  microphoneDenied: on<boolean>(EVENTS.microphoneDenied),
 };
 
 export { Channel };

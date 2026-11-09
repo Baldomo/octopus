@@ -5,7 +5,7 @@ use octopus_proto::device::PublicKey;
 use octopus_proto::local::{self, Listener};
 use octopus_proto::ops::{AccountJoin, Done, PairingPair, SessionHello, SessionPing};
 use octopus_proto::remote::{self, Connection, Endpoint};
-use octopus_proto::types::{PtyId, Stream};
+use octopus_proto::types::Stream;
 use octopus_proto::{
     Error, FileSize, Op, Outcome, Request, Response, ServerFrame, StreamHeader, line, parse_args, parse_request,
     request_from,
@@ -68,8 +68,8 @@ impl Peer {
 
 /// Serves the local socket and iroh at once, with one protocol on both.
 pub async fn serve(server: Arc<Server>, local: Listener, remote: Endpoint) {
-    tokio::spawn(remove_expired_worktrees(Arc::clone(&server)));
-    tokio::spawn(reclaim_agents(Arc::clone(&server)));
+    tokio::spawn(every(WORKTREE_SWEEP_INTERVAL, Arc::clone(&server), "worktree sweep", remove_expired_worktrees));
+    tokio::spawn(every(RECLAIM_SWEEP_INTERVAL, Arc::clone(&server), "agent reclaim", reclaim_agents));
     tokio::spawn(serve_remote(Arc::clone(&server), remote));
     local::accept_forever(local, |stream| drop(tokio::spawn(serve_stream(Arc::clone(&server), stream, Peer::Local))))
         .await
@@ -171,36 +171,33 @@ async fn claim(server: &Arc<Server>, key: PublicKey, request: &Request) -> Resul
     }
 }
 
-async fn remove_expired_worktrees(server: Arc<Server>) {
-    let mut interval = tokio::time::interval(WORKTREE_SWEEP_INTERVAL);
+/// Runs `work` off the async threads once every `period`, starting now; a run that panics is reported as `name`'s and
+/// the next one runs on time.
+async fn every(period: Duration, server: Arc<Server>, name: &'static str, work: fn(&Server)) {
+    let mut interval = tokio::time::interval(period);
     loop {
         interval.tick().await;
         let server = Arc::clone(&server);
-        match tokio::task::spawn_blocking(move || server.remove_expired_worktrees(crate::now())).await {
-            Ok(Ok(sweep)) => {
-                for (task, error) in sweep.failed {
-                    report!("removing the worktree of {task}: {error}");
-                }
-            }
-            Ok(Err(error)) => report!("worktree sweep: {error}"),
-            Err(error) => report!("worktree sweep panicked: {error}"),
+        if let Err(error) = tokio::task::spawn_blocking(move || work(&server)).await {
+            report!("{name} panicked: {error}");
         }
     }
 }
 
-async fn reclaim_agents(server: Arc<Server>) {
-    let mut interval = tokio::time::interval(RECLAIM_SWEEP_INTERVAL);
-    loop {
-        interval.tick().await;
-        let server = Arc::clone(&server);
-        match tokio::task::spawn_blocking(move || server.reclaim_agents(crate::now())).await {
-            Ok(reclaimed) => {
-                for task in reclaimed {
-                    report!("stopped the idle agent of {task} to reclaim its memory");
-                }
+fn remove_expired_worktrees(server: &Server) {
+    match server.remove_expired_worktrees(crate::now()) {
+        Ok(sweep) => {
+            for (task, error) in sweep.failed {
+                report!("removing the worktree of {task}: {error}");
             }
-            Err(error) => report!("agent reclaim panicked: {error}"),
         }
+        Err(error) => report!("worktree sweep: {error}"),
+    }
+}
+
+fn reclaim_agents(server: &Server) {
+    for task in server.reclaim_agents(crate::now()) {
+        report!("stopped the idle agent of {task} to reclaim its memory");
     }
 }
 
@@ -330,10 +327,6 @@ enum Opened {
     Mic(Arc<Terminal>),
 }
 
-fn find_terminal(server: &Server, id: &PtyId) -> Result<Arc<Terminal>, Error> {
-    server.terminal(id).ok_or_else(|| Error::not_found(id))
-}
-
 impl Opened {
     /// What the open reply carries beside success: a read's file size, and nothing for any other stream.
     fn reply(&self) -> Option<FileSize> {
@@ -353,17 +346,19 @@ async fn open(server: &Arc<Server>, stream: Stream, client: &Client) -> Result<O
             Ok(Opened::Read(size, bytes))
         }
         Stream::Upload { task, bytes, path } => {
-            Ok(Opened::Upload(blocking(server, move |server| server.upload_file(&task, &path, bytes)).await?))
+            let upload =
+                blocking(server, move |server| crate::files::upload(&server.checkout_dir(&task)?, &path, bytes));
+            Ok(Opened::Upload(upload.await?))
         }
         Stream::Pty(id) => {
-            let terminal = blocking(server, move |server| find_terminal(server, &id)).await?;
+            let terminal = blocking(server, move |server| server.terminal(&id)).await?;
             let output = terminal.attach().await?;
             Ok(Opened::Pty(terminal, output))
         }
         Stream::Mic(id) => {
             let client = client.clone();
             let terminal = blocking(server, move |server| {
-                let terminal = find_terminal(server, &id)?;
+                let terminal = server.terminal(&id)?;
                 server.check_holder(&client, &terminal).map(|()| terminal)
             })
             .await?;
@@ -399,7 +394,7 @@ where
             }
         }
         Opened::Upload(upload) => {
-            let landed = Outcome::from(receive(&server, upload, input).await.map(|()| Done {}));
+            let landed = Outcome::from(upload.receive(input).await.map(|()| Done {}));
             if write.write_all(line(&landed).as_bytes()).await.is_ok() {
                 let _peer_gone = write.shutdown().await;
             }
@@ -459,26 +454,6 @@ async fn relay_terminal<R, W>(
         server.client_disconnected(&client);
     })
     .await;
-}
-
-/// Lands the upload once exactly its declared bytes arrive and the client finishes its stream; a short or long one
-/// lands nothing, and a long one stops being read one byte past its size.
-async fn receive<R: AsyncRead + Unpin>(
-    server: &Arc<Server>,
-    upload: crate::files::Upload,
-    input: BufReader<R>,
-) -> Result<(), Error> {
-    let gathering = upload.gathering.as_file().try_clone().map_err(Error::internal)?;
-    let mut file = tokio::fs::File::from_std(gathering);
-    let bytes = upload.bytes;
-    let arrived = tokio::io::copy(&mut input.take(bytes + 1), &mut file)
-        .await
-        .map_err(|error| Error::internal(format!("upload: {error}")))?;
-    if arrived != bytes {
-        return Err(Error::invalid(format!("the upload carried {arrived} bytes, not its declared {bytes}")));
-    }
-    file.sync_all().await.map_err(Error::internal)?;
-    blocking(server, move |_| upload.land()).await
 }
 
 /// Takes the holder's audio until it closes the stream or the lock leaves it, which closes the stream.

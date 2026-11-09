@@ -3,14 +3,12 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{connect, create, refused, server, task, workspace};
+use common::{connect, create, refused, server, task, task_create, workspace, workspace_add};
 use octopus_proto::ops::{
     SessionSync, TaskArchive, TaskCreate, TaskMove, TaskRename, TaskSetParent, WorkspaceAdd, WorkspaceList,
     WorkspaceRemove, WorkspaceRename, WorkspaceSetColor,
 };
-use octopus_proto::types::{
-    Checkout, CheckoutKind, Color, Hue, SessionStart, Swatch, TaskId, TaskState, Tone, WorkspaceId,
-};
+use octopus_proto::types::{Checkout, CheckoutKind, Color, Hue, Swatch, TaskId, TaskState, Tone, WorkspaceId};
 use octopus_proto::{Error, Event, Op, Outcome};
 use octopus_server::WORKTREE_LIFETIME_MS;
 use serde_json::json;
@@ -34,7 +32,7 @@ fn repo(dir: &Path) -> PathBuf {
 async fn a_worktree_lives_on_its_branch_until_its_lifetime_after_the_task_ends() {
     let (dir, running) = server().await;
     let repo = repo(dir.path());
-    let laptop = connect(&running, "laptop").await;
+    let laptop = connect(&running.socket, "laptop").await;
     let workspace = workspace(&laptop, &repo).await;
 
     let id = create(&laptop, &workspace, CheckoutKind::Worktree, "none").await;
@@ -70,7 +68,7 @@ async fn a_copy_starts_with_the_roots_ignored_files_and_gets_them_again_when_it_
     std::fs::write(repo.join("target").join("built"), "cache").expect("write build output");
     std::fs::write(repo.join(".env"), "KEY=1").expect("write .env");
     std::fs::write(repo.join("draft.md"), "untracked").expect("write untracked file");
-    let laptop = connect(&running, "laptop").await;
+    let laptop = connect(&running.socket, "laptop").await;
     let workspace = workspace(&laptop, &repo).await;
 
     let id = create(&laptop, &workspace, CheckoutKind::Copy, "none").await;
@@ -96,10 +94,9 @@ async fn a_copy_starts_with_the_roots_ignored_files_and_gets_them_again_when_it_
 async fn a_workspace_renames_and_recolors_in_place_and_goes_with_its_tasks_once_none_is_live() {
     let (dir, running) = server().await;
     let repo = repo(dir.path());
-    let laptop = connect(&running, "laptop").await;
+    let laptop = connect(&running.socket, "laptop").await;
     let teal = Color::Picked(Swatch { hue: Hue::Teal, tone: Tone::Deep });
-    let add =
-        |name: &str, root: &Path| WorkspaceAdd { name: name.into(), root: root.to_string_lossy().into(), color: teal };
+    let add = |name: &str, root: &Path| WorkspaceAdd { name: name.into(), color: teal, ..workspace_add(root) };
     assert!(matches!(refused(laptop.call(&add("x", Path::new("repo"))).await), Error::InvalidArgs { .. }));
     assert!(matches!(refused(laptop.call(&add(" ", &repo)).await), Error::InvalidArgs { .. }));
     let doomed = workspace(&laptop, &repo).await;
@@ -130,15 +127,7 @@ async fn a_workspace_renames_and_recolors_in_place_and_goes_with_its_tasks_once_
         (view.title.as_str(), view.checkout),
         ("Renamed", Checkout::Worktree { branch: "task/strict-serde".into() })
     );
-    let child = TaskCreate {
-        workspace: other,
-        title: "child".into(),
-        parent: Some(id.clone()),
-        state: TaskState::Pinned,
-        checkout: CheckoutKind::Root,
-        harness: "none".into(),
-        session: SessionStart::Fresh,
-    };
+    let child = TaskCreate { parent: Some(id.clone()), ..task_create(&other, CheckoutKind::Root, "none") };
     let child = laptop.call(&child).await.expect("task.create").task;
 
     let remove = WorkspaceRemove { workspace: doomed.clone() };
@@ -156,7 +145,7 @@ async fn a_workspace_renames_and_recolors_in_place_and_goes_with_its_tasks_once_
 #[tokio::test(flavor = "multi_thread")]
 async fn only_an_ended_task_archives_and_a_move_unarchives_it() {
     let (dir, running) = server().await;
-    let laptop = connect(&running, "laptop").await;
+    let laptop = connect(&running.socket, "laptop").await;
     let id = create(&laptop, &workspace(&laptop, dir.path()).await, CheckoutKind::Root, "none").await;
     let archive = TaskArchive { task: id.clone() };
     assert!(matches!(refused(laptop.call(&archive).await), Error::Conflict { .. }));
@@ -173,24 +162,16 @@ async fn only_an_ended_task_archives_and_a_move_unarchives_it() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_task_nests_under_another_task_of_its_workspace_outside_its_own_subtree() {
     let (dir, running) = server().await;
-    let laptop = connect(&running, "laptop").await;
-    let desk = connect(&running, "desk").await;
+    let laptop = connect(&running.socket, "laptop").await;
+    let desk = connect(&running.socket, "desk").await;
     let octopus = workspace(&laptop, dir.path()).await;
     let elsewhere_root = dir.path().join("dotfiles");
     std::fs::create_dir(&elsewhere_root).expect("mkdir dotfiles");
-    let dotfiles =
-        WorkspaceAdd { name: "dotfiles".into(), root: elsewhere_root.to_string_lossy().into(), color: Color::Auto };
+    let dotfiles = WorkspaceAdd { name: "dotfiles".into(), ..workspace_add(&elsewhere_root) };
     let dotfiles = laptop.call(&dotfiles).await.expect("workspace.add").workspace;
     let make = async |workspace: &WorkspaceId, parent: Option<&TaskId>, state| {
-        let create = TaskCreate {
-            workspace: workspace.clone(),
-            title: "t".into(),
-            parent: parent.cloned(),
-            state,
-            checkout: CheckoutKind::Root,
-            harness: "none".into(),
-            session: SessionStart::Fresh,
-        };
+        let create =
+            TaskCreate { parent: parent.cloned(), state, ..task_create(workspace, CheckoutKind::Root, "none") };
         laptop.call(&create).await.expect("task.create").task
     };
     let root = make(&octopus, None, TaskState::Pinned).await;

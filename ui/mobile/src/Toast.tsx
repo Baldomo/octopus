@@ -23,6 +23,11 @@ export function notify(text: string) {
   setTimeout(() => said()?.nth === nth && setSaid(null), SAID_MS);
 }
 
+export async function copy(text: string, what: string) {
+  await navigator.clipboard.writeText(text);
+  notify(`Copied ${what}`);
+}
+
 /**
  * A failed op, with its warning and the OS's error feel, or a confirmation, 8 above the bottom edge and 8 in from the
  * sides. It rises in, its text changes in place, and it sinks away when it ends or a finger swipes it down.

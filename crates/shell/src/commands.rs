@@ -196,7 +196,7 @@ pub async fn task_archive(hub: Hubbed<'_>, at: TaskRef) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn task_focus(hub: Hubbed<'_>, ui: Uis<'_>, at: TaskRef) -> Result<(), String> {
-    let args = ui.agent_args(&hub.harness_of(&at)?);
+    let args = ui.agent_args(&hub.task(&at)?.harness);
     hub.call(&at.server, &TaskFocus { task: at.task, args }).await.map(drop)
 }
 

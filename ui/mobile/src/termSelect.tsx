@@ -1,11 +1,11 @@
 import type { Terminal } from "@xterm/xterm";
 import { createSignal, onCleanup, Show } from "solid-js";
-import { report, scale, ui } from "@octopus/shared/state.ts";
+import { act, scale, ui } from "@octopus/shared/state.ts";
 import { urlsIn } from "@octopus/shared/terminalUrls.ts";
 import { feel } from "./feel";
 import { phone } from "./phone";
 import { LONG_PRESS_MS, type Point } from "./press";
-import { notify } from "./Toast";
+import { copy } from "./Toast";
 import { COMMIT_PX, fingerIn, keepTouch } from "./touch";
 
 /** A buffer cell; `row` counts from the first line of the scrollback. */
@@ -248,11 +248,7 @@ export function termSelection(props: {
       });
   };
 
-  const copy = () =>
-    navigator.clipboard.writeText(xterm.getSelection()).then(() => {
-      xterm.clearSelection();
-      notify("Copied the selection");
-    }, report);
+  const copySelection = () => act(copy(xterm.getSelection(), "the selection").then(() => xterm.clearSelection()));
 
   const placed = (point: Point) => ({
     left: `calc(var(--g1) + ${point.x}px)`,
@@ -290,7 +286,7 @@ export function termSelection(props: {
             style={placed(cornerOf({ col: held().to.col + 1, row: held().to.row }))}
           />
           <Show when={!moving()}>
-            <button ref={measureMenu} class="selmenu" style={menuAt(held())} onClick={copy}>
+            <button ref={measureMenu} class="selmenu" style={menuAt(held())} onClick={copySelection}>
               Copy
             </button>
           </Show>
@@ -314,7 +310,7 @@ export function termSelection(props: {
       const cell = cellAt(point, false);
       const url = cell === null ? null : linkAt(xterm, cell);
       if (url === null) return false;
-      phone.open(url).catch(report);
+      act(phone.open(url));
       return true;
     },
   };

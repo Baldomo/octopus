@@ -42,15 +42,13 @@ pub(crate) async fn browser_move(hub: Hubbed<'_>, at: TaskRef, panel: BrowserId,
 /// Loads the panel's `url` on this client unless its webview already loaded this `load` of the panel.
 #[tauri::command]
 pub(crate) async fn browser_load(
-    app: AppHandle,
-    hub: Hubbed<'_>,
     browsers: Browsing<'_>,
     at: TaskRef,
     panel: BrowserId,
     url: String,
     load: u64,
 ) -> Result<(), String> {
-    browsers.load(&app, &hub, &at, &panel, &url, load).await
+    browsers.load(&at, &panel, &url, load).await
 }
 
 #[tauri::command]
@@ -106,8 +104,7 @@ pub(crate) fn file_outside(hub: Hubbed<'_>, at: TaskRef, path: String, how: Outs
     if relative.components().any(|component| !matches!(component, Component::Normal(_) | Component::CurDir)) {
         return Err(format!("{path} is not a path inside the checkout"));
     }
-    let task = hub.model().tasks.remove(&at.key()).ok_or_else(|| format!("no task {}", at.task))?;
-    let entry = Path::new(&task.task.directory).join(relative);
+    let entry = Path::new(&hub.task(&at)?.directory).join(relative);
     match how {
         Outside::Reveal => tauri_plugin_opener::reveal_item_in_dir(&entry),
         Outside::Open => tauri_plugin_opener::open_path(&entry, None::<&str>),
@@ -115,25 +112,21 @@ pub(crate) fn file_outside(hub: Hubbed<'_>, at: TaskRef, path: String, how: Outs
     .map_err(|error| format!("{}: {error}", entry.display()))
 }
 
-/// What double-clicking the title bar does, as the user set it: on macOS in System Settings ▸ Desktop & Dock,
-/// elsewhere always a zoom.
-fn title_bar_action() -> &'static str {
+/// What the user set double-clicking a title bar to do in System Settings ▸ Desktop & Dock; nothing outside macOS.
+fn title_bar_setting() -> Option<String> {
     if !cfg!(target_os = "macos") {
-        return "Maximize";
+        return None;
     }
-    let read = std::process::Command::new("defaults").args(["read", "-g", "AppleActionOnDoubleClick"]).output();
-    match read.map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string()).as_deref() {
-        Ok("Minimize") => "Minimize",
-        Ok("None") => "None",
-        _ => "Maximize",
-    }
+    let read = std::process::Command::new("defaults").args(["read", "-g", "AppleActionOnDoubleClick"]).output().ok()?;
+    Some(String::from_utf8_lossy(&read.stdout).trim().to_string())
 }
 
+/// Does what double-clicking the title bar does as the user set it, else a zoom.
 #[tauri::command]
 pub(crate) fn title_bar_double_click(window: tauri::Window) -> Result<(), String> {
-    let done = match title_bar_action() {
-        "Minimize" => window.minimize(),
-        "None" => Ok(()),
+    let done = match title_bar_setting().as_deref() {
+        Some("Minimize") => window.minimize(),
+        Some("None") => Ok(()),
         _ if window.is_maximized().map_err(|error| error.to_string())? => window.unmaximize(),
         _ => window.maximize(),
     };

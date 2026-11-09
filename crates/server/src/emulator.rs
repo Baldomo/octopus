@@ -306,8 +306,10 @@ impl Drawing {
     fn restyle(&mut self, cell: &Cell) {
         let link = cell.hyperlink();
         if link != self.link {
-            let (id, uri) = link.as_ref().map_or(("", ""), |link| (link.id(), link.uri()));
-            self.text.push_str(&format!("\x1b]8;id={id};{uri}\x1b\\"));
+            match &link {
+                Some(link) => self.text.push_str(&format!("\x1b]8;id={};{}\x1b\\", link.id(), link.uri())),
+                None => self.text.push_str("\x1b]8;;\x1b\\"),
+            }
             self.link = link;
         }
         let style = Style::of(cell);

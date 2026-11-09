@@ -22,20 +22,27 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 pub const SERVER: &str = "mac-mini";
 pub const OCTOPUS: &str = env!("CARGO_BIN_EXE_octopus");
 
-pub struct Running {
-    pub server: Arc<Server>,
-    pub socket: PathBuf,
-    /// The relay the server is homed on, served on loopback over plain HTTP for as long as the server runs.
-    pub relay: iroh_relay::server::Server,
-}
-
 /// A relay URL that refuses every connection, for a server whose tests reach it over the local socket alone.
 const NO_RELAY: &str = "http://127.0.0.1:9/";
 
-/// Serves `dir`'s store on `socket`, keeping terminals in the host at `host`. A second call on the same `dir` and
-/// `host` plays a server restart; a fresh `host` plays a machine restart: the server finds none of its terminals.
+/// A server in this process, which ends its terminal host and every agent on drop.
+pub struct Running {
+    pub server: Arc<Server>,
+    pub socket: PathBuf,
+    host: PathBuf,
+    relay: Option<iroh_relay::server::Server>,
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        end_host(&self.host);
+    }
+}
+
+/// Serves `dir`'s store on `socket`, keeping terminals in the host at `host`. A fresh `host` on the same `dir` plays a
+/// machine restart: the server finds none of its terminals.
 pub async fn start(dir: &Path, socket: &str, host: &str) -> Running {
-    start_with(dir, socket, host, false).await
+    serve_on(dir, socket, host, None).await
 }
 
 /// A server started in a fresh directory, which lives as long as the returned `TempDir`.
@@ -45,24 +52,49 @@ pub async fn server() -> (TempDir, Running) {
     (dir, running)
 }
 
-/// As `start`, giving each terminal a virtual microphone when `microphone` holds.
-pub async fn start_with(dir: &Path, socket: &str, host: &str, microphone: bool) -> Running {
+/// As `server`, homed on a relay of its own, served on loopback over plain HTTP for as long as the server runs.
+pub async fn relayed_server() -> (TempDir, Running) {
     let mut config = iroh_relay::server::ServerConfig::default();
     config.relay = Some(iroh_relay::server::RelayConfig::new(([127, 0, 0, 1], 0)));
     let relay = iroh_relay::server::Server::spawn(config).await.expect("spawn a relay");
-    let url: RelayUrl = format!("http://{}", relay.http_addr().expect("the relay serves HTTP")).parse().expect("a URL");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = serve_on(dir.path(), "server.sock", "host.sock", Some(relay)).await;
+    (dir, running)
+}
+
+async fn serve_on(dir: &Path, socket: &str, host: &str, relay: Option<iroh_relay::server::Server>) -> Running {
+    let url = relay
+        .as_ref()
+        .map_or(NO_RELAY.into(), |relay| format!("http://{}", relay.http_addr().expect("the relay serves HTTP")));
+    let url: RelayUrl = url.parse().expect("a URL");
     let socket = dir.join(socket);
     let host = TerminalHost { program: OCTOPUS.into(), address: dir.join(host) };
-    let server = Server::open(SERVER, &dir.join("store.db"), &dir.join("worktrees"), &host, url.clone(), microphone)
+    let server = Server::open(SERVER, &dir.join("store.db"), &dir.join("worktrees"), &host, url.clone(), false)
         .expect("open server");
     let endpoint = remote::listen(([127, 0, 0, 1], 0).into(), url, server.device()).await.expect("bind iroh");
     tokio::spawn(serve(Arc::clone(&server), Listener::bind(&socket).expect("bind"), endpoint));
-    Running { server, socket, relay }
+    Running { server, socket, host: host.address, relay }
 }
 
-/// A client named `name` with a key of its own.
-pub fn identity(name: &str) -> Identity {
-    let key = DeviceKey::generate();
+/// Kills every process the host's terminals started, then the host, as a machine shutdown would. Each terminal's
+/// program leads a session of its own, so killing its group never reaches the test runner.
+fn end_host(address: &Path) {
+    let host = format!("terminal-host --address {}", address.display());
+    let pids = |args: &[&str]| {
+        let found = Command::new("pgrep").args(args).output().map(|output| output.stdout).unwrap_or_default();
+        String::from_utf8_lossy(&found).split_whitespace().map(str::to_owned).collect::<Vec<_>>()
+    };
+    let pkill = |args: &[&str]| Command::new("pkill").arg("-KILL").args(args).status();
+    for program in pids(&["-f", &host]).iter().flat_map(|host| pids(&["-P", host])) {
+        let _detached_children_gone = pkill(&["-P", &program]);
+        let _group_gone = pkill(&["-g", &program]);
+    }
+    let _gone = pkill(&["-f", &host]);
+}
+
+/// A client named `name` with `key`, which another identity of the same key makes a second process of one device.
+pub fn identity(name: &str, key: &DeviceKey) -> Identity {
+    let key = DeviceKey::from_pkcs8(key.pkcs8()).expect("a key");
     let account = Book::memory(&key);
     Identity::new(name.into(), key, account).expect("an identity")
 }
@@ -71,10 +103,16 @@ pub fn local(socket: &Path) -> Address {
     Address::Local { socket: socket.to_path_buf() }
 }
 
-/// An `octopus server run` process, killed when dropped.
+/// A client named `name`, with a key of its own, on the server's local socket.
+pub async fn connect(socket: &Path, name: &str) -> Connection {
+    Connection::connect(&local(socket), &identity(name, &DeviceKey::generate())).await.expect("connect")
+}
+
+/// An `octopus server run` process, killed with its terminal host and every agent when dropped.
 pub struct ServerProcess {
     child: Child,
     pub socket: PathBuf,
+    host: Option<PathBuf>,
 }
 
 fn server_run(dir: &Path) -> Command {
@@ -106,21 +144,16 @@ impl ServerProcess {
 
     async fn serve(dir: &Path, mut command: Command) -> Self {
         let child = command.spawn().expect("spawn octopus server run");
-        let process = Self { child, socket: dir.join("server.sock") };
-        let probe = identity("probe");
+        let process = Self { child, socket: dir.join("server.sock"), host: Some(dir.join("host.sock")) };
+        let probe = identity("probe", &DeviceKey::generate());
         eventually("the server answering", async || Connection::connect(&local(&process.socket), &probe).await.is_ok())
             .await;
         process
     }
 
-    pub async fn connect(&self, client: &str) -> Connection {
-        Connection::connect(&local(&self.socket), &identity(client)).await.expect("connect")
-    }
-
-    /// Ends the process the way a crash does, with no chance to clean up.
+    /// Ends the process the way a crash does, with no chance to clean up, leaving its terminals to the next server.
     pub fn kill(mut self) {
-        self.child.kill().expect("kill the server");
-        self.child.wait().expect("reap the server");
+        self.host = None;
     }
 }
 
@@ -128,11 +161,10 @@ impl Drop for ServerProcess {
     fn drop(&mut self) {
         let _already_dead = self.child.kill();
         let _reaped = self.child.wait();
+        if let Some(host) = &self.host {
+            end_host(host);
+        }
     }
-}
-
-pub async fn connect(running: &Running, client: &str) -> Connection {
-    Connection::connect(&local(&running.socket), &identity(client)).await.expect("connect")
 }
 
 /// An agent that prints `<line>`, then stays open reading input, which the terminal echoes.
@@ -163,20 +195,17 @@ pub fn send(id: &TaskId, panel: &str, text: &str) -> TermSend {
     TermSend { task: id.clone(), panel: panel.into(), text: text.into(), enter: true, take_lock: true }
 }
 
-/// Writes `script` as the login profile of both sh-family shells and zsh under `home`.
-pub fn write_login_profile(home: &Path, script: &str) {
-    for file in [".profile", ".zprofile"] {
-        std::fs::write(home.join(file), script).expect("profile");
-    }
+pub fn workspace_add(root: &Path) -> WorkspaceAdd {
+    WorkspaceAdd { name: "octopus".into(), root: root.to_string_lossy().to_string(), color: Color::Auto }
 }
 
 pub async fn workspace(connection: &Connection, root: &Path) -> WorkspaceId {
-    let add = WorkspaceAdd { name: "octopus".into(), root: root.to_string_lossy().to_string(), color: Color::Auto };
-    connection.call(&add).await.expect("workspace.add").workspace
+    connection.call(&workspace_add(root)).await.expect("workspace.add").workspace
 }
 
-pub async fn create(connection: &Connection, workspace: &WorkspaceId, checkout: CheckoutKind, harness: &str) -> TaskId {
-    let create = TaskCreate {
+/// Creates the pinned root task "Strict serde" on a fresh session.
+pub fn task_create(workspace: &WorkspaceId, checkout: CheckoutKind, harness: &str) -> TaskCreate {
+    TaskCreate {
         workspace: workspace.clone(),
         title: "Strict serde".into(),
         parent: None,
@@ -184,8 +213,11 @@ pub async fn create(connection: &Connection, workspace: &WorkspaceId, checkout: 
         checkout,
         harness: harness.into(),
         session: SessionStart::Fresh,
-    };
-    connection.call(&create).await.expect("task.create").task
+    }
+}
+
+pub async fn create(connection: &Connection, workspace: &WorkspaceId, checkout: CheckoutKind, harness: &str) -> TaskId {
+    connection.call(&task_create(workspace, checkout, harness)).await.expect("task.create").task
 }
 
 pub async fn task(connection: &Connection, task: &TaskId) -> Task {

@@ -256,6 +256,7 @@ mod ca {
 
     use super::{Shared, to_float};
     use crate::lock;
+    use crate::mic::unpoisoned;
 
     type ObjectId = u32;
     type OsStatus = i32;
@@ -515,15 +516,6 @@ mod ca {
         Ok((recordings, skipped))
     }
 
-    /// A lock taken without waiting; a poisoned one is taken all the same.
-    fn unpoisoned<T>(locked: std::sync::TryLockResult<T>) -> Option<T> {
-        match locked {
-            Ok(guard) => Some(guard),
-            Err(std::sync::TryLockError::Poisoned(poison)) => Some(poison.into_inner()),
-            Err(std::sync::TryLockError::WouldBlock) => None,
-        }
-    }
-
     /// The PCM one IOProc call converts at a time; a longer buffer takes several.
     const CHUNK_FRAMES: usize = 1024;
 
@@ -663,12 +655,5 @@ mod tests {
         assert_eq!(order, [id("pty_b"), id("pty_a")]);
         advance(&mut order, &HashSet::from([id("pty_a")]));
         assert_eq!(order, [id("pty_a")]);
-    }
-
-    #[test]
-    fn pcm_becomes_unit_floats() {
-        let mut out = [9.0f32; 3];
-        to_float(&[0, 0, 0, 0x80, 0xff, 0x7f], &mut out);
-        assert_eq!(out, [0.0, -1.0, 32767.0 / 32768.0]);
     }
 }

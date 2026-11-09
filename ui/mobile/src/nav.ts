@@ -1,7 +1,7 @@
 import { createEffect, createRoot, createSignal } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import type { PtyId, TaskRef } from "@octopus/shared/generated.ts";
-import { act, openTask as markOpened, report } from "@octopus/shared/state.ts";
+import { act, openTask as markOpened } from "@octopus/shared/state.ts";
 import { phone } from "./phone";
 
 /** What the user is reading the camera or clipboard for: an invite pairs a server, a link joins an account. */
@@ -59,7 +59,7 @@ addEventListener("popstate", (event) => {
 });
 
 /** The OS's back pops the top entry while there is one past the root, and leaves the app from the root. */
-createRoot(() => createEffect(() => phone.backPops(entries().length > 1).catch(report)));
+createRoot(() => createEffect(() => act(phone.backPops(entries().length > 1))));
 
 export const back = () => history.back();
 

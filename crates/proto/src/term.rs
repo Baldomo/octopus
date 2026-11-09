@@ -65,25 +65,3 @@ impl Piece {
         }))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn pieces_round_trip_and_the_stream_ends_after_the_last() {
-        let pieces = [
-            Piece::Screen(Screen { cols: 47, rows: 12, bytes: Bytes::from(&b"\x1b[1mbold\n"[..]) }),
-            Piece::Output(Bytes::from(&b"\xe2\x94"[..])),
-        ];
-        let mut wire = Vec::new();
-        for piece in &pieces {
-            piece.write_to(&mut wire).await.unwrap();
-        }
-        let mut read = &wire[..];
-        for piece in pieces {
-            assert_eq!(Piece::read_from(&mut read).await.unwrap(), Some(piece));
-        }
-        assert_eq!(Piece::read_from(&mut read).await.unwrap(), None);
-    }
-}

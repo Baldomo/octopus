@@ -52,8 +52,8 @@ body {
   padding: var(--s2) var(--s2) 0;
 }
 .task-split {
-  --surface-min: 320px;
-  --terminals-min: 400px;
+  --surface-min: 352px;
+  --terminals-min: 440px;
   display: grid;
   grid-template-columns:
     min(max(var(--surface-min), (100% - var(--s2)) * var(--split)), 100% - var(--s2) - var(--terminals-min))
@@ -203,8 +203,8 @@ body {
 .navb {
   all: unset;
   color: var(--faint);
-  font-size: 13px;
-  width: 22px;
+  font-size: 14px;
+  width: 24px;
   flex: none;
   text-align: center;
   cursor: pointer;
@@ -229,8 +229,8 @@ body {
 }
 .page-status {
   position: absolute;
-  height: 20px;
-  margin-top: -20px;
+  height: 22px;
+  margin-top: -22px;
   display: flex;
   pointer-events: none;
 }
@@ -239,8 +239,8 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 0 8px;
-  line-height: 19px;
+  padding: 0 9px;
+  line-height: 21px;
   font-size: var(--fs-micro);
   color: var(--dim);
   background: var(--raised);
@@ -315,7 +315,7 @@ body {
   top: calc(var(--title-h) + var(--s6) * 2);
   left: 50%;
   transform: translateX(-50%);
-  width: 560px;
+  width: 616px;
   max-height: 60vh;
   display: flex;
   flex-direction: column;
@@ -343,7 +343,7 @@ body {
   margin-top: var(--s2);
 }
 .dialog.keys {
-  width: 440px;
+  width: 484px;
 }
 .client-menu {
   top: calc(var(--title-h) + var(--s1));

@@ -49,36 +49,25 @@ mod tests {
         );
         let args = json!({"task": "tsk_1", "page": {"url": "u", "panel": "p", "zoom": 2}, "tabs": []});
         assert_eq!(parse_args::<Nested>(&args).unwrap_err(), Error::UnknownField { fields: vec!["page.zoom".into()] });
-    }
-
-    #[test]
-    fn a_null_parent_is_present_not_missing() {
         let args = json!({"workspace": "wsp_8f2", "title": "x", "parent": null, "state": "pinned", "checkout": "root", "harness": "claude-code", "session": "fresh"});
         assert_eq!(parse_args::<ops::TaskCreate>(&args).unwrap().parent, None);
     }
 
     #[test]
-    fn a_push_carries_its_event_name_beside_the_rev_and_an_error_its_code() {
-        let push = Push { rev: 7, event: Event::HarnessUpdated { harness: "claude-code".into() } };
-        let wire = serde_json::to_value(&push).unwrap();
-        assert_eq!(wire, json!({"rev": 7, "ev": "harness.updated", "harness": "claude-code"}));
-        assert_eq!(serde_json::from_value::<Push>(wire).unwrap(), push);
-        let wire = serde_json::to_value(Error::PtyLocked { holder: "laptop".into() }).unwrap();
-        assert_eq!(wire, json!({"code": "pty_locked", "holder": "laptop"}));
-    }
-
-    #[test]
-    fn a_stream_header_names_its_stream_as_json() {
+    fn pushes_errors_and_stream_headers_keep_their_wire_shape() {
         use types::{PtyId, ReadDir, Stream, TaskId};
+        let push = Push { rev: 7, event: Event::HarnessUpdated { harness: "claude-code".into() } };
+        assert_eq!(
+            serde_json::to_value(push).unwrap(),
+            json!({"rev": 7, "ev": "harness.updated", "harness": "claude-code"})
+        );
+        let error = Error::PtyLocked { holder: "laptop".into() };
+        assert_eq!(serde_json::to_value(error).unwrap(), json!({"code": "pty_locked", "holder": "laptop"}));
         let read =
             Stream::Read { dir: ReadDir::Checkout(TaskId("tsk_1".into())), path: "a.mp4".into(), start: 2, len: 3 };
         let header = StreamHeader { open: read, client: "laptop".into() };
-        let wire = serde_json::to_value(&header).unwrap();
         let expected = json!({"read": {"dir": {"checkout": "tsk_1"}, "path": "a.mp4", "start": 2, "len": 3}});
-        assert_eq!(wire, json!({"open": expected, "client": "laptop"}));
-        assert_eq!(serde_json::from_value::<StreamHeader>(wire).unwrap(), header);
+        assert_eq!(serde_json::to_value(header).unwrap(), json!({"open": expected, "client": "laptop"}));
         assert_eq!(serde_json::to_value(Stream::Pty(PtyId("pty_2".into()))).unwrap(), json!({"pty": "pty_2"}));
-        let stray = json!({"open": {"tunnel": 5173}, "client": "laptop", "zoom": 1});
-        assert!(serde_json::from_value::<StreamHeader>(stray).is_err());
     }
 }

@@ -135,14 +135,11 @@ fn on_main_thread<T: Send + 'static>(
 /// A child webview of the window without the keyboard, moved into its layer and placed in the turn of the main thread
 /// that creates it, so no frame lays the window out with it anywhere else.
 fn add_child(window: &Window, webview: WebviewBuilder<tauri::Wry>, at: Option<Bounds>) -> tauri::Result<Webview> {
-    let parent = window.clone();
-    on_main_thread(window, move || {
-        let webview =
-            parent.add_child(webview.focused(false), LogicalPosition::new(0.0, 0.0), LogicalSize::new(0.0, 0.0))?;
-        host::adopt(&webview)?;
-        host::place(&webview, at)?;
-        Ok(webview)
-    })
+    let webview =
+        window.add_child(webview.focused(false), LogicalPosition::new(0.0, 0.0), LogicalSize::new(0.0, 0.0))?;
+    host::adopt(&webview)?;
+    host::place(&webview, at)?;
+    Ok(webview)
 }
 
 /// Tells the UI whether the window shows anything: not when minimized or hidden, still when behind other windows.
@@ -275,14 +272,18 @@ impl Layers {
         lock(&self.page).as_ref().map_or(Ok(()), |(page, bounds)| host::place(page, Some(points(*bounds, zoom))))
     }
 
-    /// Adds a page webview, hidden until shown, beneath the float layer.
+    /// Adds a page webview, hidden until shown, beneath the float layer, in one turn of the main thread: a raise
+    /// elsewhere holds the float's lock while it waits on the main thread, and an emit there needs that lock.
     pub(crate) fn add_page(&self, page: WebviewBuilder<tauri::Wry>) -> tauri::Result<Webview> {
-        let page = add_child(&self.window, page, None)?;
-        host::raise(&self.window, &self.float)?;
-        if self.ui.native().modal {
-            self.float.set_focus()?;
-        }
-        Ok(page)
+        let (window, float, ui) = (self.window.clone(), self.float.clone(), Arc::clone(&self.ui));
+        on_main_thread(&self.window, move || {
+            let page = add_child(&window, page, None)?;
+            host::raise(&window, &float)?;
+            if ui.native().modal {
+                float.set_focus()?;
+            }
+            Ok(page)
+        })
     }
 
     /// Puts `next` on screen at its rect in place of the page there, or empties the page layer. The main thread
@@ -314,7 +315,7 @@ impl Layers {
 /// it. macOS shapes a webview's input through its hit test.
 #[cfg(target_os = "macos")]
 mod host {
-    use tauri::{LogicalPosition, LogicalSize, Rect, Webview, Window};
+    use tauri::{LogicalPosition, LogicalSize, PhysicalPosition, Rect, Webview, Window};
 
     use super::Bounds;
 
@@ -340,7 +341,12 @@ mod host {
                 })?;
                 webview.show()
             }
-            None => webview.hide(),
+            None => {
+                // A hidden webview keeps taking file drags over its rect, so it waits outside the window.
+                let size = webview.size()?;
+                webview.set_position(PhysicalPosition::new(-(size.width as i32), -(size.height as i32)))?;
+                webview.hide()
+            }
         }
     }
 
@@ -625,15 +631,11 @@ mod tests {
     use octopus_shell::client_menu::ZOOMS;
 
     #[test]
-    fn the_float_layer_hangs_from_the_title_bar_in_points_at_every_zoom() {
-        for zoom in ZOOMS.map(|percent| Zoom::try_from(percent).expect("a step")) {
-            assert_eq!(points(float_cover(&[], zoom).0, zoom).y, title_bar_height());
-        }
-    }
-
-    #[test]
-    fn the_float_layer_grows_from_a_fixed_corner_and_takes_the_pointer_only_where_its_surfaces_do() {
+    fn the_float_layer_hangs_from_the_title_bar_and_takes_the_pointer_only_where_its_surfaces_do() {
         let y = title_bar_height();
+        for zoom in ZOOMS.map(|percent| Zoom::try_from(percent).expect("a step")) {
+            assert_eq!(points(float_cover(&[], zoom).0, zoom).y, y);
+        }
         let column = Bounds { x: 0.0, y, width: 294.0, height: 828.0 };
         let sidebar = Floated { input: column, drawn: Bounds { x: -40.0, y: 22.0, width: 382.0, height: 900.0 } };
         let scrim = Bounds { x: 0.0, y, width: 1440.0, height: 862.0 };

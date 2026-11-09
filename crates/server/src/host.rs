@@ -254,10 +254,9 @@ fn start_host(program: &Path, address: &Path) -> std::io::Result<Pid> {
     Ok(Pid::from_raw(command.spawn()?.id().cast_signed()))
 }
 
-/// Starts the host out of the server's process group, so a Ctrl-C or group signal aimed at the server spares it, with
-/// stderr inherited, so its diagnostics land in the server's log. It answers for its own privacy permissions: macOS asks a process's responsible
-/// process, which a child inherits and a process outliving its parent loses. Disclaiming here makes the host responsible
-/// from its first instruction, so every terminal's program answers to it, whoever started the server.
+/// Disclaims responsibility so the host answers for its own privacy permissions from its first instruction: macOS
+/// asks a process's responsible process, which a child inherits and a process outliving its parent loses, so every
+/// terminal's program answers to the host, whoever started the server.
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code, reason = "libSystem's posix_spawn and responsibility calls have no safe binding")]
 fn start_host(program: &Path, address: &Path) -> std::io::Result<Pid> {

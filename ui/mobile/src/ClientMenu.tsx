@@ -23,6 +23,7 @@ import {
 import { clock, ticking } from "@octopus/shared/time.ts";
 import {
   account,
+  act,
   harnesses,
   me,
   report,
@@ -40,7 +41,7 @@ import { go, showInSheet } from "./nav";
 import { Chev, Field, Flab, Gap, Gl, Id, Mi, Note, Seg, Sep, ServerDot, Why } from "./parts";
 import { Rename } from "./Rename";
 import { Sheet, SheetHead } from "./Sheet";
-import { notify } from "./Toast";
+import { copy } from "./Toast";
 
 const toMenu = () => showInSheet({ is: "client" }, "back");
 
@@ -77,8 +78,7 @@ function AgentFlagsField(props: { harness: string }) {
   );
 }
 
-const copyText = (text: string, what: string) =>
-  navigator.clipboard.writeText(text).then(() => notify(`Copied the ${what}`), report);
+const copyText = (text: string, what: string) => act(copy(text, `the ${what}`));
 const shareText = (text: string, what: string) =>
   navigator.share
     ? navigator.share({ text }).catch((error: Error) => {

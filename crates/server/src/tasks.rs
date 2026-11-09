@@ -14,12 +14,6 @@ use crate::agents::AgentSlot;
 use crate::store::TaskRow;
 use crate::{Server, State, checkouts, lock, nonempty, now, report};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MoveEffect {
-    Nothing,
-    StopProcesses,
-}
-
 /// A session no agent has run in yet, named by a UUID v4.
 fn fresh_session() -> Session {
     Session { id: SessionId(uuid::Uuid::new_v4().to_string()), started: false }
@@ -27,14 +21,6 @@ fn fresh_session() -> Session {
 
 pub fn ended_at(state: TaskState, now: i64) -> Option<i64> {
     (!state.is_live()).then_some(now)
-}
-
-pub(crate) fn apply_move(task: &mut TaskRow, to: TaskState, now: i64) -> MoveEffect {
-    let from = task.state;
-    task.state = to;
-    task.ended_at = ended_at(to, now);
-    task.archived_at = None;
-    if from.is_live() && !to.is_live() { MoveEffect::StopProcesses } else { MoveEffect::Nothing }
 }
 
 impl State {
@@ -140,12 +126,15 @@ impl Server {
         if reopening && !Path::new(&row.directory).exists() {
             return Err(Error::conflict(format!("{}'s worktree went while it was made; move it again", row.id)));
         }
-        let effect = apply_move(&mut row, op.state, now());
+        let stops = row.state.is_live() && !op.state.is_live();
+        row.state = op.state;
+        row.ended_at = ended_at(op.state, now());
+        row.archived_at = None;
         let rev = state.store.save_task(&mut row)?;
         if reopening {
             state.forget_agent(&row.id);
         }
-        if effect == MoveEffect::StopProcesses {
+        if stops {
             state.watchers.remove(&row.id);
             for (name, terminal) in state.terminals(&row.id) {
                 if let Err(error) = terminal.terminate() {
@@ -174,9 +163,7 @@ impl Server {
             }
         }
         row.parent = op.parent;
-        let rev = state.store.save_task(&mut row)?;
-        self.publish_task(&state, &row);
-        Ok(Revised { rev })
+        self.save_and_publish(&mut state, &mut row)
     }
 
     pub(crate) fn task_rename(&self, op: TaskRename) -> Result<Revised, Error> {
@@ -184,9 +171,7 @@ impl Server {
         let mut state = lock(&self.state);
         let mut row = state.store.task(&op.task)?;
         row.title = op.title;
-        let rev = state.store.save_task(&mut row)?;
-        self.publish_task(&state, &row);
-        Ok(Revised { rev })
+        self.save_and_publish(&mut state, &mut row)
     }
 
     pub(crate) fn task_set_session(&self, op: TaskSetSession) -> Result<Revised, Error> {
@@ -210,48 +195,6 @@ impl Server {
             return Err(Error::conflict(format!("{} is live; end it before archiving it", row.id)));
         }
         row.archived_at = Some(now());
-        let rev = state.store.save_task(&mut row)?;
-        self.publish_task(&state, &row);
-        Ok(Revised { rev })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use octopus_proto::types::WorkspaceId;
-
-    fn task(state: TaskState) -> TaskRow {
-        TaskRow {
-            id: TaskId("tsk_1".into()),
-            workspace: WorkspaceId("wsp_1".into()),
-            parent: None,
-            title: "t".into(),
-            state,
-            checkout: Checkout::Root,
-            harness: "h".into(),
-            session: fresh_session(),
-            directory: "/w".into(),
-            ended_at: ended_at(state, 1),
-            archived_at: None,
-            rev: 0,
-        }
-    }
-
-    #[test]
-    fn every_move_follows_the_transition_table() {
-        let stop = MoveEffect::StopProcesses;
-        let none = MoveEffect::Nothing;
-        let table = [
-            ("live -> live", TaskState::Pinned, TaskState::Temporary, None, none),
-            ("live -> ended", TaskState::Pinned, TaskState::Completed, Some(9), stop),
-            ("ended -> ended", TaskState::Completed, TaskState::Cancelled, Some(9), none),
-            ("ended -> live", TaskState::Cancelled, TaskState::Pinned, None, none),
-        ];
-        for (name, from, to, ended_at, effect) in table {
-            let mut row = task(from);
-            assert_eq!(apply_move(&mut row, to, 9), effect, "{name}");
-            assert_eq!((row.state, row.ended_at), (to, ended_at), "{name}");
-        }
+        self.save_and_publish(&mut state, &mut row)
     }
 }

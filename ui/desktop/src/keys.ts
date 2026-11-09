@@ -1,5 +1,5 @@
 import { commands, mac, parseKey, type Command } from "@octopus/shared/commands.ts";
-import { report, showModal, ui } from "@octopus/shared/state.ts";
+import { act, showModal, ui } from "@octopus/shared/state.ts";
 import { desktop, desktopEvents } from "./backend";
 import type { MenuGroup } from "./generated";
 import { layer } from "./layer";
@@ -71,8 +71,8 @@ function listInMenu() {
       return command.keys.map((key) => ({ key, label: command.label, accelerator: accelerator(key) }));
     }),
   });
-  desktop.appMenu([group("View", VIEW), group("Browser", BROWSER)]).catch(report);
-  desktopEvents.menuCommand(({ key, inPage }) => run(pressOf(key), inPage)).catch(report);
+  act(desktop.appMenu([group("View", VIEW), group("Browser", BROWSER)]));
+  act(desktopEvents.menuCommand(({ key, inPage }) => run(pressOf(key), inPage)));
 }
 
 export function bindKeys() {

@@ -25,6 +25,10 @@ fn split_op(op: &str) -> (&str, &str) {
     op.split_once('.').expect("an op is named <noun>.<verb>")
 }
 
+fn op_name(noun: &str, verb: &str) -> String {
+    format!("{noun}.{}", verb.replace('-', "_"))
+}
+
 fn sentence(doc: &str, addition: &str) -> String {
     format!("{}{addition}.", doc.trim_end_matches('.'))
 }
@@ -108,7 +112,7 @@ pub(crate) fn missing_flags(error: &clap::Error, argv: &[String]) -> Option<Stri
     }
     let Some(ContextValue::Strings(missing)) = error.get(ContextKind::InvalidArg) else { return None };
     let words: Vec<&str> = argv.iter().skip(1).map(String::as_str).take_while(|word| !word.starts_with('-')).collect();
-    let op = words.get(..2).map(|path| format!("{}.{}", path[0], path[1].replace('-', "_")));
+    let op = words.get(..2).map(|path| op_name(path[0], path[1]));
     let fields =
         ops::commands().into_iter().find(|command| Some(command.op) == op.as_deref()).map(|command| command.fields);
     let named = missing.iter().map(|missing| {
@@ -158,7 +162,7 @@ async fn call_op(command: &ops::Command, matches: &ArgMatches) -> anyhow::Result
 pub async fn run(matches: &ArgMatches) -> anyhow::Result<()> {
     let (noun, verbs) = matches.subcommand().expect("the tree requires a noun");
     let (verb, flags) = verbs.subcommand().expect("every noun requires a verb");
-    let op = format!("{noun}.{}", verb.replace('-', "_"));
+    let op = op_name(noun, verb);
     if let Some(command) = ops::commands().into_iter().find(|command| command.op == op) {
         return call_op(&command, flags).await;
     }
