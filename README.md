@@ -1,28 +1,47 @@
 # octopus
 
-A task manager for coding agents, written in Rust. It runs on macOS and Linux, with a phone app for iOS and Android.
+Run your coding agents in parallel, on your own machines, from your laptop or your phone.
 
-## Where things are decided
+<img src="https://github.com/zabealbe/octopus/raw/assets/readme/hero.png" alt="One task on three devices: the tablet holds the agent's terminal and fills its screen, the laptop shows the same terminal read-only beside the changed file with Take over, and the phone lists the live tasks with each agent's status" width="100%">
 
-- `spec/` describes how octopus behaves. `spec/README.md` lists each spec file and the code it governs. The spec changes only when @zabealbe asks, and a new rule from him goes into the file it belongs to.
-- If your code disagrees with the spec, say so in the pull request and tag @zabealbe.
-- `DESIGN.html` defines how the desktop app looks. Take colors, fonts, sizes and timing from its `#tokens` style block, and components from its `#components` block and its examples.
-- `DESIGN-MOBILE.html` does the same for the phone app, on top of `DESIGN.html`'s tokens. Its fonts only include the characters already on the page, so new text needs the font subsets regenerated.
+- **Agents in parallel.** Every task runs its own Claude Code agent in its own terminal. Tasks nest into subtasks and group by workspace, and a glance at the sidebar or the Tasks board shows which agents are working and which wait on you.
+- **A checkout per task.** A task works in its own git worktree, in a worktree that also clones your ignored files such as `.env` and `node_modules` (on a file system that clones files, like APFS), or in the repository itself.
+- **Files, browser and terminals in one window.** Each task has an editor, a browser and terminal panels beside its agent.
+- **One terminal, many screens.** Open the same task on your laptop and your phone. A visible lock shows which device types into the terminal, and any other takes over with one tap.
+- **A phone app for iOS and Android.** Pair it with your servers by scanning a QR code, then check on agents and answer them from anywhere.
+- **Your machines.** Tasks run on your laptop, and on any Mac mini or Linux box you install the server on. Other devices reach them through an iroh relay that forwards packets it cannot read: n0's public one or your own.
 
-## Commands
+<img src="https://github.com/zabealbe/octopus/raw/assets/readme/board.png" alt="The Tasks board: a workspace's tasks in pinned, temporary, completed and cancelled columns, each live task marked working, needs you or idle" width="100%">
 
-| what | command |
-|------|---------|
-| build the UI (do this before any cargo command) | `npm --prefix ui ci && npm --prefix ui run build` |
-| typecheck the UI and check its formatting | `npm --prefix ui run typecheck && npm --prefix ui run format:check` |
-| regenerate the UI's types after changing a type it uses | `cargo run -p octopus-desktop --example types` |
-| regenerate the skill after changing an op or a command | `cargo run -p octopus-cli --example skill` |
-| regenerate the app icons after changing `logo/` (this strips the iOS icons' alpha channel, which App Store validation rejects, and cuts the desktop icon to the macOS rounded square, since the Dock draws it unmasked) | `(cd crates/mobile && cargo tauri icon ../../logo/icon.json) && git clean -fdq crates/mobile/icons crates/mobile/gen/android/app/src/main/res && swift logo/flatten.swift crates/mobile/gen/apple/Assets.xcassets/AppIcon.appiconset/*.png && swift logo/macos.swift logo/octopus.png crates/desktop/icons/icon.png` |
-| typecheck | `cargo check --workspace` |
-| check formatting | `cargo fmt --all --check` |
-| lint | `cargo clippy --workspace --all-targets -- -D warnings && cargo clippy -p octopus-cli --no-default-features -- -D warnings` |
-| run all tests | `cargo nextest run --workspace && npm --prefix ui test` |
-| install the phone app's tooling (once) | `cargo install tauri-cli --version '^2' --locked && rustup target add aarch64-apple-ios-sim aarch64-linux-android` |
-| run the phone app on the Android emulator (after building the UI, with `JAVA_HOME`, `ANDROID_HOME` and `NDK_HOME` set) | `(cd crates/mobile && cargo tauri android build --debug --target aarch64 --apk) && adb install -r crates/mobile/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk && adb shell am start -n com.noi.octopus/.MainActivity` |
-| run the phone app on the iOS Simulator (after building the UI) | `(cd crates/mobile && cargo tauri ios build --debug --target aarch64-sim) && xcrun simctl install booted ~/Library/Developer/Xcode/DerivedData/octopus-mobile-*/Build/Products/debug-iphonesimulator/octopus.app && xcrun simctl launch booted com.noi.octopus` |
-| lint the phone app | `cargo clippy -p octopus-mobile --target aarch64-apple-ios-sim -- -D warnings` |
+<img src="https://github.com/zabealbe/octopus/raw/assets/readme/devices.png" alt="The phone app listing tasks, and following an agent mid-run" width="100%">
+
+## Quick start
+
+Install the app, the CLI and a server on your laptop (macOS or Linux, with Rust and Node):
+
+```sh
+npm --prefix ui ci && npm --prefix ui run build
+cargo install --locked --path crates/cli
+octopus app
+```
+
+On Linux, first install `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libasound2-dev`.
+
+The first start registers this machine's server as a login service.
+
+On a machine without a display, like a Mac mini, clone the repository and add it as a second server:
+
+```sh
+cargo install --locked --path crates/cli --no-default-features
+octopus server install --name mac-mini \
+  --socket ~/.octopus/server.sock --store ~/.octopus/store.db \
+  --worktrees ~/.octopus/worktrees --terminal-host ~/.octopus/host.sock \
+  --udp 0.0.0.0:7300 --relay https://euc1-1.relay.n0.iroh.link./ \
+  --microphone false --log ~/.octopus/server.log
+octopus server add --name mac-mini --socket ~/.octopus/server.sock
+octopus pairing offer --server mac-mini
+```
+
+Paste the invite into **Pair a server** (the `+` after the server names in the sidebar), or scan its QR code with the phone app. The phone app builds from source.
+
+Developers start at [CONTRIBUTING.md](CONTRIBUTING.md).
