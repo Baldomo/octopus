@@ -16,6 +16,8 @@ import { Sidebar } from "./Sidebar";
 import { holdsKeyboard } from "@octopus/shared/SidebarControls.tsx";
 import { Toast, toast, toasting } from "@octopus/shared/Toast.tsx";
 import { act, model, openView, report, serverView, showModal, showSidebar, ui, uiAct } from "@octopus/shared/state.ts";
+import { dormant } from "@octopus/shared/Glyph.tsx";
+import { windowShown } from "@octopus/shared/terminalSession.ts";
 import { floatTop } from "./layer";
 import { liftOnDrag } from "./lift";
 import { StatusBar } from "./StatusBar";
@@ -117,14 +119,18 @@ function floating(surface: { name: string; modal: () => boolean; out: () => bool
 export function Docked() {
   createEffect(on(() => [...ui.recent], forgetFilesExcept));
   createEffect(() => forgetBrowsersExcept([...ui.recent]));
-  /** The open task is focused whenever it is in the Task view with its server reachable, so a restart refocuses it. */
+  /**
+   * The open task is focused whenever it is in the Task view of a shown window with its server reachable, so a restart
+   * refocuses it, and again whenever its agent falls asleep there.
+   */
   const shownInTaskView = createMemo(() => {
-    const shown = ui.prefs.view === "task" ? openView() : undefined;
+    const shown = ui.prefs.view === "task" && windowShown() ? openView() : undefined;
     return shown !== undefined && serverView(shown.at.server)?.reachable ? ui.prefs.open : null;
   });
+  const asleep = createMemo(() => dormant(openView()?.glyph));
   createEffect(
-    on(shownInTaskView, (key) => {
-      if (key !== null) act(backend.taskFocus(openView()!.at));
+    on([shownInTaskView, asleep], ([key, asleep], before) => {
+      if (key !== null && (asleep || before?.[0] !== key)) act(backend.taskFocus(openView()!.at));
     }),
   );
   createEffect(

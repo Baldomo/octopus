@@ -7,6 +7,7 @@ use crate::frames::Op;
 use crate::pairing::{Invite, Proof};
 use crate::remote::RelayUrl;
 use crate::schema::{Field, record};
+use crate::settings::Settings;
 use crate::types::{
     AgentStatus, BrowserId, BrowserTarget, CheckoutKind, Color, Hooks, PtyId, SessionId, SessionStart, Task, TaskId,
     TaskState, Workspace, WorkspaceId,
@@ -151,6 +152,8 @@ pub struct Hosted {
 pub struct Synced {
     /// The account merged with the server's log of it.
     pub account: Account,
+    /// The account's settings merged with the server's.
+    pub settings: Settings,
     pub server: Hosted,
 }
 
@@ -181,11 +184,13 @@ op!(
     }
 );
 op!(
-    /// Merge this device's account, and the accounts it left, into the server's logs, and return the merged account.
+    /// Merge this device's account, and the accounts it left, into the server's logs, and the account's settings into the server's, and return the merged account and settings.
     AccountSync = "account.sync" -> Synced {
         account: Account,
         /// Each account this device left, so a server that trusted one follows it.
         former: Vec<Account>,
+        /// The account's settings as this device holds them.
+        settings: Settings,
     }
 );
 op!(

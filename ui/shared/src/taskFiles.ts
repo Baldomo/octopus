@@ -2,7 +2,7 @@ import { createStore, produce, type SetStoreFunction } from "solid-js/store";
 import { backend } from "./backend";
 import type { Entry, EntryKind, FilesChanged, TaskRef, TaskView } from "./generated";
 import { moveTo } from "./sectionOrder";
-import { report } from "./state";
+import { isLocal, report } from "./state";
 import { each } from "./Toast";
 
 type Monaco = typeof import("./monaco");
@@ -84,6 +84,9 @@ const ancestorsOf = (path: string) =>
     .split("/")
     .slice(0, -1)
     .map((_, at, dirs) => dirs.slice(0, at + 1).join("/"));
+
+/** A file or folder dropped from this machine, by its path, or a file this client holds, as a paste brings it. */
+export type Incoming = string | File;
 
 export class TaskFiles {
   readonly state: Tree;
@@ -179,16 +182,20 @@ export class TaskFiles {
     this.set("selected", (selected) => selected.filter((selected) => !within(selected, path)));
   }
 
-  /** Copies files and folders of a drop into `dir`, each under a name `dir` lacks; resolves to the copies, and
-   * says why each other one failed. */
-  async bringIn(locals: string[], dir: string) {
+  /** Copies files and folders into `dir`, each under a name `dir` lacks; resolves to the copies, and says why each
+   * other one failed. */
+  async bringIn(incoming: Incoming[], dir: string) {
     const taken = await this.names(dir);
     const copies: string[] = [];
-    await each(locals, async (local) => {
-      const name = freeName(nameOf(local), taken);
+    await each(incoming, async (item) => {
+      const name = freeName(typeof item === "string" ? nameOf(item) : item.name, taken);
       taken.add(name);
       const copy = join(dir, name);
-      await backend.fileUpload(this.at, copy, local).finally(() => this.relist(copy));
+      const sent =
+        typeof item === "string"
+          ? backend.fileUpload(this.at, copy, item)
+          : item.arrayBuffer().then((content) => backend.fileUploadContent(this.at, copy, new Uint8Array(content)));
+      await sent.finally(() => this.relist(copy));
       copies.push(copy);
     });
     return copies;
@@ -325,6 +332,14 @@ export function filesOf(task: TaskView) {
     files.set(task.key, found);
   }
   return found;
+}
+
+/** Where files are on the task's server: dropped ones are there already when it runs here; anything else is first
+ * copied into the checkout's root. */
+export async function onServer(task: TaskView, incoming: Incoming[]) {
+  if (isLocal(task.at.server) && incoming.every((item) => typeof item === "string")) return incoming;
+  const copies = await filesOf(task).bringIn(incoming, ".");
+  return copies.map((copy) => `${task.task.directory}/${copy}`);
 }
 
 /** Unsaved edits outlive their task leaving the recent ones. */

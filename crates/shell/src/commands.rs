@@ -9,10 +9,11 @@ use octopus_proto::account::{AccountId, Link};
 use octopus_proto::device::PublicKey;
 use octopus_proto::ops::{
     Entry, EntryKind, FileCopy, FileCreate, FileDelete, FileList, FileMove, FileSearch, FileWrite, Match, Offer,
-    PairedAccount, PairingForget, PairingList, PairingOffer, TaskArchive, TaskCreate, TaskFocus, TaskMove, TaskRename,
+    PairedAccount, PairingForget, PairingList, PairingOffer, TaskArchive, TaskCreate, TaskMove, TaskRename,
     TaskSetParent, TermClaim, TermClose, TermOpen, TermResize, TermTakeLock, WorkspaceAdd, WorkspaceRemove,
 };
 use octopus_proto::pairing::Invite;
+use octopus_proto::settings::Setting;
 use octopus_proto::types::{
     CheckoutKind, Color, PtyId, ReadDir, SessionStart, Stream, Swatch, TaskId, TaskState, WorkspaceId,
 };
@@ -24,7 +25,7 @@ use ts_rs::TS;
 
 use crate::hub::{AccountView, Hub, Model, ServerView};
 use crate::lock;
-use crate::task_lists::{TaskRef, auto_swatch};
+use crate::task_lists::{TaskRef, auto_swatch, awaits_resume};
 use crate::terminal::Terminals;
 use crate::ui::{Ui, UiAct, UiStore};
 
@@ -119,6 +120,16 @@ pub async fn account_join(hub: Hubbed<'_>, link: String) -> Result<(), String> {
     octopus_client::servers::join(&link, &hub.me).await.map_err(|error| format!("{error:#}"))
 }
 
+/// Sets the setting on every device of the account, resolving to the account as it then reads.
+#[tauri::command]
+pub fn settings_set(hub: Hubbed, setting: Setting) -> Result<AccountView, String> {
+    hub.me
+        .account
+        .update_settings(|settings| settings.set(&hub.me.key, setting))
+        .map_err(|error| format!("{error:#}"))?;
+    Ok(hub.account())
+}
+
 #[tauri::command]
 pub fn account_remove(hub: Hubbed, device: String) -> Result<(), String> {
     hub.remove_device(&device).map_err(|error| format!("{error:#}"))
@@ -194,10 +205,18 @@ pub async fn task_archive(hub: Hubbed<'_>, at: TaskRef) -> Result<(), String> {
     hub.call(&at.server, &TaskArchive { task: at.task }).await.map(drop)
 }
 
+/// Focuses the task the client shows, leaving an agent that awaits Resume ended.
 #[tauri::command]
-pub async fn task_focus(hub: Hubbed<'_>, ui: Uis<'_>, at: TaskRef) -> Result<(), String> {
-    let args = ui.agent_args(&hub.task(&at)?.harness);
-    hub.call(&at.server, &TaskFocus { task: at.task, args }).await.map(drop)
+pub async fn task_focus(hub: Hubbed<'_>, at: TaskRef) -> Result<(), String> {
+    if awaits_resume(&hub.task(&at)?) {
+        return Ok(());
+    }
+    hub.focus(at).await
+}
+
+#[tauri::command]
+pub async fn task_resume(hub: Hubbed<'_>, at: TaskRef) -> Result<(), String> {
+    hub.focus(at).await
 }
 
 #[tauri::command]
@@ -382,6 +401,14 @@ pub async fn file_upload(
         }
     }
     Ok(())
+}
+
+/// Sends `content`, a file this client holds rather than one on its disk, as the new `path` of the task's checkout.
+#[tauri::command]
+pub async fn file_upload_content(hub: Hubbed<'_>, at: TaskRef, path: String, content: Vec<u8>) -> Result<(), String> {
+    let connection = hub.connection(&at.server)?;
+    let upload = connection.upload(at.task, path, content.len() as u64, content.as_slice()).await;
+    upload.map_err(|error| hub.failure(&at.server, error))
 }
 
 #[tauri::command]

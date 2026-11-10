@@ -10,7 +10,7 @@ use octopus_proto::ops::{Entry, EntryKind, Match};
 use octopus_proto::types::{ReadDir, TaskId};
 use tokio::io::{AsyncRead, AsyncReadExt, Take};
 
-use crate::{Server, lock};
+use crate::{Server, lock, report};
 
 const MAX_MATCHES: usize = 1000;
 
@@ -293,6 +293,19 @@ pub(crate) fn search_literal(checkout: &Path, pattern: &str) -> Vec<Match> {
 impl Server {
     pub(crate) fn checkout_dir(&self, task: &TaskId) -> Result<PathBuf, Error> {
         Ok(PathBuf::from(lock(&self.state).store.task(task)?.directory))
+    }
+
+    /// The checkout a client lists, watched from then on while live, so the tree of a task no focus reached still follows
+    /// it.
+    pub(crate) fn listed_checkout(&self, task: &TaskId) -> Result<PathBuf, Error> {
+        let mut state = lock(&self.state);
+        let row = state.store.task(task)?;
+        if row.state.is_live()
+            && let Err(error) = self.watch_checkout(&mut state, &row)
+        {
+            report!("watch the checkout of {task}: {error}");
+        }
+        Ok(PathBuf::from(row.directory))
     }
 
     /// The directory a read's paths are relative to: a task's checkout, or a file page's root.

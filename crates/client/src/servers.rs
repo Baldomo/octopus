@@ -278,7 +278,7 @@ pub async fn join(link: &Link, me: &Identity) -> anyhow::Result<()> {
     let synced = unpaired_request(me, link.server, &link.relay, op)
         .await
         .map_err(|error| anyhow!("{} refused the link: {error:#}", link.server))?;
-    me.account.move_to(&me.key, synced.account, &me.name(), true)
+    me.account.move_to(&me.key, synced.account, &synced.settings, &me.name(), true)
 }
 
 /// Sends `op` as the one request of a connection to a server that does not know this device yet, and reads its one

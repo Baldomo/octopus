@@ -18,6 +18,7 @@ use octopus_proto::ops::{
     PairingOffer, TaskGet, TermClaim, TermSend,
 };
 use octopus_proto::pairing::Invite;
+use octopus_proto::settings::{Setting, Settings};
 use octopus_proto::types::{
     BrowserId, BrowserPanel, BrowserTarget, CheckoutKind, Hooks, ReadDir, Stream, Task, TaskId,
 };
@@ -369,6 +370,20 @@ async fn a_linked_device_brings_its_servers_and_a_removal_shuts_it_out_of_every_
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_setting_one_device_of_an_account_sets_reads_the_same_on_another() {
+    let (_dir, running) = relayed_server().await;
+    let (laptop, phone) = (identity("laptop", &DeviceKey::generate()), identity("phone", &DeviceKey::generate()));
+    let on_laptop = Connection::connect(&common::local(&running.socket), &laptop).await.expect("connect");
+    let link = link(&running, &laptop, &on_laptop).await;
+    servers::join(&link, &phone).await.expect("join");
+    let order = Setting::SectionOrder(vec!["willow".into(), "acme".into()]);
+    phone.account.update_settings(|settings| settings.set(&phone.key, order)).expect("set");
+    let _on_phone = Connection::connect(&remote(&running), &phone).await.expect("connecting syncs the settings");
+    on_laptop.sync_account(&laptop).await.expect("sync");
+    assert_eq!(laptop.account.settings().current().section_order, ["willow", "acme"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_device_paired_to_the_links_server_joins_through_it_and_no_other_account_writes_into_this_one() {
     let (_dir, running) = relayed_server().await;
     let (laptop, tablet, stranger) = (
@@ -383,7 +398,8 @@ async fn a_device_paired_to_the_links_server_joins_through_it_and_no_other_accou
     let entries = laptop.account.account().entries.len();
     let mut forged = laptop.account.account();
     forged.append(&stranger.key, Change::Name { name: "laptop's".into() });
-    let written = intruder.call(&AccountSync { account: forged, former: vec![] }).await;
+    let settings = Settings::new(forged.id());
+    let written = intruder.call(&AccountSync { account: forged, former: vec![], settings }).await;
     assert!(matches!(written, Err(CallError::Server(Error::Unpaired))), "{written:?}");
     on_laptop.sync_account(&laptop).await.expect("sync");
     assert_eq!(laptop.account.account().entries.len(), entries, "the stranger's entry never reached the log");

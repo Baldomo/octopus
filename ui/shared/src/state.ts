@@ -11,6 +11,7 @@ import {
   type Prefs,
   type Section,
   type ServerView,
+  type Setting,
   type Surface,
   type TaskState,
   type TaskView,
@@ -29,22 +30,25 @@ export const [model, setModel] = createStore<Model>({
 
 /** The order a section being dragged shows the sections in, which stands over the saved one until it lands. */
 export const [arranged, arrange] = createSignal<string[] | null>(null);
-const sectionOrder = () => arranged() ?? ui.prefs.section_order;
+const sectionOrder = () => arranged() ?? account().settings.section_order;
 export const sections = () => inSectionOrder(model.lists.sections, sectionOrder());
 export const workspaces = () => inSectionOrder(model.lists.workspaces, sectionOrder());
 
 export const [servers, setServers] = createSignal<ServerView[]>([]);
 export const [me, setMe] = createSignal("");
 export const [myKey, setMyKey] = createSignal("");
-export const [account, setAccount] = createSignal<AccountView>({ id: "", member: true, devices: [] });
+export const [account, setAccount] = createSignal<AccountView>({
+  id: "",
+  member: true,
+  devices: [],
+  settings: { section_order: [], collapsed: [], agent_flags: {} },
+});
 
 /** The state both layers render, owned by the app; every change goes through it and returns as a newer `Ui`. */
 const [ui, setUi] = createStore<Ui>({
   version: -1,
   prefs: {
     pinned: false,
-    collapsed: [],
-    section_order: [],
     surface: "files",
     split: 0.5,
     view: "task",
@@ -52,7 +56,6 @@ const [ui, setUi] = createStore<Ui>({
     board: null,
     appearance: "system",
     zoom: 100,
-    agent_flags: {},
   },
   recent: [],
   sidebar: false,
@@ -80,20 +83,34 @@ export const showBoard = (section: string) => uiAct({ do: "show_board", section 
 export const showSurface = (surface: Surface) => uiAct({ do: "show_surface", surface });
 export const resetSplit = () => uiAct({ do: "reset_split" });
 export const togglePin = () => uiAct({ do: "toggle_pin" });
-export const toggleCollapsed = (section: string) => uiAct({ do: "toggle_collapsed", section });
-export const orderSections = (names: string[]) => uiAct({ do: "order_sections", sections: names });
 export const showSidebar = (shown: boolean) => uiAct({ do: "show_sidebar", shown });
 export const toggleSidebar = () => uiAct({ do: "toggle_sidebar" });
 export const showClientMenu = (shown: boolean) => uiAct({ do: "show_client_menu", shown });
 export const toggleClientMenu = () => uiAct({ do: "toggle_client_menu" });
 export const setAppearance = (appearance: Appearance) => uiAct({ do: "set_appearance", appearance });
 export const zoom = (step: ZoomStep) => uiAct({ do: "zoom", step });
-export const setAgentFlags = (harness: string, flags: string) =>
-  backend.uiAct({ do: "set_agent_flags", harness, flags });
+
+/** Sets the setting on every device of the account. */
+const setSetting = (setting: Setting) => backend.settingsSet(setting).then(setAccount);
+export const isCollapsed = (section: string) => account().settings.collapsed.includes(section);
+export function toggleCollapsed(section: string) {
+  const collapsed = account().settings.collapsed;
+  const value = isCollapsed(section) ? collapsed.filter((name) => name !== section) : [...collapsed, section];
+  return setSetting({ setting: "collapsed", value }).catch(report);
+}
+export const orderSections = (names: string[]) => setSetting({ setting: "section_order", value: names }).catch(report);
+/** Empty flags drop the harness's entry. */
+export function setAgentFlags(harness: string, flags: string) {
+  const { [harness]: _, ...others } = account().settings.agent_flags;
+  return setSetting({ setting: "agent_flags", value: flags.trim() === "" ? others : { ...others, [harness]: flags } });
+}
 
 export const harnesses = () =>
   [
-    ...new Set([...Object.values(model.tasks).map((view) => view.task.harness), ...Object.keys(ui.prefs.agent_flags)]),
+    ...new Set([
+      ...Object.values(model.tasks).map((view) => view.task.harness),
+      ...Object.keys(account().settings.agent_flags),
+    ]),
   ].sort();
 export const showModal = (modal: Modal | null) => uiAct({ do: "show_modal", modal });
 export const reveal = (task: string, path: string) => uiAct({ do: "reveal", task, path });

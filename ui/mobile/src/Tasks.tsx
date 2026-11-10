@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 import type { Column, Row, Section } from "@octopus/shared/generated.ts";
-import { isOpen, report, scale, sections, servers, toggleCollapsed, ui } from "@octopus/shared/state.ts";
+import { isCollapsed, isOpen, report, scale, sections, servers, toggleCollapsed, ui } from "@octopus/shared/state.ts";
 import { backend } from "@octopus/shared/backend.ts";
 import { dropHint } from "@octopus/shared/drop.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
@@ -21,6 +21,7 @@ import {
 import { type Point, type Start } from "@octopus/shared/lift.ts";
 import { feel } from "./feel";
 import { go, openSheet, openTask } from "./nav";
+import { statusWord } from "@octopus/shared/Glyph.tsx";
 import { Circle, Glyph, Id, ServerDot, Slot } from "./parts";
 import { pressed } from "./press";
 import { pullToRefresh } from "./pull";
@@ -52,7 +53,7 @@ function TaskRow(props: { row: Row; section: string; group: Column }) {
       }}
       style={{ "--d": props.row.depth }}
       {...pressed(
-        () => openTask(props.row.key, props.row.at),
+        () => openTask(props.row.key),
         () => openSheet({ is: "task", key: props.row.key, open: null }),
         liftOnPhone(lift(props.row, props.section)),
       )}
@@ -61,6 +62,9 @@ function TaskRow(props: { row: Row; section: string; group: Column }) {
         <Glyph status={props.row.glyph} />
       </Slot>
       <span class="name">{props.row.title}</span>
+      <Show when={props.row.glyph === "waking"}>
+        <Id>{statusWord.waking}</Id>
+      </Show>
       <Show when={props.row.state !== props.group.state}>
         <Id>{props.row.state}</Id>
       </Show>
@@ -91,7 +95,7 @@ function Group(props: { section: string; group: Column }) {
 }
 
 function SectionRows(props: { section: Section }) {
-  const closed = () => ui.prefs.collapsed.includes(props.section.name) || isSectionFolded(props.section.name);
+  const closed = () => isCollapsed(props.section.name) || isSectionFolded(props.section.name);
   const groups = () => props.section.groups.filter((group) => group.rows.length > 0 || liftsIn(props.section.name));
   const empty = () => !closed() && groups().length === 0;
   return (

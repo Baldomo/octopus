@@ -5,6 +5,9 @@ export const statusWord: Record<Kind, string> = {
   working: "working",
   waiting: "needs you",
   idle: "idle",
+  asleep: "asleep",
+  ended: "ended",
+  waking: "waking…",
   completed: "completed",
   cancelled: "cancelled",
 };
@@ -33,9 +36,19 @@ const look: Record<Kind, () => JSX.Element> = {
   ),
   waiting: () => <span class="dot needs" />,
   idle: () => <span class="dot idle" />,
+  asleep: () => <span class="dot ring" />,
+  ended: () => <span class="dot ring" />,
+  waking: () => (
+    <svg class="spin wake" viewBox="0 0 14 14">
+      <circle cx="7" cy="7" r="3.75" pathLength="100" ref={turning} />
+    </svg>
+  ),
   completed: () => <span class="ended">✓</span>,
   cancelled: () => <span class="ended">✕</span>,
 };
+
+/** Whether the agent is yet to wake: asleep, or waking, which a failed wake returns to without asking again. */
+export const dormant = (glyph: Kind | undefined) => glyph === "asleep" || glyph === "waking";
 
 export function Glyph(props: { glyph: Kind }) {
   return <span class="glyph">{look[props.glyph]()}</span>;

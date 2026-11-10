@@ -162,9 +162,9 @@ impl Server {
     }
 
     /// Stops every agent that has been idle, silent and unshown for `AGENT_RECLAIM_MS` at `now` and runs no detached
-    /// descendant, returning their tasks. A stopped agent ends like any other, keeping its panel until the next focus
-    /// resumes its session. Activity is read outside the state lock, and the stop is sent under it after a re-check;
-    /// an agent whose activity the host cannot tell keeps running.
+    /// descendant, returning their tasks. A stopped agent leaves its task's panels with its scrollback, which puts it
+    /// asleep until the next focus resumes its session. Activity is read outside the state lock, and the stop is sent
+    /// under it after a re-check; an agent whose activity the host cannot tell keeps running.
     pub fn reclaim_agents(&self, now: i64) -> Vec<TaskId> {
         let candidates: Vec<(TaskId, Arc<Terminal>)> = {
             let state = lock(&self.state);
@@ -183,11 +183,16 @@ impl Server {
             if activity.detached_descendant || now - activity.output_at < AGENT_RECLAIM_MS {
                 continue;
             }
-            let state = lock(&self.state);
+            let mut state = lock(&self.state);
             if state.idle_unshown_agent(&task, now).is_some_and(|current| current.id == terminal.id) {
-                match terminal.terminate() {
-                    Ok(()) => reclaimed.push(task),
-                    Err(error) => report!("stop the idle agent of {task}: {error}"),
+                if let Err(error) = terminal.forget() {
+                    report!("stop the idle agent of {task}: {error}");
+                    continue;
+                }
+                state.agents.remove(&task);
+                match self.touch_task(&mut state, &task) {
+                    Ok(_) => reclaimed.push(task),
+                    Err(error) => report!("publish the reclaimed agent of {task}: {error}"),
                 }
             }
         }

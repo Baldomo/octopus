@@ -1,6 +1,6 @@
-//! This device's account as it keeps it: the log of the account it belongs to and of every one it left, beside its
-//! device key. Each change reloads the file and merges it first, so the app and a CLI on one device never undo each
-//! other's entries.
+//! This device's account as it keeps it: the log of the account it belongs to and of every one it left, and the
+//! account's settings, beside its device key. Each change reloads the files and merges them first, so the app and a
+//! CLI on one device never undo each other's entries.
 
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
@@ -10,13 +10,15 @@ use nix::fcntl::{Flock, FlockArg};
 use octopus_proto::account::{self, Account, Change, Listed};
 use octopus_proto::device::DeviceKey;
 use octopus_proto::lock;
+use octopus_proto::settings::Settings;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
 use crate::servers::{Config, create_parent, read_text};
 
 const ACCOUNT_FILE: &str = "account.json";
-
+const SETTINGS_FILE: &str = "settings.json";
 /// The account this device belongs to, and the ones it left, which a server that trusted one follows it from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -56,86 +58,146 @@ impl Kept {
     }
 }
 
-/// This device's account, kept in `account.json` when it has a file.
+/// What a `Book` holds: the account and the ones it left, and the account's settings.
+#[derive(Clone, PartialEq)]
+struct Held {
+    kept: Kept,
+    settings: Settings,
+}
+
+impl Held {
+    /// The settings of the account it is in, holding only its members' values.
+    fn settle(&mut self) {
+        let id = self.kept.account.id();
+        if self.settings.account != id {
+            self.settings = Settings::new(id);
+        }
+        self.settings.retain_members(&self.kept.account.state());
+    }
+}
+
+/// This device's account, kept in `account.json` and its settings in `settings.json` when it has files.
 pub struct Book {
-    path: Option<PathBuf>,
-    kept: Mutex<Kept>,
+    config: Option<Config>,
+    held: Mutex<Held>,
     changed: watch::Sender<u64>,
 }
 
 impl Book {
     /// The account kept in `config`, a first one for `key` on the first load.
     pub fn load(config: &Config, key: &DeviceKey) -> anyhow::Result<Self> {
-        let path = config.file(ACCOUNT_FILE);
-        let book = Self { path: Some(path.clone()), ..Self::memory(key) };
+        let book = Self { config: Some(config.clone()), ..Self::memory(key) };
         let _held = book.hold()?;
-        match read(&path)? {
-            Some(kept) => *lock(&book.kept) = kept,
-            None => book.save(&lock(&book.kept))?,
+        let mut held = lock(&book.held);
+        if let Some(kept) = read(&config.file(ACCOUNT_FILE))? {
+            held.kept = kept;
         }
+        if let Some(settings) = read(&config.file(SETTINGS_FILE))? {
+            held.settings = settings;
+        }
+        held.settle();
+        book.save(&held)?;
+        drop(held);
         Ok(book)
     }
 
     /// An account kept in memory alone.
     pub fn memory(key: &DeviceKey) -> Self {
-        Self { path: None, kept: Mutex::new(Kept::first(key)), changed: watch::Sender::new(0) }
+        let kept = Kept::first(key);
+        let settings = Settings::new(kept.account.id());
+        Self { config: None, held: Mutex::new(Held { kept, settings }), changed: watch::Sender::new(0) }
+    }
+
+    fn file(&self, name: &str) -> Option<PathBuf> {
+        self.config.as_ref().map(|config| config.file(name))
     }
 
     /// What this process holds, merged with what another process of this device saved since; ticks `changes` when
-    /// the file held something new.
-    fn merged(&self) -> anyhow::Result<MutexGuard<'_, Kept>> {
-        let mut kept = lock(&self.kept);
-        if let Some(on_disk) = self.path.as_deref().map(read).transpose()?.flatten()
-            && kept.merge(&on_disk)?
+    /// the files held something new.
+    fn merged(&self) -> anyhow::Result<MutexGuard<'_, Held>> {
+        let mut held = lock(&self.held);
+        let mut changed = false;
+        if let Some(on_disk) = self.file(ACCOUNT_FILE).as_deref().map(read::<Kept>).transpose()?.flatten()
+            && held.kept.merge(&on_disk)?
         {
+            held.settle();
+            changed = true;
+        }
+        if let Some(on_disk) = self.file(SETTINGS_FILE).as_deref().map(read::<Settings>).transpose()?.flatten()
+            && on_disk.account == held.settings.account
+            && on_disk != held.settings
+        {
+            let members = held.kept.account.state();
+            changed |= held.settings.merge(&on_disk, &members).map_err(|error| anyhow!(error))?;
+        }
+        if changed {
             self.changed.send_modify(|version| *version += 1);
         }
-        Ok(kept)
+        Ok(held)
     }
 
-    /// As `merged`, keeping what this process holds when the file cannot be read.
-    fn current(&self) -> MutexGuard<'_, Kept> {
+    /// As `merged`, keeping what this process holds when the files cannot be read.
+    fn current(&self) -> MutexGuard<'_, Held> {
         self.merged().unwrap_or_else(|error| {
             eprintln!("octopus: read the account another process saved: {error:#}");
-            lock(&self.kept)
+            lock(&self.held)
         })
     }
 
     pub fn kept(&self) -> Kept {
-        self.current().clone()
+        self.current().kept.clone()
     }
 
     pub fn account(&self) -> Account {
-        self.current().account.clone()
+        self.current().kept.account.clone()
     }
 
     pub fn state(&self) -> account::State {
-        self.current().account.state()
+        self.current().kept.account.state()
     }
 
-    /// Ticks whenever the account takes an entry.
+    pub fn settings(&self) -> Settings {
+        self.current().settings.clone()
+    }
+
+    /// Ticks whenever the account takes an entry or its settings change.
     pub fn changes(&self) -> watch::Receiver<u64> {
         self.changed.subscribe()
     }
 
-    /// Applies `change` to the kept account, after merging what the file holds, and saves it; ticks `changes` when
+    /// Applies `change` to the kept account, after merging what the files hold, and saves it; ticks `changes` when
     /// the account took an entry.
     pub fn update<T>(&self, change: impl FnOnce(&mut Kept) -> anyhow::Result<T>) -> anyhow::Result<T> {
+        self.update_held(|held| change(&mut held.kept))
+    }
+
+    fn update_held<T>(&self, change: impl FnOnce(&mut Held) -> anyhow::Result<T>) -> anyhow::Result<T> {
         let _held = self.hold()?;
-        let mut kept = self.merged()?;
-        let before = kept.clone();
-        let changed = change(&mut kept)?;
-        self.save(&kept)?;
-        if *kept != before {
+        let mut held = self.merged()?;
+        let mut next = held.clone();
+        let changed = change(&mut next)?;
+        next.settle();
+        self.save(&next)?;
+        if next != *held {
+            *held = next;
             self.changed.send_modify(|version| *version += 1);
         }
         Ok(changed)
     }
 
     /// Moves this device to `next`, an account holding it, after leaving the one it is in for it; `servers` decides
-    /// whether that account's servers come along.
-    pub fn move_to(&self, key: &DeviceKey, mut next: Account, name: &str, servers: bool) -> anyhow::Result<()> {
-        self.update(|kept| {
+    /// whether that account's servers come along. It takes `settings`, refused as a merge refuses them, and brings
+    /// each setting they lack.
+    pub fn move_to(
+        &self,
+        key: &DeviceKey,
+        mut next: Account,
+        settings: &Settings,
+        name: &str,
+        servers: bool,
+    ) -> anyhow::Result<()> {
+        self.update_held(|held| {
+            let kept = &mut held.kept;
             if servers {
                 for server in kept.account.state().servers {
                     next.append(key, relisting(&server, &server.name));
@@ -149,6 +211,10 @@ impl Book {
             let left = std::mem::replace(&mut kept.account, next);
             kept.former.retain(|former| former.id() != left.id());
             kept.former.push(left);
+            let mut checked = Settings::new(kept.account.id());
+            checked.merge(settings, &kept.account.state()).map_err(|error| anyhow!(error))?;
+            held.settings.carry_into(&mut checked, key);
+            held.settings = checked;
             Ok(())
         })
     }
@@ -160,19 +226,31 @@ impl Book {
         })
     }
 
-    /// Merges the log a server returned.
-    pub fn absorb(&self, merged: &Account) -> anyhow::Result<()> {
-        self.update(|kept| match merged.id() == kept.account.id() {
-            true => kept.account.merge(merged).map(drop).map_err(|error| anyhow!(error)),
-            false => Ok(()),
+    /// Applies `change` to the account's settings, after merging what the files hold, and saves them.
+    pub fn update_settings(&self, change: impl FnOnce(&mut Settings)) -> anyhow::Result<()> {
+        self.update_held(|held| {
+            change(&mut held.settings);
+            Ok(())
+        })
+    }
+
+    /// Merges the log and settings a server returned.
+    pub fn absorb(&self, merged: &Account, settings: &Settings) -> anyhow::Result<()> {
+        self.update_held(|held| {
+            if merged.id() != held.kept.account.id() {
+                return Ok(());
+            }
+            held.kept.account.merge(merged).map_err(|error| anyhow!(error))?;
+            held.settle();
+            held.settings.merge(settings, &held.kept.account.state()).map(drop).map_err(|error| anyhow!(error))
         })
     }
 
     /// Holds the account file against every other process of this device until dropped. The lock is `flock`, which
     /// std's `File::lock` does not implement on Android.
     fn hold(&self) -> anyhow::Result<Option<Flock<std::fs::File>>> {
-        let Some(path) = &self.path else { return Ok(None) };
-        create_parent(path)?;
+        let Some(path) = self.file(ACCOUNT_FILE) else { return Ok(None) };
+        create_parent(&path)?;
         let held = path.with_extension("lock");
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -186,15 +264,20 @@ impl Book {
         Ok(Some(locked))
     }
 
-    fn save(&self, kept: &Kept) -> anyhow::Result<()> {
-        let Some(path) = &self.path else { return Ok(()) };
-        let staged = path.with_extension(format!("json.{}.new", std::process::id()));
-        std::fs::write(&staged, serde_json::to_string(kept)?).with_context(|| format!("write {}", staged.display()))?;
-        std::fs::rename(&staged, path).with_context(|| format!("replace {}", path.display()))
+    fn save(&self, held: &Held) -> anyhow::Result<()> {
+        let Some(config) = &self.config else { return Ok(()) };
+        write(&config.file(ACCOUNT_FILE), &held.kept)?;
+        write(&config.file(SETTINGS_FILE), &held.settings)
     }
 }
 
-fn read(path: &std::path::Path) -> anyhow::Result<Option<Kept>> {
+fn write(path: &std::path::Path, value: &impl Serialize) -> anyhow::Result<()> {
+    let staged = path.with_extension(format!("json.{}.new", std::process::id()));
+    std::fs::write(&staged, serde_json::to_string(value)?).with_context(|| format!("write {}", staged.display()))?;
+    std::fs::rename(&staged, path).with_context(|| format!("replace {}", path.display()))
+}
+
+fn read<T: DeserializeOwned>(path: &std::path::Path) -> anyhow::Result<Option<T>> {
     let parsed = read_text(path)?.map(|text| serde_json::from_str(&text));
     parsed.transpose().with_context(|| format!("parse {}", path.display()))
 }

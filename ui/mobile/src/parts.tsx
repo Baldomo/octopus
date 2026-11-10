@@ -34,6 +34,13 @@ const look: Record<Status, () => JSX.Element> = {
   ),
   waiting: () => <i class="dot needs" />,
   idle: () => <i class="dot idle" />,
+  asleep: () => <i class="dot ring" />,
+  ended: () => <i class="dot ring" />,
+  waking: () => (
+    <svg class="spin wake" viewBox="0 0 12 12">
+      <circle cx="6" cy="6" r="5" pathLength="100" ref={turning} />
+    </svg>
+  ),
   completed: () => (
     <span class="end">
       <Icon name="check" />
@@ -46,7 +53,7 @@ const look: Record<Status, () => JSX.Element> = {
   ),
 };
 
-/** A task's status: working spins, waiting is amber, idle a ring, and an ended task its check or cross. */
+/** A task's status: working spins, waiting is amber, idle a grey dot, an agent not running a ring, waking a faint spinner, and an ended task its check or cross. */
 export const Glyph = (props: { status: Status }) => <>{look[props.status]()}</>;
 
 /** A server's dot: filled while reachable, hollow while not, an amber ring while the phone reconnects to it. */

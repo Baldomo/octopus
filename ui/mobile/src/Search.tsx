@@ -32,7 +32,7 @@ export function Search() {
             slot: <Glyph status={view.glyph} />,
             label: view.task.title,
             where: view.section,
-            run: () => openTask(view.key, view.at),
+            run: () => openTask(view.key),
           }));
   const files = (): Result[] => {
     const open = openView();

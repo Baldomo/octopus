@@ -112,7 +112,7 @@ export function ServerMenu(props: { name: string }) {
                 <For each={firstWhere(paired.devices, isThisClient)}>
                   {(client) => (
                     <div class="client">
-                      <span class="dot" classList={{ idle: !client.connected && !client.hosts }} />
+                      <span class="dot" classList={{ ring: !client.connected && !client.hosts }} />
                       <span class="name">{client.name}</span>
                       <span class="mono">{clientStatus(client, now())}</span>
                     </div>

@@ -1,16 +1,20 @@
-import { createEffect, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { Portal } from "solid-js/web";
 import { backend } from "@octopus/shared/backend.ts";
 import { AGENT_PANEL, type PanelView, type PtyId, type TaskRef, type TaskView } from "@octopus/shared/generated.ts";
 import { ago, clock, ticking } from "@octopus/shared/time.ts";
 import { act, model, scale, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
 import { clickReport, type ScreenCell, wheelReport } from "@octopus/shared/mouseReports.ts";
-import { cellSize, type Size, terminalSession } from "@octopus/shared/terminalSession.ts";
+import { pastesSafely, shellQuoted } from "@octopus/shared/fileDrag.ts";
+import { onServer } from "@octopus/shared/taskFiles.ts";
+import { cellSize, type Size, terminalSession, windowShown } from "@octopus/shared/terminalSession.ts";
 import { colors, scheme } from "@octopus/shared/tokens.ts";
+import { dormant } from "@octopus/shared/Glyph.tsx";
 import { feel } from "./feel";
 import { animateList } from "@octopus/shared/flip.ts";
 import { EachPanel, taskPanels } from "@octopus/shared/panels.ts";
 import { Icon } from "./Icon";
+import { caretMove, cursorKey, cursorKeys, ESC, pasteKeys } from "./keys";
 import { onPainted } from "./motion";
 import { micDenied, openSheet } from "./nav";
 import { Circle, CrumbBar, Gap, Glyph, Id, Para, sectionColor, ServerDot, Slot, Trail } from "./parts";
@@ -35,7 +39,6 @@ const SINK_ROWS = 2 * PAD_LINES + 1;
 const PADDED = Array(SINK_ROWS).fill(" ".repeat(SINK_COLS)).join("\n");
 const LINE_CHARS = SINK_COLS + 1;
 const CENTER = PAD_LINES * LINE_CHARS + PAD_COLS;
-const ESC = "\x1b";
 const FONT_PX = 13;
 const ROW_PX = 20;
 /** How near a line boundary, in lines, the terminal counts as on it, so float error never rests it a line off. */
@@ -67,7 +70,7 @@ function observeSize(element: HTMLElement, set: (size: Size) => void) {
  * else sees it at the holder's size, cropped to the pane at its last line, panned by dragging.
  */
 function PhoneTerm(props: {
-  at: TaskRef;
+  task: TaskView;
   panel: PanelView;
   visible: boolean;
   reach: Reach;
@@ -81,7 +84,11 @@ function PhoneTerm(props: {
   let pane!: HTMLDivElement;
   let sink!: HTMLTextAreaElement;
   const [opened, setOpened] = createSignal(false);
-  const session = terminalSession({ at: props.at, panel: () => props.panel, shown: () => props.visible && opened() });
+  const session = terminalSession({
+    at: props.task.at,
+    panel: () => props.panel,
+    shown: () => props.visible && opened(),
+  });
   const { xterm, mine, claimed } = session;
   xterm.options.disableStdin = true;
   xterm.options.cursorInactiveStyle = "block";
@@ -111,9 +118,45 @@ function PhoneTerm(props: {
     }
     write(text.replaceAll("\n", "\r"));
   };
-  const arrow = (code: string) => `${ESC}${xterm.modes.applicationCursorKeysMode ? "O" : "["}${code}`;
+  const arrow = (code: string) => cursorKey(code, xterm.modes);
   const arrows = (steps: number, backward: string, forward: string) =>
-    arrow(steps < 0 ? backward : forward).repeat(Math.abs(steps));
+    cursorKeys(steps, backward, forward, xterm.modes);
+  /** Writes a paste: its files' paths on the server once they are copied there, else its text. */
+  const paste = (files: File[], text: string) => {
+    if (files.length === 0) {
+      if (text !== "") write(pasteKeys(text, xterm.modes));
+      return;
+    }
+    if (!files.every((file) => pastesSafely(file.name))) {
+      notify("A name with a line break or a control character can't be pasted");
+      return;
+    }
+    const pastePaths = (paths: string[]) => {
+      if (paths.length === 0) return;
+      if (mine()) write(pasteKeys(paths.map(shellQuoted).join(" "), xterm.modes));
+      else notify("The terminal moved to another client before the paste landed");
+    };
+    act(onServer(props.task, files).then(pastePaths));
+  };
+  /** The OS confirms each read of its clipboard with its own Paste, and dismissing that pastes nothing. */
+  const pasteClipboard = () => {
+    const read = navigator.clipboard.read().then(async (items) => {
+      const files: File[] = [];
+      let text = "";
+      for (const item of items) {
+        const image = item.types.find((type) => type.startsWith("image/"));
+        if (image !== undefined)
+          files.push(new File([await item.getType(image)], `image.${image.slice("image/".length)}`, { type: image }));
+        else if (item.types.includes("text/plain")) text += await (await item.getType("text/plain")).text();
+      }
+      paste(files, text);
+    });
+    act(
+      read.catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "NotAllowedError")) throw error;
+      }),
+    );
+  };
   const latch = () => {
     feel("select");
     setCtrl(!ctrl());
@@ -175,18 +218,19 @@ function PhoneTerm(props: {
     if (!composing) resetSink();
   };
   /**
-   * The space-bar drag moves the caret through the blank field, which moves the terminal's cursor as many cells. iOS
-   * places the dragged caret at the point the finger has travelled to since the drag began, so the caret recenters
-   * only once the keyboard next types or rises. A selection collapses to its end, so typing never replaces it.
+   * The space-bar drag moves the caret through the blank field, which moves the terminal's cursor as many cells, and as
+   * many lines on the alternate screen: on the normal screen a shell reads ↑ and ↓ as its history. iOS places the
+   * dragged caret at the point the finger has travelled to since the drag began, so the caret recenters only once the
+   * keyboard next types or rises. A selection collapses to its end, so typing never replaces it.
    */
   const sinkCaretMoved = () => {
     const { selectionStart, selectionEnd: at } = sink;
     if (document.activeElement !== sink || composing || sink.value !== PADDED) return;
     if (selectionStart !== at) return sink.setSelectionRange(at, at);
     if (at === restingCaret) return;
-    const lines = Math.floor(at / LINE_CHARS) - Math.floor(restingCaret / LINE_CHARS);
-    const cols = (at % LINE_CHARS) - (restingCaret % LINE_CHARS);
-    write(arrows(lines, "A", "B") + arrows(cols, "D", "C"));
+    const { lines, cols } = caretMove(restingCaret, at, LINE_CHARS);
+    const acrossLines = xterm.buffer.active.type === "alternate" ? arrows(lines, "A", "B") : "";
+    write(acrossLines + arrows(cols, "D", "C"));
     restingCaret = at;
   };
   /**
@@ -320,6 +364,8 @@ function PhoneTerm(props: {
     size: screen,
     view,
     pan,
+    canPaste: () => mine() && live(),
+    paste: pasteClipboard,
   });
 
   onMount(() => {
@@ -403,15 +449,15 @@ function PhoneTerm(props: {
         onTouchCancel={settle}
         onTouchEnd={(event) => {
           settle();
-          if (event.defaultPrevented || stoppedTurning || selection.onControls(event)) return;
-          const touch = event.changedTouches[0];
-          if (!from || !touch || Math.hypot(touch.clientX - from.x, touch.clientY - from.y) >= COMMIT_PX) return;
-          const point = { x: touch.clientX, y: touch.clientY };
-          const tapped = selection.tap(point);
-          if (!tapped && (!mine() || !live())) return;
-          // The click a tap synthesizes would land on the pane and take the focus back from the keyboard.
+          if (selection.onControls(event)) return;
+          const handled = event.defaultPrevented || stoppedTurning;
+          // The click a tap synthesizes would move the keyboard's caret, or take the focus back from the keyboard.
           event.preventDefault();
-          if (tapped) return;
+          const touch = event.changedTouches[0];
+          if (handled || !from || !touch || Math.hypot(touch.clientX - from.x, touch.clientY - from.y) >= COMMIT_PX)
+            return;
+          const point = { x: touch.clientX, y: touch.clientY };
+          if (selection.tap(point) || !mine() || !live()) return;
           placeCursor(point);
           sink.focus();
         }}
@@ -419,44 +465,48 @@ function PhoneTerm(props: {
         <div class="zoom-reset">
           <div ref={host} class="term-host" />
         </div>
+        <textarea
+          ref={sink}
+          class="sink"
+          autocapitalize="off"
+          autocomplete="off"
+          autocorrect="off"
+          spellcheck={false}
+          enterkeyhint="enter"
+          cols={SINK_COLS}
+          rows={SINK_ROWS}
+          onFocus={() => {
+            resetSink();
+            drawFocused(true);
+            props.typing(true);
+          }}
+          onBlur={() => {
+            drawFocused(false);
+            setCtrl(false);
+            props.typing(false);
+          }}
+          onInput={sinkInput}
+          onCompositionStart={() => (composing = true)}
+          onCompositionEnd={() => {
+            composing = false;
+            resetSink();
+          }}
+          onPaste={(event) => {
+            event.preventDefault();
+            if (event.clipboardData) paste([...event.clipboardData.files], event.clipboardData.getData("text/plain"));
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            write("\r");
+          }}
+        />
         <Show when={cropped()}>
           <Show when={thumbs().x}>{(x) => <i class="thumb across" style={x()} />}</Show>
           <Show when={thumbs().y}>{(y) => <i class="thumb down" style={y()} />}</Show>
         </Show>
         <selection.Handles />
       </div>
-      <textarea
-        ref={sink}
-        class="sink"
-        autocapitalize="off"
-        autocomplete="off"
-        autocorrect="off"
-        spellcheck={false}
-        enterkeyhint="enter"
-        cols={SINK_COLS}
-        rows={SINK_ROWS}
-        onFocus={() => {
-          resetSink();
-          drawFocused(true);
-          props.typing(true);
-        }}
-        onBlur={() => {
-          drawFocused(false);
-          setCtrl(false);
-          props.typing(false);
-        }}
-        onInput={sinkInput}
-        onCompositionStart={() => (composing = true)}
-        onCompositionEnd={() => {
-          composing = false;
-          resetSink();
-        }}
-        onKeyDown={(event) => {
-          if (event.key !== "Enter") return;
-          event.preventDefault();
-          write("\r");
-        }}
-      />
       <Show when={props.visible && props.tail}>
         {(tail) => (
           <Portal mount={tail()}>
@@ -466,7 +516,7 @@ function PhoneTerm(props: {
                   {(kept) => <Id>lock kept {Math.ceil(kept().left / 1000)} s</Id>}
                 </Match>
                 <Match when={props.resumable}>
-                  <button class="btn" onClick={() => act(backend.taskFocus(props.at))}>
+                  <button class="btn" onClick={() => act(backend.taskResume(props.task.at))}>
                     Resume
                   </button>
                 </Match>
@@ -587,6 +637,13 @@ function TaskScreen(props: { open: TaskView }) {
   };
   const [typing, setTyping] = createSignal(false);
   const [tail, setTail] = createSignal<HTMLElement>();
+  const looking = createMemo(() => windowShown() && server()?.reachable === true);
+  const asleep = createMemo(() => dormant(props.open.glyph));
+  createEffect(
+    on([looking, asleep], ([looking, asleep], before) => {
+      if (looking && (asleep || before?.[0] !== looking)) act(backend.taskFocus(props.open.at));
+    }),
+  );
   return (
     <>
       <CrumbBar
@@ -626,12 +683,12 @@ function TaskScreen(props: { open: TaskView }) {
       <EachPanel panels={panels()}>
         {(panel) => (
           <PhoneTerm
-            at={props.open.at}
+            task={props.open}
             panel={panel()}
             visible={selected()?.id === panel().id}
             reach={reach()}
             ended={ended()}
-            resumable={!ended() && panel().name === AGENT_PANEL && !panel().running}
+            resumable={props.open.glyph === "ended" && panel().name === AGENT_PANEL}
             tail={tail()}
             typed={typing()}
             typing={setTyping}

@@ -16,6 +16,7 @@ import type {
   PairedAccount,
   PtyId,
   ServerView,
+  Setting,
   Swatch,
   TaskRef,
   TaskState,
@@ -48,6 +49,8 @@ export const backend = {
   /** Removes the device whose key, in hex, is `device`. */
   accountRemove: (device: string) => invoke<void>(octopus("account_remove"), { device }),
   accountLeave: () => invoke<void>(octopus("account_leave")),
+  /** Sets the setting on every device of the account, resolving to the account as it then reads. */
+  settingsSet: (setting: Setting) => invoke<AccountView>(octopus("settings_set"), { setting }),
   accountStartOver: () => invoke<void>(octopus("account_start_over")),
   /** Resyncs every connected server, rejecting with each one's problem. */
   serversRefresh: () => invoke<void>(octopus("servers_refresh")),
@@ -66,6 +69,7 @@ export const backend = {
   /** Colors the section's workspace on every server of the section; a null swatch sets auto. */
   sectionColor: (section: string, swatch: Swatch | null) => invoke<void>(octopus("section_color"), { section, swatch }),
   taskFocus: (at: TaskRef) => invoke<void>(octopus("task_focus"), { at }),
+  taskResume: (at: TaskRef) => invoke<void>(octopus("task_resume"), { at }),
   taskMove: (at: TaskRef, state: TaskState) => invoke<void>(octopus("task_move"), { at, state }),
   taskSetParent: (at: TaskRef, parent: TaskRef | null) => invoke<void>(octopus("task_set_parent"), { at, parent }),
   taskRename: (at: TaskRef, title: string) => invoke<void>(octopus("task_rename"), { at, title }),
@@ -103,6 +107,9 @@ export const backend = {
   fileDelete: (at: TaskRef, path: string, trash: boolean) => invoke<void>(octopus("file_delete"), { at, path, trash }),
   /** Copies `local`, a file or folder on this machine, to the new `path`. */
   fileUpload: (at: TaskRef, path: string, local: string) => invoke<void>(octopus("file_upload"), { at, path, local }),
+  /** Sends `content`, a file this client holds, as the new `path`; the IPC carries the bytes as a JSON array. */
+  fileUploadContent: (at: TaskRef, path: string, content: Uint8Array) =>
+    invoke<void>(octopus("file_upload_content"), { at, path, content }),
   fileSearch: (at: TaskRef, pattern: string) => invoke<Match[]>(octopus("file_search"), { at, pattern }),
 };
 

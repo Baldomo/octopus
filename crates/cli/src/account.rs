@@ -5,6 +5,7 @@ use clap::Subcommand;
 use octopus_client::servers::{self, Config, Servers};
 use octopus_client::{Connection, Identity};
 use octopus_proto::account::{Account, Change, Link};
+use octopus_proto::settings::Settings;
 use serde::Serialize;
 
 use crate::commands::SERVER_HELP;
@@ -136,11 +137,13 @@ impl AccountVerb {
                 sync_everywhere(&config, &me).await
             }
             Self::Leave => {
-                me.account.move_to(&me.key, Account::fresh(me.key.public()), &me.name(), true)?;
+                let fresh = Account::fresh(me.key.public());
+                me.account.move_to(&me.key, fresh.clone(), &Settings::new(fresh.id()), &me.name(), true)?;
                 sync_everywhere(&config, &me).await
             }
             Self::StartOver => {
-                me.account.move_to(&me.key, Account::fresh(me.key.public()), &me.name(), false)?;
+                let fresh = Account::fresh(me.key.public());
+                me.account.move_to(&me.key, fresh.clone(), &Settings::new(fresh.id()), &me.name(), false)?;
                 print(&shown(&config, &me)?)
             }
         }

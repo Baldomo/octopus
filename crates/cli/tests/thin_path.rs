@@ -406,8 +406,8 @@ async fn the_server_stops_an_agent_idle_silent_and_unshown_for_the_reclaim_time(
     assert_eq!(running.server.reclaim_agents(before + AGENT_RECLAIM_MS - 1), vec![]);
     let due = running.server.reclaim_agents(after + AGENT_RECLAIM_MS);
     assert_eq!(due, vec![idle.clone()], "a waiting, a shown and a detaching agent keep running");
-    eventually("the reclaimed agent ending", async || task(&laptop, &idle).await.agent == Agent::NotStarted).await;
-    assert!(!task(&laptop, &idle).await.panels[0].running, "a reclaimed agent ends like any other");
+    let asleep = task(&laptop, &idle).await;
+    assert_eq!((asleep.agent, asleep.panels), (Agent::NotStarted, vec![]), "a reclaimed agent leaves its panels");
     for kept in [&waiting, &shown, &detached] {
         assert!(matches!(task(&laptop, kept).await.agent, Agent::Running { .. }));
     }

@@ -71,8 +71,7 @@ mod tests {
             for id in [2, 3] {
                 let sync: serde_json::Value =
                     serde_json::from_str(&lines.next_line().await.expect("sync").expect("a line")).expect("a request");
-                let synced =
-                    serde_json::json!({"id": id, "ok": {"account": sync["args"]["account"], "server": hosted}});
+                let synced = serde_json::json!({"id": id, "ok": {"account": sync["args"]["account"], "settings": sync["args"]["settings"], "server": hosted}});
                 write.write_all(format!("{synced}\n").as_bytes()).await.expect("synced");
             }
         });

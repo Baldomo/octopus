@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit -p shared && tsc --noEmit -p desktop && tsc --noEmit -p mobile",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "node --experimental-strip-types --conditions=browser --test shared/src/*.test.ts desktop/src/*.test.ts"
+    "test": "node --experimental-strip-types --conditions=browser --test shared/src/*.test.ts desktop/src/*.test.ts mobile/src/*.test.ts"
   },
   "overrides": {
     "dompurify": "3.4.17"

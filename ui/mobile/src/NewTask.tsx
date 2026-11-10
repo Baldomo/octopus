@@ -43,7 +43,7 @@ export function NewTask(props: { section: string | null }) {
       )
       .then((key) => {
         feel("success");
-        openTask(key, { server: target.server, task: key.slice(key.lastIndexOf("/") + 1) });
+        openTask(key);
       }, report)
       .finally(() => setCreating(false));
   };

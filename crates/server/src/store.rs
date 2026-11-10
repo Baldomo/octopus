@@ -4,6 +4,7 @@ use std::path::Path;
 use octopus_proto::Error;
 use octopus_proto::account::{Account, AccountId};
 use octopus_proto::device::{DeviceKey, PublicKey};
+use octopus_proto::settings::Settings;
 use octopus_proto::types::{
     AGENT_PANEL, BrowserId, BrowserPanel, Checkout, CheckoutKind, Color, Hooks, PtyId, Session, SessionId, TaskId,
     TaskState, Workspace, WorkspaceId, from_wire, to_wire,
@@ -66,6 +67,7 @@ CREATE TABLE IF NOT EXISTS browsers (
 CREATE TABLE IF NOT EXISTS device (id INTEGER PRIMARY KEY CHECK (id = 0), pkcs8 BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS clients (name TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, seen_at INTEGER);
 CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY, log TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS settings (account TEXT PRIMARY KEY, sets TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS owner (id INTEGER PRIMARY KEY CHECK (id = 0), account TEXT NOT NULL);
 ";
 
@@ -313,17 +315,38 @@ impl Store {
             .map_err(Error::internal)
     }
 
-    pub fn accounts(&self) -> Result<Vec<Account>, Error> {
-        let logs: Vec<String> = select(&self.db, "SELECT log FROM accounts", [], |row| row.get(0))?;
-        logs.iter().map(|log| serde_json::from_str(log).map_err(Error::internal)).collect()
+    /// Each trusted account's log and its settings, empty for an account no device set any of.
+    pub fn accounts(&self) -> Result<Vec<(Account, Settings)>, Error> {
+        let sql = "SELECT log, sets FROM accounts LEFT JOIN settings ON settings.account = accounts.id";
+        let rows: Vec<(String, Option<String>)> = select(&self.db, sql, [], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.iter()
+            .map(|(log, sets)| {
+                let account: Account = serde_json::from_str(log).map_err(Error::internal)?;
+                let settings = match sets {
+                    Some(sets) => serde_json::from_str(sets).map_err(Error::internal)?,
+                    None => Settings::new(account.id()),
+                };
+                Ok((account, settings))
+            })
+            .collect()
     }
 
-    pub fn keep_account(&self, account: &Account) -> Result<(), Error> {
-        put_account(&self.db, account)
+    pub fn keep_account(&mut self, account: &Account, settings: &Settings) -> Result<(), Error> {
+        let tx = self.db.transaction().map_err(Error::internal)?;
+        put_account(&tx, account)?;
+        tx.execute(
+            "INSERT INTO settings (account, sets) VALUES (?1, ?2) ON CONFLICT(account) DO UPDATE SET sets = excluded.sets",
+            params![settings.account.to_string(), serde_json::to_string(settings).map_err(Error::internal)?],
+        )
+        .map_err(Error::internal)?;
+        tx.commit().map_err(Error::internal)
     }
 
-    pub fn forget_account(&self, id: &AccountId) -> Result<(), Error> {
-        self.db.execute("DELETE FROM accounts WHERE id = ?1", [id.to_string()]).map(drop).map_err(Error::internal)
+    pub fn forget_account(&mut self, id: &AccountId) -> Result<(), Error> {
+        let tx = self.db.transaction().map_err(Error::internal)?;
+        tx.execute("DELETE FROM accounts WHERE id = ?1", [id.to_string()]).map_err(Error::internal)?;
+        tx.execute("DELETE FROM settings WHERE account = ?1", [id.to_string()]).map_err(Error::internal)?;
+        tx.commit().map_err(Error::internal)
     }
 
     /// The account a client on this machine sent last.

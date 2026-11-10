@@ -1,6 +1,5 @@
 import { createEffect, createRoot, createSignal } from "solid-js";
-import { backend } from "@octopus/shared/backend.ts";
-import type { PtyId, TaskRef } from "@octopus/shared/generated.ts";
+import type { PtyId } from "@octopus/shared/generated.ts";
 import { act, openTask as markOpened } from "@octopus/shared/state.ts";
 import { phone } from "./phone";
 
@@ -83,11 +82,10 @@ export function home() {
   if (depth > 0) history.go(-depth);
 }
 
-/** Opening a task focuses it, which starts its agent if it has none, and makes it the one Tasks tints. */
-export function openTask(key: string, at: TaskRef) {
+/** Opening a task shows it on the Task screen, which focuses it, and makes it the one Tasks tints. */
+export function openTask(key: string) {
   go({ at: "task", key });
   markOpened(key);
-  act(backend.taskFocus(at));
 }
 
 /** Whether the OS refuses the phone its microphone, which a listening terminal it holds then hears as silence. */

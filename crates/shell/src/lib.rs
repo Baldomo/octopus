@@ -82,6 +82,6 @@ pub struct Client {
 /// Manages the `Arc<Hub>` and `Arc<UiStore>` the commands act on, connecting as `me` to its servers.
 pub fn start(app: &AppHandle, client: Client, launch_problem: Option<String>) {
     let Client { config, me, servers, microphone_access } = client;
-    app.manage(UiStore::load(app.clone(), config.clone(), launch_problem));
+    app.manage(UiStore::load(app.clone(), config.clone(), &me, launch_problem));
     app.manage(Hub::start(app.clone(), config, me, servers, microphone_access));
 }

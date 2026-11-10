@@ -6,7 +6,7 @@ use serde::ser::Error as _;
 use serde::{Serialize, Serializer};
 use ts_rs::TS;
 
-use crate::task_lists::{Glyph, TaskRef, section_of};
+use crate::task_lists::{Glyph, TaskRef, Waking, section_of};
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 pub struct TaskView {
@@ -55,6 +55,7 @@ fn crumbs(cache: &Cache, task: &Task) -> Vec<String> {
 /// Each task of every server, with `held_here` telling whether this client holds a lock on a server.
 pub(crate) fn task_views(
     caches: &BTreeMap<String, Cache>,
+    waking: &Waking,
     held_here: impl Fn(&str, &LockHolder) -> bool,
 ) -> BTreeMap<String, TaskView> {
     let held_here = &held_here;
@@ -76,7 +77,7 @@ pub(crate) fn task_views(
                     section: section_of(cache, task).to_string(),
                     crumbs: crumbs(cache, task),
                     live: task.state.is_live(),
-                    glyph: Glyph::of(task),
+                    glyph: Glyph::shown(&at, task, waking),
                     task: task.clone(),
                     panels,
                     at,
@@ -106,7 +107,7 @@ mod tests {
                 ],
             ),
         )]);
-        let views = task_views(&caches, |_, _| false);
+        let views = task_views(&caches, &Waking::new(), |_, _| false);
         assert_eq!(views["mac-mini/tsk_3"].crumbs, ["octopus", "protocol v1", "strict serde", "envelope"]);
     }
 }

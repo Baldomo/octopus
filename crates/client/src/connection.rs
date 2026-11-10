@@ -194,8 +194,9 @@ async fn sync(control: &Control, me: &Identity, local: bool) -> anyhow::Result<H
 /// One `account.sync`: sends what this device keeps and keeps what the server merged.
 async fn round(control: &Control, me: &Identity) -> anyhow::Result<Hosted> {
     let kept = me.account.kept();
-    let synced = control.call(&AccountSync { account: kept.account, former: kept.former }).await?;
-    me.account.absorb(&synced.account)?;
+    let settings = me.account.settings();
+    let synced = control.call(&AccountSync { account: kept.account, former: kept.former, settings }).await?;
+    me.account.absorb(&synced.account, &synced.settings)?;
     Ok(synced.server)
 }
 

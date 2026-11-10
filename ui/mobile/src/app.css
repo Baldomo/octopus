@@ -410,6 +410,15 @@ body {
   resize: none;
 }
 
+/* the space-bar drag places the caret at whatever the finger's point hits, so the field must be what is hit there; touches on it reach the pane it sits in */
+.sink:focus {
+  pointer-events: auto;
+}
+
+.selmenu {
+  gap: var(--g4);
+}
+
 .key.on {
   background: var(--text);
   color: var(--surface);

@@ -6,6 +6,7 @@ pub mod ops;
 pub mod pairing;
 pub mod remote;
 pub mod schema;
+pub mod settings;
 pub mod term;
 pub mod types;
 

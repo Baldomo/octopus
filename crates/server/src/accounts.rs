@@ -1,5 +1,5 @@
-//! The accounts a server trusts: each one's log, merged with every log a member sends, and who that lets in. A
-//! merge that removes a device closes its connections and frees its locks at once.
+//! The accounts a server trusts: each one's log and settings, merged with every log and settings a member sends, and
+//! who that lets in. A merge that removes a device closes its connections and frees its locks at once.
 
 use std::collections::HashMap;
 
@@ -7,6 +7,7 @@ use octopus_proto::account::{self, Account, AccountId};
 use octopus_proto::device::PublicKey;
 use octopus_proto::ops::{AccountJoin, AccountSync, Hosted, Synced};
 use octopus_proto::remote;
+use octopus_proto::settings::Settings;
 use octopus_proto::{Error, Event};
 
 use crate::client::Client;
@@ -14,15 +15,16 @@ use crate::{Server, State, lock, now};
 
 const REMOVED: &[u8] = b"this device is no longer a member of an account this server trusts";
 
-/// A trusted account's log and what it comes to.
+/// A trusted account's log, what it comes to, and its settings.
 #[derive(Clone)]
 pub(crate) struct Trusted {
     pub account: Account,
     pub state: account::State,
+    pub settings: Settings,
 }
 
-pub(crate) fn load(accounts: Vec<Account>) -> HashMap<AccountId, Trusted> {
-    accounts.into_iter().map(|account| (account.id(), Trusted::new(account))).collect()
+pub(crate) fn load(accounts: Vec<(Account, Settings)>) -> HashMap<AccountId, Trusted> {
+    accounts.into_iter().map(|(account, settings)| (account.id(), Trusted::new(account, settings))).collect()
 }
 
 impl State {
@@ -37,9 +39,9 @@ impl State {
 }
 
 impl Trusted {
-    fn new(account: Account) -> Self {
+    fn new(account: Account, settings: Settings) -> Self {
         let state = account.state();
-        Self { account, state }
+        Self { account, state, settings }
     }
 
     /// Whether the invite whose key is `key`, or any invite, is open and unexpired at `now`.
@@ -47,11 +49,16 @@ impl Trusted {
         self.state.open_invites.iter().any(|(_, open, expires)| key.is_none_or(|key| key == open) && *expires > now)
     }
 
-    /// This log merged with `account`'s entries. Nothing is kept until `keep`.
+    /// This log merged with `account`'s entries, keeping the settings of the devices still members. Nothing is kept
+    /// until `keep`.
     fn merged(&self, account: &Account) -> Result<Self, Error> {
         let mut merged = self.account.clone();
-        let taken = merged.merge(account).map_err(Error::invalid)?;
-        Ok(if taken == 0 { Self { account: merged, state: self.state.clone() } } else { Self::new(merged) })
+        if merged.merge(account).map_err(Error::invalid)? == 0 {
+            return Ok(self.clone());
+        }
+        let mut merged = Self::new(merged, self.settings.clone());
+        merged.settings.retain_members(&merged.state);
+        Ok(merged)
     }
 }
 
@@ -65,19 +72,22 @@ impl Server {
     pub(crate) fn merged(&self, state: &State, account: &Account) -> Result<Trusted, Error> {
         match state.trusted.get(&account.id()) {
             Some(trusted) => trusted.merged(account),
-            None => Ok(Trusted::new(Account::checked(account).map_err(Error::invalid)?)),
+            None => Ok(Trusted::new(Account::checked(account).map_err(Error::invalid)?, Settings::new(account.id()))),
         }
     }
 
-    /// Keeps the merged log in place of the trusted one, telling every client when it took an entry. Callers
-    /// `evict` once their merges are done, so a device moving between accounts keeps the connection it moves on.
+    /// Keeps the merged log and settings in place of the trusted ones, telling every client when either changed.
+    /// Callers `evict` once their merges are done, so a device moving between accounts keeps the connection it moves
+    /// on.
     pub(crate) fn keep(&self, state: &mut State, merged: Trusted) -> Result<(), Error> {
         let id = merged.account.id();
-        let known = state.trusted.get(&id).map(|trusted| trusted.account.entries.len());
-        if known == Some(merged.account.entries.len()) {
+        let unchanged = state.trusted.get(&id).is_some_and(|trusted| {
+            trusted.account.entries.len() == merged.account.entries.len() && trusted.settings == merged.settings
+        });
+        if unchanged {
             return Ok(());
         }
-        state.store.keep_account(&merged.account)?;
+        state.store.keep_account(&merged.account, &merged.settings)?;
         state.trusted.insert(id, merged);
         let rev = state.store.rev()?;
         self.publish(state, rev, Event::AccountUpdated { account: id });
@@ -142,7 +152,8 @@ impl Server {
         if !member_before && !(followed && !state.trusted.contains_key(&id)) {
             return Err(Error::Unpaired);
         }
-        let merged = self.merged(&state, &op.account)?;
+        let mut merged = self.merged(&state, &op.account)?;
+        merged.settings.merge(&op.settings, &merged.state).map_err(Error::invalid)?;
         let member = sender.is_none_or(|key| merged.state.is_member(&key));
         if !member_before && !member {
             return Err(Error::Unpaired);
@@ -162,7 +173,8 @@ impl Server {
             }
         }
         self.evict(&mut state)?;
-        Ok(Synced { account: state.trusted[&id].account.clone(), server: self.hosted() })
+        let Trusted { account, settings, .. } = state.trusted[&id].clone();
+        Ok(Synced { account, settings, server: self.hosted() })
     }
 
     /// Takes a join on a trusted account's open, unexpired invite from the device `key`, keeping nothing unless the
@@ -190,9 +202,9 @@ impl Server {
                 "the link's invite does not take this join: it is not proved with the link's secret",
             ));
         }
-        let account = merged.account.clone();
+        let (account, settings) = (merged.account.clone(), merged.settings.clone());
         self.keep(&mut state, merged)?;
         self.evict(&mut state)?;
-        Ok(Synced { account, server: self.hosted() })
+        Ok(Synced { account, settings, server: self.hosted() })
     }
 }

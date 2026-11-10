@@ -17,7 +17,7 @@ import {
 } from "./lift";
 import { curve, play, PROJECT_S, reduced, SNAPPY } from "./motion";
 import { moveTo, placeAmong } from "./sectionOrder";
-import { arrange, arranged, model, orderSections, report, sectionView, sections, ui } from "./state";
+import { account, arrange, arranged, model, orderSections, report, sectionView, sections } from "./state";
 
 type Aim = { state: TaskState; under: TaskView | null };
 
@@ -401,7 +401,7 @@ export const liftSection =
         const moved = arranged();
         if (moved === null || !overList(last)) return home();
         surface.feel("drop");
-        settle(orderSections(placeAmong(ui.prefs.section_order, moved, name)));
+        settle(orderSections(placeAmong(account().settings.section_order, moved, name)));
       },
       cancel: home,
     };

@@ -9,8 +9,9 @@ use octopus_client::tunnel::{Tunnel, listen_on_localhost, loopback_port};
 use octopus_client::{CallError, Connection, Identity};
 use octopus_proto::account::{Account, Change, Link as AccountLink};
 use octopus_proto::device::PublicKey;
-use octopus_proto::ops::{SessionSync, WorkspaceRename, WorkspaceSetColor};
+use octopus_proto::ops::{Revised, SessionSync, TaskFocus, WorkspaceRename, WorkspaceSetColor};
 use octopus_proto::pairing::Invite;
+use octopus_proto::settings::{AgentFlags, Current, Settings};
 use octopus_proto::types::{Color, LockHolder, Task, WorkspaceId};
 use octopus_proto::{Event, Op, Push, now};
 use serde::Serialize;
@@ -20,7 +21,7 @@ use tokio::sync::{Notify, mpsc, oneshot};
 use ts_rs::TS;
 
 use crate::microphone::{AskAccess, Capture, Listener, MICROPHONE_DENIED_EVENT, Microphone};
-use crate::task_lists::{Lists, TaskRef, lists};
+use crate::task_lists::{Lists, TaskRef, Waking, lists};
 use crate::task_view::{TaskView, task_views};
 use crate::{emit, lock, saturate};
 
@@ -60,6 +61,7 @@ pub(crate) struct AccountView {
     /// Whether the account still holds this client.
     pub member: bool,
     pub devices: Vec<DeviceView>,
+    pub settings: Current,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -106,6 +108,7 @@ struct State {
     /// A server's cache outlives its connection, so an unreachable server's tasks stay listed.
     caches: BTreeMap<String, Cache>,
     files_changed: BTreeMap<TaskRef, BTreeSet<String>>,
+    waking: Waking,
 }
 
 impl State {
@@ -240,7 +243,8 @@ impl Hub {
             .map(|member| DeviceView { name: member.name.clone(), key: member.key.hex(), this: member.key == me })
             .collect();
         devices.sort_by_key(|device| !device.this);
-        AccountView { id: self.me.account.account().id().short(), member: state.is_member(&me), devices }
+        let (id, settings) = (self.me.account.account().id().short(), self.me.account.settings().current());
+        AccountView { id, member: state.is_member(&me), devices, settings }
     }
 
     /// A link that goes aborts its supervisor at its next await, so a step it already started may find its link gone.
@@ -376,7 +380,9 @@ impl Hub {
             link.since = now();
         }
         link.problem = Some(problem);
+        state.waking.retain(|at, _| at.server != server);
         self.servers_changed.notify_one();
+        self.model_changed.notify_one();
     }
 
     /// The name this client lists the server pinned to `key` under, if it lists one.
@@ -434,7 +440,8 @@ impl Hub {
     /// Moves this client to a fresh account of its own, with the servers of the one it leaves or with none.
     pub(crate) fn start_afresh(&self, keep_servers: bool) -> anyhow::Result<()> {
         let fresh = Account::fresh(self.me.key.public());
-        self.me.account.move_to(&self.me.key, fresh, &self.me.name(), keep_servers)
+        let settings = Settings::new(fresh.id());
+        self.me.account.move_to(&self.me.key, fresh, &settings, &self.me.name(), keep_servers)
     }
 
     /// Renames the section's workspace on every server of the section, refusing before any rename when a server
@@ -535,10 +542,31 @@ impl Hub {
     }
 
     pub fn model(&self) -> Model {
-        let state = lock(&self.state);
+        let mut state = lock(&self.state);
+        let State { caches, waking, .. } = &mut *state;
+        waking.retain(|at, answered| {
+            answered.is_none_or(|rev| caches.get(&at.server).is_some_and(|cache| cache.rev < rev))
+        });
         let version = self.versions.fetch_add(1, Ordering::Relaxed);
-        let tasks = task_views(&state.caches, |server, holder| state.held_here(&self.me, server, holder));
-        Model { version, lists: lists(&state.caches), tasks }
+        let tasks =
+            task_views(&state.caches, &state.waking, |server, holder| state.held_here(&self.me, server, holder));
+        Model { version, lists: lists(&state.caches, &state.waking), tasks }
+    }
+
+    /// Focuses the task with the account's flags for its harness, its agent waking until the server's answer reaches
+    /// this client's cache.
+    pub async fn focus(&self, at: TaskRef) -> Result<(), String> {
+        let harness = self.task(&at)?.harness;
+        let args = self.me.account.settings().current().agent_flags.get(&harness).map(AgentFlags::args);
+        lock(&self.state).waking.insert(at.clone(), None);
+        self.model_changed.notify_one();
+        let focused = self.call(&at.server, &TaskFocus { task: at.task.clone(), args: args.unwrap_or_default() }).await;
+        match &focused {
+            Ok(Revised { rev }) => lock(&self.state).waking.insert(at, Some(*rev)),
+            Err(_) => lock(&self.state).waking.remove(&at),
+        };
+        self.model_changed.notify_one();
+        focused.map(drop)
     }
 
     pub(crate) fn servers(&self) -> Vec<ServerView> {

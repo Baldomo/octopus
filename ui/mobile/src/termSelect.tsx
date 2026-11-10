@@ -58,8 +58,8 @@ export function wrappedLine(xterm: Terminal, row: number): Char[] {
 export const charAt = (chars: Char[], cell: Cell) => chars.findLastIndex((char) => !before(cell, char.cell));
 const lastCell = (char: Char): Cell => ({ col: char.cell.col + char.width - 1, row: char.cell.row });
 
-/** The word covering `cell`, or the one character when it is a separator. */
-function wordAt(xterm: Terminal, cell: Cell): Span {
+/** The word covering `cell`, or the one character when it is a separator other than a space; null on a space. */
+function wordAt(xterm: Terminal, cell: Cell): Span | null {
   const chars = wrappedLine(xterm, cell.row);
   const inWord = (nth: number) => chars[nth] !== undefined && !SEPARATORS.includes(chars[nth].text);
   let first = charAt(chars, cell);
@@ -69,7 +69,7 @@ function wordAt(xterm: Terminal, cell: Cell): Span {
     while (inWord(last + 1)) last++;
   }
   const [start, end] = [chars[first], chars[last]];
-  return start && end ? { from: start.cell, to: lastCell(end) } : { from: cell, to: cell };
+  return start && end && start.text !== " " ? { from: start.cell, to: lastCell(end) } : null;
 }
 
 function linkAt(xterm: Terminal, cell: Cell): string | null {
@@ -87,7 +87,7 @@ function linkAt(xterm: Terminal, cell: Cell): string | null {
 
 /**
  * Touch selection over xterm's selection API, which xterm itself drives only by mouse. A finger maps to a cell through
- * the drawn screen's box on the page; handles and Copy sit in the pane's points, xterm's pixels divided by the zoom.
+ * the drawn screen's box on the page; handles and the menu sit in the pane's points, xterm's pixels divided by the zoom.
  */
 export function termSelection(props: {
   xterm: Terminal;
@@ -97,12 +97,17 @@ export function termSelection(props: {
   size: () => Size;
   view: () => Size;
   pan: () => Point;
+  /** Whether the menu offers Paste, and what Paste does. */
+  canPaste: () => boolean;
+  paste: () => void;
 }) {
   const { xterm } = props;
   /** Read again on every frame xterm draws, since scrolling and trimmed scrollback move it without a change event. */
   const [span, setSpan] = createSignal<Span | null>(null, { equals: false });
-  /** A finger making or moving the selection keeps Copy out of its way. */
+  /** A finger making or moving the selection keeps the menu out of its way. */
   const [moving, setMoving] = createSignal(false);
+  /** Where a hold that selected nothing shows the menu. */
+  const [spot, setSpot] = createSignal<Cell | null>(null);
 
   const readSelection = () => {
     const at = xterm.getSelectionPosition();
@@ -112,12 +117,16 @@ export function termSelection(props: {
         : { from: { col: at.start.x, row: at.start.y }, to: { col: at.end.x - 1, row: at.end.y } },
     );
   };
+  const dismiss = () => {
+    xterm.clearSelection();
+    setSpot(null);
+  };
   const select = ({ from, to }: Span) =>
     xterm.select(from.col, from.row, (to.row - from.row) * xterm.cols + to.col - from.col + 1);
   const listeners = [
     xterm.onSelectionChange(readSelection),
     xterm.onRender(readSelection),
-    xterm.onResize(() => xterm.clearSelection()),
+    xterm.onResize(() => dismiss()),
   ];
   onCleanup(() => listeners.forEach((listener) => listener.dispose()));
 
@@ -174,12 +183,16 @@ export function termSelection(props: {
         const held: Finger = { id: touch.identifier, from: { x: touch.clientX, y: touch.clientY }, word: null };
         finger = held;
         holding = setTimeout(() => {
+          const anchor = cellAt(held.from, true);
           const cell = cellAt(held.from, false);
-          if (cell === null) return;
+          const word = cell === null ? null : wordAt(xterm, cell);
+          if (anchor === null || (word === null && !props.canPaste())) return;
           keepTouch();
           feel("lift");
-          held.word = wordAt(xterm, cell);
-          select(held.word);
+          setSpot(word === null ? anchor : null);
+          if (word === null) return;
+          held.word = word;
+          select(word);
           setMoving(true);
         }, LONG_PRESS_MS);
       },
@@ -248,7 +261,11 @@ export function termSelection(props: {
       });
   };
 
-  const copySelection = () => act(copy(xterm.getSelection(), "the selection").then(() => xterm.clearSelection()));
+  const copySelection = () => act(copy(xterm.getSelection(), "the selection").then(dismiss));
+  const pasteHere = () => {
+    dismiss();
+    props.paste();
+  };
 
   const placed = (point: Point) => ({
     left: `calc(var(--g1) + ${point.x}px)`,
@@ -275,36 +292,51 @@ export function termSelection(props: {
     return placed({ x: Math.min(Math.max(middle - size.width / 2, 0), room.width - size.width), y });
   };
 
+  /** The selection, else the spot while the menu has Paste to offer there. */
+  const menuAnchor = () => {
+    const at = spot();
+    return span() ?? (at !== null && props.canPaste() ? { from: at, to: at } : null);
+  };
+
   const Handles = () => (
-    <Show when={span()}>
-      {(held) => (
-        <>
-          <i class="hdl start" ref={handle("from")} style={placed(cornerOf(held().from))} />
-          <i
-            class="hdl end"
-            ref={handle("to")}
-            style={placed(cornerOf({ col: held().to.col + 1, row: held().to.row }))}
-          />
-          <Show when={!moving()}>
-            <button ref={measureMenu} class="selmenu" style={menuAt(held())} onClick={copySelection}>
-              Copy
-            </button>
-          </Show>
-        </>
-      )}
-    </Show>
+    <>
+      <Show when={span()}>
+        {(held) => (
+          <>
+            <i class="hdl start" ref={handle("from")} style={placed(cornerOf(held().from))} />
+            <i
+              class="hdl end"
+              ref={handle("to")}
+              style={placed(cornerOf({ col: held().to.col + 1, row: held().to.row }))}
+            />
+          </>
+        )}
+      </Show>
+      <Show when={!moving() && menuAnchor()}>
+        {(at) => (
+          <div ref={measureMenu} class="selmenu" style={menuAt(at())}>
+            <Show when={span()}>
+              <button onClick={copySelection}>Copy</button>
+            </Show>
+            <Show when={props.canPaste()}>
+              <button onClick={pasteHere}>Paste</button>
+            </Show>
+          </div>
+        )}
+      </Show>
+    </>
   );
 
   return {
     attach,
     Handles,
-    /** Whether a touch landed on a handle or on Copy, which the terminal's own tap leaves alone. */
+    /** Whether a touch landed on a handle or on the menu, which the terminal's own tap leaves alone. */
     onControls,
     cellAt,
-    /** Clears a selection, or opens the URL under the tap; reports whether it did either. */
+    /** Clears a selection or the menu, or opens the URL under the tap; reports whether it did either. */
     tap: (point: Point) => {
-      if (xterm.hasSelection()) {
-        xterm.clearSelection();
+      if (xterm.hasSelection() || spot() !== null) {
+        dismiss();
         return true;
       }
       const cell = cellAt(point, false);

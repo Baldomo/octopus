@@ -104,7 +104,7 @@ id: string,
 /**
  * Whether the account still holds this client.
  */
-member: boolean, devices: Array<DeviceView>, };
+member: boolean, devices: Array<DeviceView>, settings: Current, };
 
 export type DeviceView = { name: string, 
 /**
@@ -118,7 +118,7 @@ this: boolean, };
 
 export type TaskRef = { server: string, task: TaskId, };
 
-export type Glyph = "working" | "waiting" | "idle" | "completed" | "cancelled";
+export type Glyph = "working" | "waiting" | "idle" | "asleep" | "ended" | "waking" | "completed" | "cancelled";
 
 export type Row = { key: string, at: TaskRef, title: string, depth: number, 
 /**
@@ -226,11 +226,11 @@ export type ZoomStep = "in" | "out" | "reset";
 
 export type AgentFlags = string;
 
-export type Prefs = { pinned: boolean, collapsed: Array<string>, 
-/**
- * The sections by name in the order the user dragged them to.
- */
-section_order: Array<string>, surface: Surface, split: Split, view: View, 
+export type Setting = { "setting": "section_order", "value": Array<string> } | { "setting": "collapsed", "value": Array<string> } | { "setting": "agent_flags", "value": { [key in string]: AgentFlags } };
+
+export type Current = { section_order: Array<string>, collapsed: Array<string>, agent_flags: { [key in string]: AgentFlags }, };
+
+export type Prefs = { pinned: boolean, surface: Surface, split: Split, view: View, 
 /**
  * The open task's key.
  */
@@ -238,11 +238,7 @@ open: string | null,
 /**
  * The section the Tasks board shows.
  */
-board: string | null, appearance: Appearance, zoom: Zoom, 
-/**
- * The flags each harness's agents start with when this client starts them, by harness id.
- */
-agent_flags: { [key in string]: AgentFlags }, };
+board: string | null, appearance: Appearance, zoom: Zoom, };
 
 export type Reveal = { 
 /**
@@ -272,7 +268,7 @@ viewport: Viewport,
  */
 float_input: Array<Bounds>, };
 
-export type UiAct = { "do": "open_task", key: string, } | { "do": "show_view", view: View, } | { "do": "show_board", section: string, } | { "do": "show_surface", surface: Surface, } | { "do": "set_split", split: Split, } | { "do": "reset_split" } | { "do": "toggle_pin" } | { "do": "toggle_collapsed", section: string, } | { "do": "order_sections", sections: Array<string>, } | { "do": "show_sidebar", shown: boolean, } | { "do": "toggle_sidebar" } | { "do": "show_client_menu", shown: boolean, } | { "do": "toggle_client_menu" } | { "do": "set_appearance", appearance: Appearance, } | { "do": "zoom", step: ZoomStep, } | { "do": "set_agent_flags", harness: string, flags: AgentFlags, } | { "do": "show_modal", modal: Modal | null, } | { "do": "float", surface: string, at: Floated, modal: boolean, } | { "do": "sink", surface: string, } | { "do": "reveal", task: string, path: string, } | { "do": "report", problem: string, };
+export type UiAct = { "do": "open_task", key: string, } | { "do": "show_view", view: View, } | { "do": "show_board", section: string, } | { "do": "show_surface", surface: Surface, } | { "do": "set_split", split: Split, } | { "do": "reset_split" } | { "do": "toggle_pin" } | { "do": "show_sidebar", shown: boolean, } | { "do": "toggle_sidebar" } | { "do": "show_client_menu", shown: boolean, } | { "do": "toggle_client_menu" } | { "do": "set_appearance", appearance: Appearance, } | { "do": "zoom", step: ZoomStep, } | { "do": "show_modal", modal: Modal | null, } | { "do": "float", surface: string, at: Floated, modal: boolean, } | { "do": "sink", surface: string, } | { "do": "reveal", task: string, path: string, } | { "do": "report", problem: string, };
 
 export type Viewport = { width: number, height: number, };
 
@@ -324,6 +320,6 @@ export const HOLDER_GRACE_MS = 10000 as const;
 
 export const VERSION = "0.0.0" as const;
 
-export const COMMANDS = ["boot","ready","ui_act","quit","server_pair","server_offer","server_accounts","server_revoke","account_link","account_join","account_remove","account_leave","account_start_over","servers_refresh","server_rename","server_forget","workspace_add","workspace_remove","section_rename","section_color","auto_color","task_focus","task_move","task_set_parent","task_rename","task_archive","task_create","term_attach","term_input","term_detach","term_open","term_close","term_claim","term_take_lock","term_resize","file_list","file_read","file_write","file_create","file_move","file_copy","file_delete","file_upload","file_search"] as const;
+export const COMMANDS = ["boot","ready","ui_act","quit","server_pair","server_offer","server_accounts","server_revoke","account_link","account_join","settings_set","account_remove","account_leave","account_start_over","servers_refresh","server_rename","server_forget","workspace_add","workspace_remove","section_rename","section_color","auto_color","task_focus","task_resume","task_move","task_set_parent","task_rename","task_archive","task_create","term_attach","term_input","term_detach","term_open","term_close","term_claim","term_take_lock","term_resize","file_list","file_read","file_write","file_create","file_move","file_copy","file_delete","file_upload","file_upload_content","file_search"] as const;
 
 export const EVENTS = {"account":"account","fileDrag":"file-drag","filesChanged":"files_changed","microphoneDenied":"microphone_denied","model":"model","servers":"servers","ui":"ui","windowFocused":"window-focused","windowShown":"window-shown"} as const;

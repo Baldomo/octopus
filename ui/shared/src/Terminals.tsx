@@ -7,8 +7,8 @@ import { keepInView } from "./keepInView";
 import { onFileDrag, pastesSafely, shellQuoted } from "./fileDrag";
 import { EachPanel, taskPanels } from "./panels";
 import { commands, hint, mac } from "./commands";
-import { act, isLocal, model, serverLabel, ui } from "./state";
-import { filesOf } from "./taskFiles";
+import { act, model, serverLabel, ui } from "./state";
+import { onServer } from "./taskFiles";
 import { toast } from "./Toast";
 import { type LinkTarget, openLinks, type OpenUrl } from "./terminalLinks";
 import { terminalSession, windowShown } from "./terminalSession";
@@ -34,14 +34,6 @@ export type OpenLink = (task: TaskView, url: string, target: LinkTarget) => void
 
 const readOnlyLabel = (panel: PanelView) =>
   panel.lock_holder === null ? "read-only · lock free" : `read-only · held by ${panel.lock_holder.name}`;
-
-/** Where files on this machine are on the task's server: there already when it runs here, else copied into the
- * checkout's root. */
-async function onServer(task: TaskView, locals: string[]) {
-  if (isLocal(task.at.server)) return locals;
-  const copies = await filesOf(task).bringIn(locals, ".");
-  return copies.map((copy) => `${task.task.directory}/${copy}`);
-}
 
 /** The holder fits the PTY to its pane; every other client draws it at the holder's size, cropped and scrollable. */
 function Term(props: { task: TaskView; panel: PanelView; visible: boolean; resumable: boolean; openLink: OpenUrl }) {
@@ -108,7 +100,7 @@ function Term(props: { task: TaskView; panel: PanelView; visible: boolean; resum
         <div class="readonly">
           <span>The agent has ended</span>
           <span class="spacer" />
-          <button class="btn live" onClick={() => act(backend.taskFocus(props.task.at))}>
+          <button class="btn live" onClick={() => act(backend.taskResume(props.task.at))}>
             Resume
           </button>
         </div>
@@ -220,7 +212,7 @@ function Stack(props: { key: string; openLink: OpenLink }) {
                   task={open()}
                   panel={panel()}
                   visible={shown() && selected()?.id === panel().id}
-                  resumable={open().live && panel().name === AGENT_PANEL && !panel().running}
+                  resumable={open().glyph === "ended" && panel().name === AGENT_PANEL}
                   openLink={(url, target) => props.openLink(open(), url, target)}
                 />
               )}

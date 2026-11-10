@@ -1,7 +1,7 @@
 import { createEffect, For, on, onCleanup, Show } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import type { Column, Section } from "@octopus/shared/generated.ts";
-import { Glyph } from "@octopus/shared/Glyph.tsx";
+import { Glyph, statusWord } from "@octopus/shared/Glyph.tsx";
 import { animateList } from "@octopus/shared/flip.ts";
 import {
   isAway,
@@ -33,6 +33,7 @@ import {
   serverView,
   showSidebar,
   showBoard,
+  isCollapsed,
   toggleCollapsed,
   togglePin,
   ui,
@@ -83,6 +84,9 @@ function SectionGroup(props: { section: string; column: Column }) {
             >
               <RenameInput value={row.title} apply={(title) => backend.taskRename(row.at, title)} />
             </Show>
+            <Show when={row.glyph === "waking"}>
+              <span class="st">{statusWord.waking}</span>
+            </Show>
             <Show when={row.state !== props.column.state}>
               <span class="st">{row.state}</span>
             </Show>
@@ -103,7 +107,7 @@ function SectionGroups(props: { section: Section }) {
   const name = () => props.section.name;
   const id = () => `section:${name()}`;
   const menu = () => <SectionMenu name={name()} />;
-  const collapsed = () => ui.prefs.collapsed.includes(name()) || isSectionFolded(name());
+  const collapsed = () => isCollapsed(name()) || isSectionFolded(name());
   return (
     <div
       class="ws"

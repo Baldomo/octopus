@@ -9,6 +9,7 @@ plugin_commands![
     server_revoke,
     account_link,
     account_join,
+    settings_set,
     account_remove,
     account_leave,
     account_start_over,
@@ -21,6 +22,7 @@ plugin_commands![
     section_color,
     auto_color,
     task_focus,
+    task_resume,
     task_move,
     task_set_parent,
     task_rename,
@@ -42,5 +44,6 @@ plugin_commands![
     file_copy,
     file_delete,
     file_upload,
+    file_upload_content,
     file_search,
 ];

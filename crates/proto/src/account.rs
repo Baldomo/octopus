@@ -39,6 +39,10 @@ impl Digest {
         Self(bytes.as_ref().try_into().expect("a SHA-256 is 32 bytes"))
     }
 
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
     /// The first eight hex digits, which a person reads an account by.
     pub fn short(&self) -> String {
         hex::encode(&self.0[..4])
@@ -71,7 +75,7 @@ arg_shape!(Shape::Text => Digest, Account, Signed, Link);
 
 /// An ed25519 signature, spelled in hex.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Signature(iroh::Signature);
+pub struct Signature(pub(crate) iroh::Signature);
 
 impl fmt::Debug for Signature {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

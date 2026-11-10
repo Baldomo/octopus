@@ -45,7 +45,7 @@ export const NEXT_START = "Applies on each agent's next start.";
 
 /** Enter saves the flags typed, and leaving the field puts the saved ones back. */
 function AgentFlagsField(props: { harness: string }) {
-  const saved = () => ui.prefs.agent_flags[props.harness] ?? "";
+  const saved = () => account().settings.agent_flags[props.harness] ?? "";
   return (
     <label class="field">
       <span>{props.harness}</span>

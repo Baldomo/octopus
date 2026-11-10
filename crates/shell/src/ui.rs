@@ -1,5 +1,5 @@
 //! The state every layer of the window renders, held here so a component reads the same values in whichever layer
-//! it sits. Its prefs persist across launches.
+//! it sits. Its prefs, this device's own, persist across launches; the account holds the settings every device shares.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -7,12 +7,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::Context;
+use octopus_client::Identity;
 use octopus_client::servers::{Config, read_text, write_text};
+use octopus_proto::settings::{AgentFlags, Setting};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use ts_rs::TS;
 
-use crate::client_menu::{AgentFlags, Appearance, Zoom, ZoomStep};
+use crate::client_menu::{Appearance, Zoom, ZoomStep};
 use crate::{emit, lock};
 
 pub const UI_EVENT: &str = "ui";
@@ -113,9 +115,6 @@ pub enum Modal {
 #[serde(deny_unknown_fields)]
 pub struct Prefs {
     pub pinned: bool,
-    pub collapsed: Vec<String>,
-    /// The sections by name in the order the user dragged them to.
-    pub section_order: Vec<String>,
     pub surface: Surface,
     pub split: Split,
     pub view: View,
@@ -125,8 +124,23 @@ pub struct Prefs {
     pub board: Option<String>,
     pub appearance: Appearance,
     pub zoom: Zoom,
-    /// The flags each harness's agents start with when this client starts them, by harness id.
-    pub agent_flags: BTreeMap<String, AgentFlags>,
+}
+
+/// The prefs a client kept while they held the settings its account now holds.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrefsWithSettings {
+    pinned: bool,
+    collapsed: Vec<String>,
+    section_order: Vec<String>,
+    surface: Surface,
+    split: Split,
+    view: View,
+    open: Option<String>,
+    board: Option<String>,
+    appearance: Appearance,
+    zoom: Zoom,
+    agent_flags: BTreeMap<String, AgentFlags>,
 }
 
 /// A file the palette opens in Files.
@@ -178,12 +192,6 @@ pub enum UiAct {
     },
     ResetSplit,
     TogglePin,
-    ToggleCollapsed {
-        section: String,
-    },
-    OrderSections {
-        sections: Vec<String>,
-    },
     ShowSidebar {
         shown: bool,
     },
@@ -198,11 +206,6 @@ pub enum UiAct {
     },
     Zoom {
         step: ZoomStep,
-    },
-    /// Empty flags drop the harness's entry.
-    SetAgentFlags {
-        harness: String,
-        flags: AgentFlags,
     },
     ShowModal {
         modal: Option<Modal>,
@@ -287,19 +290,12 @@ impl State {
             UiAct::SetSplit { split } => ui.prefs.split = split,
             UiAct::ResetSplit => ui.prefs.split = EVEN,
             UiAct::TogglePin => ui.prefs.pinned = !ui.prefs.pinned,
-            UiAct::ToggleCollapsed { section } => match ui.prefs.collapsed.iter().position(|name| *name == section) {
-                Some(at) => drop(ui.prefs.collapsed.remove(at)),
-                None => ui.prefs.collapsed.push(section),
-            },
-            UiAct::OrderSections { sections } => ui.prefs.section_order = sections,
             UiAct::ShowSidebar { shown } => ui.sidebar = shown,
             UiAct::ToggleSidebar => ui.sidebar = !ui.sidebar,
             UiAct::ShowClientMenu { shown } => ui.show_client_menu(shown),
             UiAct::ToggleClientMenu => ui.show_client_menu(!ui.client_menu),
             UiAct::SetAppearance { appearance } => ui.prefs.appearance = appearance,
             UiAct::Zoom { step } => ui.prefs.zoom = ui.prefs.zoom.step(step),
-            UiAct::SetAgentFlags { harness, flags } if flags.is_empty() => drop(ui.prefs.agent_flags.remove(&harness)),
-            UiAct::SetAgentFlags { harness, flags } => drop(ui.prefs.agent_flags.insert(harness, flags)),
             UiAct::ShowModal { modal } => ui.show_modal(modal),
             UiAct::Float { surface, at, modal } => drop(out.insert(surface, Out { at, modal })),
             UiAct::Sink { surface } => drop(out.remove(&surface)),
@@ -359,10 +355,38 @@ pub struct UiStore {
     follower: OnceLock<Follower>,
 }
 
-fn load_prefs(config: &Config) -> anyhow::Result<Prefs> {
+/// Prefs that still hold settings give them to the account once, older than every value a device of it sets.
+fn load_prefs(config: &Config, me: &Identity) -> anyhow::Result<Prefs> {
     let path = config.file(PREFS_FILE);
     let Some(text) = read_text(&path)? else { return Ok(Prefs::default()) };
-    serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))
+    let parsed = serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()));
+    let Ok(old) = serde_json::from_str::<PrefsWithSettings>(&text) else { return parsed };
+    let PrefsWithSettings {
+        pinned,
+        collapsed,
+        section_order,
+        surface,
+        split,
+        view,
+        open,
+        board,
+        appearance,
+        zoom,
+        agent_flags,
+    } = old;
+    me.account.update_settings(|settings| {
+        let held = [
+            (!section_order.is_empty()).then_some(Setting::SectionOrder(section_order)),
+            (!collapsed.is_empty()).then_some(Setting::Collapsed(collapsed)),
+            (!agent_flags.is_empty()).then_some(Setting::AgentFlags(agent_flags)),
+        ];
+        for setting in held.into_iter().flatten() {
+            settings.seed(&me.key, setting);
+        }
+    })?;
+    let prefs = Prefs { pinned, surface, split, view, open, board, appearance, zoom };
+    save_prefs(config, &prefs)?;
+    Ok(prefs)
 }
 
 fn save_prefs(config: &Config, prefs: &Prefs) -> anyhow::Result<()> {
@@ -371,8 +395,8 @@ fn save_prefs(config: &Config, prefs: &Prefs) -> anyhow::Result<()> {
 
 impl UiStore {
     /// Prefs the app cannot parse start the window from the defaults, and the status bar says so.
-    pub fn load(app: AppHandle, config: Config, launch_problem: Option<String>) -> Arc<Self> {
-        let (prefs, prefs_problem) = match load_prefs(&config) {
+    pub fn load(app: AppHandle, config: Config, me: &Identity, launch_problem: Option<String>) -> Arc<Self> {
+        let (prefs, prefs_problem) = match load_prefs(&config, me) {
             Ok(prefs) => (prefs, None),
             Err(error) => (Prefs::default(), Some(format!("{error:#}; started from the default prefs"))),
         };
@@ -396,11 +420,6 @@ impl UiStore {
 
     pub fn native(&self) -> Native {
         lock(&self.state).native()
-    }
-
-    /// The args this client starts an agent of `harness` with.
-    pub fn agent_args(&self, harness: &str) -> Vec<String> {
-        lock(&self.state).ui.prefs.agent_flags.get(harness).map(AgentFlags::args).unwrap_or_default()
     }
 
     pub fn follow(&self, follower: impl Fn(&Native, &Native) -> Result<(), String> + Send + Sync + 'static) {
@@ -470,8 +489,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn prefs_that_held_settings_give_them_to_the_account_once_yielding_to_every_value_set() {
+        use octopus_client::account::Book;
+        use octopus_proto::device::DeviceKey;
+        let dir = std::env::temp_dir().join(format!("octopus-shell-{}-prefs", std::process::id()));
+        let _fresh = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a config dir");
+        let config = Config::at(dir.clone());
+        let key = DeviceKey::generate();
+        let me = Identity::new("laptop".into(), DeviceKey::from_pkcs8(key.pkcs8()).expect("a key"), Book::memory(&key))
+            .expect("an identity");
+        let kept = Setting::Collapsed(vec!["kept".into()]);
+        me.account.update_settings(|settings| settings.set(&me.key, kept)).expect("set");
+        let old = serde_json::json!({
+            "pinned": true, "collapsed": ["acme"], "section_order": ["willow", "acme"], "surface": "files",
+            "split": 0.5, "view": "task", "open": null, "board": null, "appearance": "dark", "zoom": 110,
+            "agent_flags": {"claude-code": "--model opus"},
+        });
+        std::fs::write(config.file(PREFS_FILE), old.to_string()).expect("write the prefs");
+        let prefs = load_prefs(&config, &me).expect("load");
+        assert!(prefs.pinned && prefs.appearance == Appearance::Dark);
+        let settings = me.account.settings().current();
+        assert_eq!(settings.section_order, ["willow", "acme"]);
+        assert_eq!(settings.collapsed, ["kept"], "a value set stands over the prefs'");
+        assert_eq!(settings.agent_flags["claude-code"].args(), ["--model", "opus"]);
+        assert_eq!(load_prefs(&config, &me).expect("load again"), prefs, "the prefs file now holds prefs alone");
+        std::fs::remove_dir_all(&dir).expect("clean up");
+    }
+
+    #[test]
     fn saved_prefs_parse_only_with_every_pref_and_no_other() {
-        let prefs = Prefs { pinned: true, section_order: vec!["willow".into(), "acme".into()], ..Prefs::default() };
+        let prefs = Prefs { pinned: true, open: Some("willow".into()), ..Prefs::default() };
         let saved = serde_json::to_value(&prefs).expect("prefs serialize");
         assert_eq!(serde_json::from_value::<Prefs>(saved.clone()).expect("parses"), prefs);
         let mut lacking = saved.clone();

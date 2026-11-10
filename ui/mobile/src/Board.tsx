@@ -35,7 +35,7 @@ function Card(props: { row: Row; section: string; column: Column }) {
       data-key={props.row.key}
       style={{ "--d": props.row.depth }}
       {...pressed(
-        () => openTask(props.row.key, props.row.at),
+        () => openTask(props.row.key),
         () => openSheet({ is: "task", key: props.row.key, open: null }),
         liftOnPhone(lift(props.row, props.section)),
       )}

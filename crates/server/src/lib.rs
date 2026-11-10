@@ -243,7 +243,7 @@ impl Server {
             TermTakeLock::NAME => call::<TermTakeLock>(args, |op| self.term_take_lock(client, op)),
             TermResize::NAME => call::<TermResize>(args, |op| self.term_resize(client, op)),
             FileList::NAME => call::<FileList>(args, |op| {
-                Ok(Entries { entries: files::list(&self.checkout_dir(&op.task)?, &op.path)? })
+                Ok(Entries { entries: files::list(&self.listed_checkout(&op.task)?, &op.path)? })
             }),
             FileWrite::NAME => call::<FileWrite>(args, |op| {
                 Ok(Written { bytes: files::write(&self.checkout_dir(&op.task)?, &op.path, op.content.as_bytes())? })

@@ -56,7 +56,7 @@ const step = (to: "in" | "out") => {
 
 /** Return saves the flags typed, and a refusal shows under the field. */
 function AgentFlagsField(props: { harness: string }) {
-  const [draft, setDraft] = createSignal(ui.prefs.agent_flags[props.harness] ?? "");
+  const [draft, setDraft] = createSignal(account().settings.agent_flags[props.harness] ?? "");
   const [problem, setProblem] = createSignal<string | null>(null);
   const save = () =>
     setAgentFlags(props.harness, draft()).then(
@@ -356,7 +356,7 @@ export function ServerMenu(props: { name: string }) {
                       <For each={firstWhere(paired.devices, isThisClient)}>
                         {(client) => (
                           <Mi
-                            slot={<i class={client.connected || client.hosts ? "dot srv" : "dot idle"} />}
+                            slot={<i class={client.connected || client.hosts ? "dot srv" : "dot ring"} />}
                             end={<Why>{clientStatus(client, now(), "this phone")}</Why>}
                           >
                             {client.name}

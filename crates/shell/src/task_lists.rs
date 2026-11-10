@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use octopus_client::cache::Cache;
-use octopus_proto::types::{Agent, AgentStatus, Color, Hue, Swatch, Task, TaskId, TaskState, Tone, WorkspaceId};
+use octopus_proto::types::{
+    AGENT_PANEL, Agent, AgentStatus, Color, Hue, Swatch, Task, TaskId, TaskState, Tone, WorkspaceId,
+};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -27,6 +29,13 @@ pub enum Glyph {
     Working,
     Waiting,
     Idle,
+    /// The agent lists no panel, as the server reclaimed it or it has not run since the task went live or the
+    /// terminal host started: showing the task wakes it.
+    Asleep,
+    /// The agent's panel ended, which only Resume starts again, or its harness is missing, which each focus checks again.
+    Ended,
+    /// Asleep or ended while a focus this client sent to start it is on its way.
+    Waking,
     Completed,
     Cancelled,
 }
@@ -38,10 +47,30 @@ impl Glyph {
             (TaskState::Cancelled, _) => Self::Cancelled,
             (_, Agent::Running { status: AgentStatus::Working }) => Self::Working,
             (_, Agent::Running { status: AgentStatus::Waiting }) => Self::Waiting,
-            _ => Self::Idle,
+            (_, Agent::Running { status: AgentStatus::Idle }) => Self::Idle,
+            _ if awaits_resume(task) => Self::Ended,
+            (_, Agent::NotStarted) => Self::Asleep,
+            (_, Agent::HarnessNotInstalled { .. } | Agent::HarnessUnknown) => Self::Ended,
+        }
+    }
+
+    /// The glyph this client shows for the task at `at`, waking while its focus is on its way.
+    pub(crate) fn shown(at: &TaskRef, task: &Task, waking: &Waking) -> Self {
+        match Self::of(task) {
+            Self::Asleep | Self::Ended if waking.contains_key(at) => Self::Waking,
+            glyph => glyph,
         }
     }
 }
+
+/// Whether the task's agent panel ended, so its agent starts again only through Resume.
+pub(crate) fn awaits_resume(task: &Task) -> bool {
+    task.panels.iter().any(|panel| panel.name == AGENT_PANEL && !panel.running)
+}
+
+/// The tasks this client is focusing: `None` while a focus is on its way, then the rev the server answered with, until
+/// the client's cache of the server reaches it.
+pub(crate) type Waking = BTreeMap<TaskRef, Option<u64>>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 pub struct Row {
@@ -124,21 +153,26 @@ struct Placed<'a> {
 }
 
 impl Placed<'_> {
-    fn row(&self, depth: u32) -> Row {
+    fn row(&self, depth: u32, waking: &Waking) -> Row {
         Row {
             key: self.at.key(),
             at: self.at.clone(),
             title: self.task.title.clone(),
             depth,
             state: self.task.state,
-            glyph: Glyph::of(self.task),
+            glyph: Glyph::shown(&self.at, self.task, waking),
         }
     }
 }
 
 /// One list of every section, holding its unarchived tasks in `states`: a task sits under its parent whenever the list
 /// holds the parent in the same section, and heads the column of its own state otherwise.
-fn columns<'a>(placed: &[Placed<'a>], sections: &[&'a str], states: &[TaskState]) -> BTreeMap<&'a str, Vec<Column>> {
+fn columns<'a>(
+    placed: &[Placed<'a>],
+    sections: &[&'a str],
+    states: &[TaskState],
+    waking: &Waking,
+) -> BTreeMap<&'a str, Vec<Column>> {
     let column_of =
         |task: &Task| states.iter().position(|state| *state == task.state).filter(|_| task.archived_at.is_none());
     let empty = || vec![Vec::new(); states.len()];
@@ -158,7 +192,7 @@ fn columns<'a>(placed: &[Placed<'a>], sections: &[&'a str], states: &[TaskState]
         let mut rows = Vec::new();
         let mut stack: Vec<(usize, u32)> = heads.into_iter().rev().map(|i| (i, 0)).collect();
         while let Some((i, depth)) = stack.pop() {
-            rows.push(placed[i].row(depth));
+            rows.push(placed[i].row(depth, waking));
             stack.extend(children[i].iter().rev().map(|&child| (child, depth + 1)));
         }
         Column { state, rows }
@@ -169,7 +203,7 @@ fn columns<'a>(placed: &[Placed<'a>], sections: &[&'a str], states: &[TaskState]
         .collect()
 }
 
-pub fn lists(caches: &BTreeMap<String, Cache>) -> Lists {
+pub fn lists(caches: &BTreeMap<String, Cache>, waking: &Waking) -> Lists {
     let mut placed: Vec<Placed> = caches
         .iter()
         .flat_map(|(server, cache)| {
@@ -191,8 +225,8 @@ pub fn lists(caches: &BTreeMap<String, Cache>) -> Lists {
 
     let names: Vec<&str> =
         caches.values().flat_map(|cache| cache.workspaces.values().map(|workspace| workspace.name.as_str())).collect();
-    let mut groups = columns(&placed, &names, &TaskState::LIVE);
-    let boards = columns(&placed, &names, &TaskState::ALL);
+    let mut groups = columns(&placed, &names, &TaskState::LIVE, waking);
+    let boards = columns(&placed, &names, &TaskState::ALL, waking);
 
     let sections = boards
         .into_iter()
@@ -228,7 +262,7 @@ pub fn lists(caches: &BTreeMap<String, Cache>) -> Lists {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use octopus_proto::types::{Checkout, Session, SessionId, Workspace};
+    use octopus_proto::types::{Checkout, Panel, PtyId, Session, SessionId, Workspace};
 
     #[test]
     fn a_task_shows_its_agent_while_live_and_how_it_ended_after() {
@@ -236,11 +270,38 @@ pub(crate) mod tests {
         working.agent = Agent::Running { status: AgentStatus::Working };
         let mut cancelled = working.clone();
         cancelled.state = TaskState::Cancelled;
-        let mut missing = task("tsk_1", "wsp_a", None, "t", TaskState::Pinned);
+        let mut idle = working.clone();
+        idle.agent = Agent::Running { status: AgentStatus::Idle };
+        let asleep = task("tsk_1", "wsp_a", None, "t", TaskState::Pinned);
+        let mut ended = asleep.clone();
+        ended.panels = vec![Panel {
+            id: PtyId("pty_1".into()),
+            name: AGENT_PANEL.into(),
+            running: false,
+            lock_holder: None,
+            cols: 80,
+            rows: 24,
+            listening: false,
+        }];
+        let mut missing = asleep.clone();
         missing.agent = Agent::HarnessUnknown;
         assert_eq!(
-            [Glyph::of(&working), Glyph::of(&cancelled), Glyph::of(&missing)],
-            [Glyph::Working, Glyph::Cancelled, Glyph::Idle]
+            [&working, &idle, &asleep, &ended, &missing, &cancelled].map(Glyph::of),
+            [Glyph::Working, Glyph::Idle, Glyph::Asleep, Glyph::Ended, Glyph::Ended, Glyph::Cancelled]
+        );
+        assert!(awaits_resume(&ended) && !awaits_resume(&asleep), "showing a task wakes all but an ended agent");
+    }
+
+    #[test]
+    fn a_task_shows_waking_while_this_clients_focus_starts_its_agent() {
+        let asleep = task("tsk_1", "wsp_a", None, "t", TaskState::Pinned);
+        let at = TaskRef { server: "laptop".into(), task: asleep.id.clone() };
+        let waking = Waking::from([(at.clone(), None)]);
+        let mut woken = asleep.clone();
+        woken.agent = Agent::Running { status: AgentStatus::Idle };
+        assert_eq!(
+            [Glyph::shown(&at, &asleep, &waking), Glyph::shown(&at, &woken, &waking)],
+            [Glyph::Waking, Glyph::Idle]
         );
     }
 
@@ -312,7 +373,7 @@ pub(crate) mod tests {
             ),
             ("mac-mini".into(), mac_mini),
         ]);
-        let lists = lists(&caches);
+        let lists = lists(&caches, &Waking::new());
         let names: Vec<(&str, u32)> =
             lists.sections.iter().map(|section| (section.name.as_str(), section.live)).collect();
         assert_eq!(names, [("dotfiles", 0), ("octopus", 2), ("scratch", 0)]);
@@ -344,7 +405,7 @@ pub(crate) mod tests {
                 ],
             ),
         )]);
-        let lists = lists(&caches);
+        let lists = lists(&caches, &Waking::new());
         let octopus = section(&lists, "octopus");
         assert_eq!(
             rows(&octopus.groups, TaskState::Pinned),
