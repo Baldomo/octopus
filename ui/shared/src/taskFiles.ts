@@ -1,6 +1,7 @@
 import { createStore, produce, type SetStoreFunction } from "solid-js/store";
 import { backend } from "./backend";
 import type { Entry, EntryKind, FilesChanged, TaskRef, TaskView } from "./generated";
+import { fetched, openingOf, renderingOf, SNIFF_BYTES, textOf, type MediaKind } from "./opening";
 import { moveTo } from "./sectionOrder";
 import { isLocal, report } from "./state";
 import { each } from "./Toast";
@@ -10,6 +11,9 @@ type Model = import("monaco-editor").editor.ITextModel;
 type ViewState = import("monaco-editor").editor.ICodeEditorViewState | null;
 
 let loading: Promise<Monaco> | undefined;
+/** A file read to show it, with its text and the editor's module when it shows as code. */
+type Read = { view: FileView; code?: { text: string; monaco: Monaco["monaco"] } };
+
 /** Numbers each buffer's URI, which outlives its file's path when the file moves and a new one takes the path. */
 let buffers = 0;
 /** Monaco loads on the first file opened, off the launch path. */
@@ -38,12 +42,20 @@ export function tabHints(tabs: string[]) {
 /** `path` follows the file through moves, so its edits stay marked under its current name. */
 type Opened = { path: string; model: Model; saved: number; view: ViewState };
 
+/** How an open file shows: as code in its buffer, as media, or as a line naming it with its size. A media file's
+ * `load` changes with each change to the file, so its view loads it again. */
+export type MediaView = { as: MediaKind; load: number; size: number } | { as: "binary" | "large"; size: number };
+export type FileView = { as: "text" } | MediaView;
+
+/** Numbers each load of a media file, so the webview never reuses an earlier one. */
+let loads = 0;
+
 type Tree = {
   listings: Record<string, Entry[]>;
   expanded: Record<string, boolean>;
   tabs: string[];
   active: string | null;
-  loaded: Record<string, boolean>;
+  views: Record<string, FileView>;
   dirty: Record<string, boolean>;
   unreadable: Record<string, string>;
   rendered: Record<string, boolean>;
@@ -66,19 +78,6 @@ export function freeName(name: string, taken: Set<string>) {
   return nth(count);
 }
 
-export const extensionOf = (path: string) => {
-  const name = nameOf(path);
-  return name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
-};
-const RENDERINGS = new Map<string, "markdown" | "page" | "image">([
-  ["md", "markdown"],
-  ["markdown", "markdown"],
-  ["html", "page"],
-  ["htm", "page"],
-  ["svg", "image"],
-]);
-export const renderingOf = (path: string) => RENDERINGS.get(extensionOf(path));
-export const renderable = (path: string) => renderingOf(path) !== undefined;
 const ancestorsOf = (path: string) =>
   path
     .split("/")
@@ -92,6 +91,10 @@ export class TaskFiles {
   readonly state: Tree;
   private readonly set: SetStoreFunction<Tree>;
   private readonly opened = new Map<string, Opened>();
+  /** The URL the checkout's files load under, which the first read asks this client for. */
+  private root: string | undefined;
+  /** Counts the reads of each file, so a read that a newer read or a save overtook shows nothing. */
+  private readonly reads = new Map<string, number>();
 
   constructor(
     readonly key: string,
@@ -102,7 +105,7 @@ export class TaskFiles {
       expanded: {},
       tabs: [],
       active: null,
-      loaded: {},
+      views: {},
       dirty: {},
       unreadable: {},
       rendered: {},
@@ -153,13 +156,16 @@ export class TaskFiles {
       buffer.path = moved(buffer.path);
       this.opened.set(buffer.path, buffer);
     }
+    const reads = [...this.reads];
+    this.reads.clear();
+    for (const [path, nth] of reads) this.reads.set(moved(path), nth);
     this.set(
       produce((state) => {
         state.tabs = state.tabs.map(moved);
         state.active = state.active === null ? null : moved(state.active);
         state.listings = rekey(state.listings);
         state.expanded = rekey(state.expanded);
-        state.loaded = rekey(state.loaded);
+        state.views = rekey(state.views);
         state.dirty = rekey(state.dirty);
         state.unreadable = rekey(state.unreadable);
         state.rendered = rekey(state.rendered);
@@ -228,31 +234,82 @@ export class TaskFiles {
     this.set("revealing", null);
   }
 
+  /** Whether the file shows as code or rendered, as a text file with a rendering does. */
+  switchable(path: string) {
+    return renderingOf(path) !== undefined && this.state.views[path]?.as === "text";
+  }
+
   toggleRendered() {
     const path = this.state.active;
-    if (path !== null && renderable(path)) this.set("rendered", path, !this.state.rendered[path]);
+    if (path !== null && this.switchable(path)) this.set("rendered", path, !this.state.rendered[path]);
   }
 
   async open(path: string) {
     if (!this.state.tabs.includes(path)) this.set("tabs", (tabs) => [...tabs, path]);
     this.set("active", path);
-    if (this.opened.has(path)) return;
-    const [{ monaco }, text] = await Promise.all([loadMonaco(), backend.fileText(this.at, path)]).catch((error) => {
+    if (this.state.views[path] !== undefined) return;
+    const nth = this.overtake(path);
+    const read = await this.read(path).catch((error: unknown) => {
       this.set("unreadable", path, String(error));
       throw error;
     });
-    if (this.opened.has(path) || !this.state.tabs.includes(path)) return;
-    const uri = monaco.Uri.from({ scheme: "octopus", path: `/${this.key}/${++buffers}/${nameOf(path)}` });
-    const model = monaco.editor.createModel(text, undefined, uri);
-    const opened: Opened = { path, model, saved: model.getAlternativeVersionId(), view: null };
-    model.onDidChangeContent(() => this.set("dirty", opened.path, model.getAlternativeVersionId() !== opened.saved));
-    this.opened.set(path, opened);
+    if (this.reads.get(path) === nth && this.state.views[path] === undefined && this.state.tabs.includes(path))
+      this.show(path, read);
+  }
+
+  /** Decides how the file shows, reading its text when it shows as code. */
+  private async read(path: string): Promise<Read> {
+    this.root ??= await backend.fileRootUrl(this.at);
+    const url = this.urlOf(path);
+    const head = await fetched(url, `bytes=0-${SNIFF_BYTES - 1}`);
+    const opening = openingOf(path, head.size, head.bytes);
+    if (opening === "binary" || opening === "large") return { view: { as: opening, size: head.size } };
+    if (opening !== "text") {
+      return { view: { as: opening, load: ++loads, size: head.size } };
+    }
+    const [whole, { monaco }] = await Promise.all([head.size > head.bytes.length ? fetched(url) : head, loadMonaco()]);
+    const text = textOf(whole.bytes);
+    return text === undefined
+      ? { view: { as: "binary", size: head.size } }
+      : { view: { as: "text" }, code: { text, monaco } };
+  }
+
+  /** A text file shows in its buffer, made here or set to the text; any other view leaves no buffer. */
+  private show(path: string, read: Read) {
+    const buffer = this.opened.get(path);
+    const code = read.code;
+    if (code === undefined) {
+      buffer?.model.dispose();
+      this.opened.delete(path);
+    } else if (buffer === undefined) {
+      const { monaco, text } = code;
+      const uri = monaco.Uri.from({ scheme: "octopus", path: `/${this.key}/${++buffers}/${nameOf(path)}` });
+      const model = monaco.editor.createModel(text, undefined, uri);
+      const opened: Opened = { path, model, saved: model.getAlternativeVersionId(), view: null };
+      model.onDidChangeContent(() => this.set("dirty", opened.path, model.getAlternativeVersionId() !== opened.saved));
+      this.opened.set(path, opened);
+    } else if (buffer.model.getValue() !== code.text) {
+      buffer.model.setValue(code.text);
+      buffer.saved = buffer.model.getAlternativeVersionId();
+    }
     this.set(
       produce((state) => {
         delete state.unreadable[path];
-        state.loaded[path] = true;
+        state.views[path] = read.view;
+        state.dirty[path] = false;
       }),
     );
+  }
+
+  /** The file's view when it shows with no code. */
+  media(path: string) {
+    const view = this.state.views[path];
+    return view === undefined || view.as === "text" ? undefined : view;
+  }
+
+  /** Where a file of the checkout loads from, once a read has named the checkout's URL. */
+  urlOf(path: string) {
+    return `${this.root}/${path.split("/").map(encodeURIComponent).join("/")}`;
   }
 
   moveTab(path: string, to: number) {
@@ -270,12 +327,13 @@ export class TaskFiles {
       }),
     );
     if (this.state.dirty[path]) return;
+    this.reads.delete(path);
     this.opened.get(path)?.model.dispose();
     this.opened.delete(path);
     this.set(
       produce((state) => {
         delete state.dirty[path];
-        delete state.loaded[path];
+        delete state.views[path];
       }),
     );
   }
@@ -292,29 +350,33 @@ export class TaskFiles {
     const opened = this.opened.get(path);
     if (opened === undefined) return;
     const version = opened.model.getAlternativeVersionId();
+    this.overtake(path);
     backend.fileWrite(this.at, path, opened.model.getValue()).then(() => {
       opened.saved = version;
       this.set("dirty", path, opened.model.getAlternativeVersionId() !== version);
     }, report);
   }
 
-  /** A clean buffer follows the file on the server; a dirty one keeps the user's edits. */
+  /** An open file follows the file on the server, but for a dirty buffer, which keeps the user's edits. */
   changed(paths: string[]) {
     this.relist(...paths);
     for (const path of paths) {
-      const opened = this.opened.get(path);
-      if (opened === undefined || this.state.dirty[path]) continue;
-      backend.fileText(this.at, path).then(
-        (text) => {
-          this.set(produce((state) => delete state.unreadable[path]));
-          if (this.state.dirty[path] || opened.model.getValue() === text) return;
-          opened.model.setValue(text);
-          opened.saved = opened.model.getAlternativeVersionId();
-          this.set("dirty", path, false);
+      if (!this.state.tabs.includes(path) || this.state.dirty[path]) continue;
+      const nth = this.overtake(path);
+      this.read(path).then(
+        (read) => {
+          if (this.reads.get(path) === nth && this.state.tabs.includes(path) && !this.state.dirty[path])
+            this.show(path, read);
         },
-        (error) => this.set("unreadable", path, String(error)),
+        (error: unknown) => this.reads.get(path) === nth && this.set("unreadable", path, String(error)),
       );
     }
+  }
+
+  private overtake(path: string) {
+    const nth = (this.reads.get(path) ?? 0) + 1;
+    this.reads.set(path, nth);
+    return nth;
   }
 
   dispose() {

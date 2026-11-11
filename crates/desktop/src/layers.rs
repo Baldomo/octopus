@@ -31,11 +31,10 @@ use octopus_shell::ui::{
 };
 use octopus_shell::{Dropped, lock};
 
-/// The label of the window and of its base webview, as `tauri.conf.json` declares them.
-pub(crate) const BASE: &str = "main";
+pub(crate) const BASE: &str = octopus_shell::served_files::BASE_WEBVIEW;
 /// How often the window is asked whether it is minimized or hidden; macOS sends no event for either.
 const SHOWN_POLL: std::time::Duration = std::time::Duration::from_millis(250);
-pub(crate) const FLOAT: &str = "float";
+pub(crate) const FLOAT: &str = octopus_shell::served_files::FLOAT_WEBVIEW;
 
 /// The rect in window points.
 fn points(bounds: Bounds, zoom: Zoom) -> Bounds {

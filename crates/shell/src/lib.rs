@@ -4,7 +4,7 @@ pub mod client_menu;
 mod commands;
 pub mod hub;
 pub mod microphone;
-pub mod pages;
+pub mod served_files;
 pub mod task_lists;
 mod task_view;
 mod terminal;
@@ -56,15 +56,15 @@ macro_rules! plugin_commands {
 
 include!("../plugin_commands.rs");
 
-/// The core's commands, the terminals they attach and the file pages it serves, timing launch from the call.
+/// The core's commands, the terminals they attach and the files it serves, timing launch from the call.
 pub fn plugin() -> TauriPlugin<Wry> {
     let launched = Instant::now();
-    pages::protocol(commands())
+    served_files::protocol(commands())
         .setup(move |app, _| {
             app.manage(Launched(launched));
             app.manage(Terminals::default());
             app.manage(Dropped::default());
-            app.manage(Arc::new(pages::Pages::default()));
+            app.manage(Arc::new(served_files::ServedFiles::default()));
             Ok(())
         })
         .build()

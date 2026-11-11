@@ -12,6 +12,8 @@ type Blocks = [file: string, ids: string[]];
 export function design(...sources: Blocks[]): Plugin {
   return {
     name: "octopus-design",
+    // light-dark() stays as written, so a token resolves against whichever scheme the element asking for it carries.
+    config: () => ({ build: { cssTarget: ["safari17.5", "chrome123"] } }),
     resolveId: (id) => (id === MODULE ? RESOLVED : undefined),
     load(id) {
       if (id !== RESOLVED) return;

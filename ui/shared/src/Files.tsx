@@ -5,11 +5,12 @@ import { FolderTabs } from "./FolderTabs";
 import type { LiftOnDrag } from "./lift";
 import { MenuHost } from "./Menu";
 import { Toast } from "./Toast";
-import { filesOf, loadMonaco, nameOf, renderable, tabHints, type TaskFiles } from "./taskFiles";
+import { filesOf, loadMonaco, nameOf, tabHints, type MediaView, type TaskFiles } from "./taskFiles";
 import { act, openView } from "./state";
 
 type Editor = import("monaco-editor").editor.IStandaloneCodeEditor;
 type Shown = { files: TaskFiles; path: string } | undefined;
+type ShownMedia = { files: TaskFiles; path: string; view: MediaView } | undefined;
 
 function EditorTabs(props: { files: TaskFiles; visible: boolean; drag: LiftOnDrag }) {
   const tabs = createMemo(() => {
@@ -39,6 +40,7 @@ function EditorTabs(props: { files: TaskFiles; visible: boolean; drag: LiftOnDra
 
 /** The renderers load on the first rendered view, off the launch path. */
 const Rendered = lazy(() => import("./Rendered").then(({ Rendered }) => ({ default: Rendered })));
+const Media = lazy(() => import("./Media").then(({ Media }) => ({ default: Media })));
 
 const EYE = (
   <svg viewBox="0 0 24 24">
@@ -81,7 +83,7 @@ function FileHead(props: { files: TaskFiles; path: string }) {
           </For>
         </span>
       </span>
-      <Show when={renderable(props.path)}>
+      <Show when={props.files.switchable(props.path)}>
         <button
           class="modes"
           classList={{ code: !rendered() }}
@@ -111,12 +113,24 @@ export function Files(props: { visible: boolean; drag: LiftOnDrag; outside?: Out
     () => {
       const taskFiles = files();
       const path = taskFiles?.state.active ?? null;
-      return taskFiles !== undefined && path !== null && taskFiles.state.loaded[path]
+      return taskFiles !== undefined && path !== null && taskFiles.state.views[path]?.as === "text"
         ? { files: taskFiles, path }
         : undefined;
     },
     undefined,
     { equals: (a, b) => a?.files === b?.files && a?.path === b?.path },
+  );
+  const media = createMemo<ShownMedia>(
+    () => {
+      const taskFiles = files();
+      const path = taskFiles?.state.active ?? null;
+      const view = path === null ? undefined : taskFiles?.media(path);
+      return taskFiles !== undefined && path !== null && view !== undefined
+        ? { files: taskFiles, path, view }
+        : undefined;
+    },
+    undefined,
+    { equals: (a, b) => a?.files === b?.files && a?.path === b?.path && a?.view === b?.view },
   );
 
   const rendered = () => {
@@ -175,6 +189,9 @@ export function Files(props: { visible: boolean; drag: LiftOnDrag; outside?: Out
           <div class="editor-host" ref={host} />
           <Show when={rendered()} keyed>
             {(shown) => <Rendered files={shown.files} path={shown.path} handBack={() => editor?.focus()} />}
+          </Show>
+          <Show when={media()} keyed>
+            {(shown) => <Media files={shown.files} path={shown.path} view={shown.view} />}
           </Show>
           <Show when={files()?.state.active}>
             {(path) => (

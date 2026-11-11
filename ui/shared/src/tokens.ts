@@ -21,14 +21,30 @@ export const token = (name: string) => getComputedStyle(document.documentElement
 export const colors = (scheme: Scheme) => (name: string) => resolve(name, scheme);
 
 function resolve(name: string, scheme: Scheme): string {
+  if (token(name) === "") throw new Error(`no token ${name}`);
   const probe = document.createElement("div");
   probe.style.display = "none";
   probe.style.colorScheme = scheme;
-  probe.style.color = `var(${name})`;
+  probe.style.color = `color-mix(in srgb, var(${name}) 100%, transparent)`;
   document.body.append(probe);
   const value = getComputedStyle(probe).color;
   probe.remove();
   return hex(value);
+}
+
+/** A `color(srgb r g b / a)` as `#rrggbb` or `#rrggbbaa`, the spelling Monaco and xterm accept. */
+function hex(srgb: string): string {
+  const channels = srgb.match(/^color\(srgb (\S+) (\S+) ([^\s)]+)(?: \/ ([^\s)]+))?\)$/);
+  if (channels === null) throw new Error(`unparsed color ${srgb}`);
+  const byte = (unit: string) =>
+    Math.round(Math.min(Math.max(Number(unit), 0), 1) * 255)
+      .toString(16)
+      .padStart(2, "0");
+  return `#${channels
+    .slice(1)
+    .filter((unit) => unit !== undefined)
+    .map(byte)
+    .join("")}`;
 }
 
 export function styleOf(classes: string[], property: "lineHeight" | "paddingTop"): string {
@@ -45,20 +61,6 @@ export function styleOf(classes: string[], property: "lineHeight" | "paddingTop"
   const value = getComputedStyle(leaf)[property];
   root.remove();
   return value;
-}
-
-/** Any CSS color as `#rrggbb` or `#rrggbbaa`, the spelling Monaco and xterm accept. */
-function hex(color: string): string {
-  const canvas = document.createElement("canvas").getContext("2d");
-  if (canvas === null) throw new Error("no 2d canvas to resolve colors");
-  canvas.fillStyle = color;
-  const resolved = canvas.fillStyle;
-  if (resolved.startsWith("#")) return resolved;
-  const channels = resolved.match(/[\d.]+/g)?.map(Number) ?? [];
-  const [r, g, b, a] = channels;
-  if (r === undefined || g === undefined || b === undefined) throw new Error(`unparsed color ${color}: ${resolved}`);
-  const byte = (value: number) => Math.round(value).toString(16).padStart(2, "0");
-  return `#${byte(r)}${byte(g)}${byte(b)}${a === undefined ? "" : byte(a * 255)}`;
 }
 
 export const px = (name: string) => Number.parseFloat(token(name));

@@ -28,9 +28,6 @@ import type {
 
 const octopus = (command: (typeof COMMANDS)[number]) => `plugin:octopus|${command}`;
 
-const UTF8 = new TextDecoder("utf-8", { fatal: true });
-const fileBytes = (at: TaskRef, path: string) => invoke<ArrayBuffer>(octopus("file_read"), { at, path });
-
 export const backend = {
   boot: () => invoke<Boot>(octopus("boot")),
   ready: () => invoke<void>(octopus("ready")),
@@ -90,15 +87,8 @@ export const backend = {
   termResize: (at: TaskRef, panel: PtyId, cols: number, rows: number) =>
     invoke<void>(octopus("term_resize"), { at, panel, cols, rows }),
   fileList: (at: TaskRef, path: string) => invoke<Entry[]>(octopus("file_list"), { at, path }),
-  fileBytes,
-  fileText: (at: TaskRef, path: string) =>
-    fileBytes(at, path).then((bytes) => {
-      try {
-        return UTF8.decode(bytes);
-      } catch {
-        throw new Error(`${path} is not UTF-8 text`);
-      }
-    }),
+  /** The URL each file of the checkout loads under, at its path with each part percent-encoded. */
+  fileRootUrl: (at: TaskRef) => invoke<string>(octopus("file_root_url"), { at }),
   fileWrite: (at: TaskRef, path: string, content: string) => invoke<void>(octopus("file_write"), { at, path, content }),
   fileCreate: (at: TaskRef, path: string, kind: EntryKind) => invoke<void>(octopus("file_create"), { at, path, kind }),
   fileMove: (at: TaskRef, from: string, to: string) => invoke<void>(octopus("file_move"), { at, from, to }),

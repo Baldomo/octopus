@@ -1,9 +1,10 @@
-import { createEffect, createMemo, For, on, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, For, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { keepInView } from "@octopus/shared/keepInView.ts";
+import { Media } from "@octopus/shared/Media.tsx";
 import { Rendered } from "@octopus/shared/Rendered.tsx";
 import { act, scale, model, ui } from "@octopus/shared/state.ts";
-import { filesOf, join, loadMonaco, nameOf, renderable, tabHints, type TaskFiles } from "@octopus/shared/taskFiles.ts";
-import { colors, scheme, token } from "@octopus/shared/tokens.ts";
+import { filesOf, join, loadMonaco, nameOf, tabHints, type TaskFiles } from "@octopus/shared/taskFiles.ts";
+import { token } from "@octopus/shared/tokens.ts";
 import { animateList } from "@octopus/shared/flip.ts";
 import { slidingThumb } from "./thumb";
 import { Icon } from "./Icon";
@@ -98,40 +99,6 @@ export function Files(props: { taskKey: string }) {
   );
 }
 
-/** Defines the editor's themes on the screen's one surface, in the design's code colors. */
-async function phoneThemes() {
-  const { monaco } = await loadMonaco();
-  for (const each of ["light", "dark"] as const) {
-    const color = colors(each);
-    monaco.editor.defineTheme(`octopus-${each}`, {
-      base: each === "dark" ? "vs-dark" : "vs",
-      inherit: true,
-      rules: [
-        { token: "keyword", foreground: color("--violet").slice(1, 7) },
-        { token: "type", foreground: color("--info").slice(1, 7) },
-        { token: "type.identifier", foreground: color("--info").slice(1, 7) },
-        { token: "string", foreground: color("--working").slice(1, 7) },
-        { token: "comment", foreground: color("--faint").slice(1, 7) },
-      ],
-      colors: {
-        "editor.background": color("--bg"),
-        "editor.foreground": color("--term-text"),
-        "editorLineNumber.foreground": color("--faint"),
-        "editorLineNumber.activeForeground": color("--dim"),
-        "editorCursor.foreground": color("--text"),
-        "editor.selectionBackground": color("--line"),
-        "editor.lineHighlightBackground": color("--bg"),
-        "scrollbarSlider.background": "#00000000",
-        ...Object.fromEntries(
-          [1, 2, 3, 4, 5, 6].map((nth) => [`editorBracketHighlight.foreground${nth}`, color("--term-text")]),
-        ),
-      },
-    });
-  }
-  monaco.editor.setTheme(`octopus-${scheme()}`);
-  return monaco;
-}
-
 const sized = () => ({
   fontSize: FONT_PX * scale(ui.prefs),
   lineHeight: ROW_PX * scale(ui.prefs),
@@ -144,13 +111,12 @@ function Code(props: { files: TaskFiles; path: string }) {
   let editor: Editor | undefined;
   let gone = false;
   onPainted(() =>
-    phoneThemes().then((monaco) => {
+    loadMonaco().then(({ monaco }) => {
       if (gone) return;
       editor = monaco.editor.create(host, {
         ...sized(),
-        theme: `octopus-${scheme()}`,
         model: null,
-        fontFamily: token("--term"),
+        fontFamily: token("--mono-terminal"),
         lineNumbersMinChars: 6,
         glyphMargin: false,
         folding: false,
@@ -171,7 +137,7 @@ function Code(props: { files: TaskFiles; path: string }) {
   );
   createEffect(
     on(
-      () => props.files.state.loaded[props.path],
+      () => props.files.state.views[props.path],
       () => editor?.setModel(props.files.buffer(props.path)?.model ?? null),
     ),
   );
@@ -211,7 +177,7 @@ export function EditorScreen(props: { taskKey: string }) {
                     </span>
                     <b class="name">{nameOf(shown)}</b>
                   </div>
-                  <Show when={renderable(shown)}>
+                  <Show when={files.switchable(shown)}>
                     <div class="capsule">
                       <Circle
                         icon="eye"
@@ -253,14 +219,20 @@ export function EditorScreen(props: { taskKey: string }) {
                   </For>
                 </div>
                 <Show when={files.state.unreadable[shown]}>{(problem) => <div class="empty">{problem()}</div>}</Show>
-                <Show
-                  when={files.state.rendered[shown] && files.state.loaded[shown]}
-                  fallback={<Code files={files} path={shown} />}
-                >
-                  <div class="fill rendered-host">
-                    <Rendered files={files} path={shown} handBack={() => {}} />
-                  </div>
-                </Show>
+                <Switch fallback={<Code files={files} path={shown} />}>
+                  <Match when={files.media(shown)} keyed>
+                    {(view) => (
+                      <div class="fill rendered-host">
+                        <Media files={files} path={shown} view={view} />
+                      </div>
+                    )}
+                  </Match>
+                  <Match when={files.state.rendered[shown] && files.state.views[shown]?.as === "text"}>
+                    <div class="fill rendered-host">
+                      <Rendered files={files} path={shown} handBack={() => {}} />
+                    </div>
+                  </Match>
+                </Switch>
               </>
             )}
           </Show>

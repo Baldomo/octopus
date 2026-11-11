@@ -22,5 +22,8 @@ tauri = { workspace = true, features = ["devtools", "unstable"] }
 tokio = { workspace = true, features = ["full"] }
 ts-rs.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "2.0.2"
+
 [build-dependencies]
 tauri-plugin = { version = "2.7.2", features = ["build"] }

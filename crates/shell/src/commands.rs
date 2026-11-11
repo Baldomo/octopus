@@ -14,17 +14,15 @@ use octopus_proto::ops::{
 };
 use octopus_proto::pairing::Invite;
 use octopus_proto::settings::Setting;
-use octopus_proto::types::{
-    CheckoutKind, Color, PtyId, ReadDir, SessionStart, Stream, Swatch, TaskId, TaskState, WorkspaceId,
-};
+use octopus_proto::types::{CheckoutKind, Color, PtyId, SessionStart, Swatch, TaskId, TaskState, WorkspaceId};
 use serde::{Deserialize, Serialize};
-use tauri::ipc::{Channel, InvokeResponseBody, Response};
+use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Runtime, State};
-use tokio::io::AsyncReadExt;
 use ts_rs::TS;
 
 use crate::hub::{AccountView, Hub, Model, ServerView};
 use crate::lock;
+use crate::served_files::ServedFiles;
 use crate::task_lists::{TaskRef, auto_swatch, awaits_resume};
 use crate::terminal::Terminals;
 use crate::ui::{Ui, UiAct, UiStore};
@@ -321,13 +319,8 @@ pub async fn file_list(hub: Hubbed<'_>, at: TaskRef, path: String) -> Result<Vec
 }
 
 #[tauri::command]
-pub async fn file_read(hub: Hubbed<'_>, at: TaskRef, path: String) -> Result<Response, String> {
-    let connection = hub.connection(&at.server)?;
-    let read = connection.read(ReadDir::Checkout(at.task), path.clone(), 0, Stream::TO_END).await;
-    let (_, mut opened) = read.map_err(|error| hub.failure(&at.server, error))?;
-    let mut bytes = Vec::new();
-    opened.read_to_end(&mut bytes).await.map_err(|error| format!("read {path}: {error}"))?;
-    Ok(Response::new(bytes))
+pub fn file_root_url(served: State<'_, Arc<ServedFiles>>, at: TaskRef) -> String {
+    served.checkout(at)
 }
 
 #[tauri::command]

@@ -37,7 +37,7 @@ plugin_commands![
     term_take_lock,
     term_resize,
     file_list,
-    file_read,
+    file_root_url,
     file_write,
     file_create,
     file_move,

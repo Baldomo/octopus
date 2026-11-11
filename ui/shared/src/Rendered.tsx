@@ -1,21 +1,9 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { createEffect, createSignal, Match, onCleanup, onMount, Switch } from "solid-js";
-import { backend } from "./backend";
 import { report } from "./state";
-import { extensionOf, renderingOf, type TaskFiles } from "./taskFiles";
-
-const MIME: Record<string, string> = {
-  css: "text/css",
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  avif: "image/avif",
-  svg: "image/svg+xml",
-  ico: "image/x-icon",
-};
+import { fetched, renderingOf } from "./opening";
+import type { TaskFiles } from "./taskFiles";
 
 function checkoutPath(from: string, reference: string) {
   if (reference === "" || /^([a-z][a-z\d+.-]*:|\/\/|#)/i.test(reference)) return null;
@@ -32,56 +20,33 @@ function checkoutPath(from: string, reference: string) {
   return parts.join("/");
 }
 
-/** A missing file renders empty and is reported once. */
+/** A missing stylesheet renders empty and is reported once. */
 class Assets {
   private readonly texts = new Map<string, Promise<string>>();
-  private readonly dataUrls = new Map<string, Promise<string>>();
 
   constructor(private readonly files: TaskFiles) {}
 
-  private once(cache: Map<string, Promise<string>>, path: string, read: (blob: Blob) => Promise<string>) {
-    let found = cache.get(path);
+  text(path: string) {
+    let found = this.texts.get(path);
     if (found === undefined) {
-      const type = MIME[extensionOf(path)] ?? "application/octet-stream";
-      found = backend
-        .fileBytes(this.files.at, path)
-        .then((bytes) => read(new Blob([bytes], { type })))
-        .catch((error) => {
+      found = fetched(this.files.urlOf(path))
+        .then(({ bytes }) => new TextDecoder().decode(bytes))
+        .catch((error: unknown) => {
           report(`${path}: ${error}`);
           return "";
         });
-      cache.set(path, found);
+      this.texts.set(path, found);
     }
     return found;
   }
 
-  text(path: string) {
-    return this.once(this.texts, path, (blob) => blob.text());
-  }
-
-  dataUrl(path: string) {
-    return this.once(
-      this.dataUrls,
-      path,
-      (blob) =>
-        new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result));
-          reader.onerror = () => reject(reader.error);
-          reader.readAsDataURL(blob);
-        }),
-    );
-  }
-
-  inlineImages(root: ParentNode, from: string) {
-    return Promise.all(
-      IMAGES.flatMap(([selector, attribute]) =>
-        [...root.querySelectorAll(selector)].map(async (element) => {
-          const path = checkoutPath(from, element.getAttribute(attribute) ?? "");
-          if (path !== null) element.setAttribute(attribute, await this.dataUrl(path));
-        }),
-      ),
-    );
+  /** Points each image the file references by a relative path at its file in the checkout. */
+  linkImages(root: ParentNode, from: string) {
+    for (const [selector, attribute] of IMAGES)
+      for (const element of root.querySelectorAll(selector)) {
+        const path = checkoutPath(from, element.getAttribute(attribute) ?? "");
+        if (path !== null) element.setAttribute(attribute, this.files.urlOf(path));
+      }
   }
 }
 
@@ -98,7 +63,7 @@ async function markdown(text: string, from: string, assets: Assets) {
     FORBID_TAGS: ["style", "form"],
     FORBID_ATTR: ["style"],
   });
-  await assets.inlineImages(body, from);
+  assets.linkImages(body, from);
   return body.innerHTML;
 }
 
@@ -107,16 +72,16 @@ async function page(text: string, from: string, assets: Assets) {
   const inertLinks = parsed.createElement("base");
   inertLinks.target = "_blank";
   parsed.head.prepend(inertLinks);
-  await Promise.all([
-    ...[...parsed.querySelectorAll<HTMLLinkElement>("link[rel~=stylesheet][href]")].map(async (link) => {
+  assets.linkImages(parsed, from);
+  await Promise.all(
+    [...parsed.querySelectorAll<HTMLLinkElement>("link[rel~=stylesheet][href]")].map(async (link) => {
       const path = checkoutPath(from, link.getAttribute("href") ?? "");
       if (path === null) return;
       const style = parsed.createElement("style");
       style.textContent = await assets.text(path);
       link.replaceWith(style);
     }),
-    assets.inlineImages(parsed, from),
-  ]);
+  );
   return `<!doctype html>${parsed.documentElement.outerHTML}`;
 }
 

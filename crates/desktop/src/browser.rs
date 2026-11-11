@@ -1,7 +1,7 @@
 //! Each browser panel of a task renders as a native webview in the window's page layer. The webview loads the panel's
 //! `url` each time its `load` moves, and reports every page it navigates to back to the server. A page on a loopback
 //! host of a server on another machine reaches that port on the server's machine through a tunnel, and a file page
-//! loads through `octopus_shell::pages`. A link the user opens in a new tab, and a page's new window, go to the UI,
+//! loads through `octopus_shell::served_files`. A link the user opens in a new tab, and a page's new window, go to the UI,
 //! which opens them as browser panels in the task's order of tabs.
 
 use std::collections::hash_map::Entry;
@@ -13,7 +13,7 @@ use octopus_client::tunnel::Tunnel;
 use octopus_proto::ops::BrowserReport;
 use octopus_proto::types::{BrowserId, web_page};
 use octopus_shell::hub::Hub;
-use octopus_shell::pages::Pages;
+use octopus_shell::served_files::ServedFiles;
 use octopus_shell::task_lists::TaskRef;
 use octopus_shell::ui::{Bounds, UiStore};
 use octopus_shell::{emit, lock};
@@ -193,7 +193,7 @@ impl Browsers {
         }
         let page = web_page(url)?;
         self.hold_tunnel(&at.server, &key, &page).await?;
-        let loaded = self.app.state::<Arc<Pages>>().loaded_from(&at.server, &page)?;
+        let loaded = self.app.state::<Arc<ServedFiles>>().loaded_from(&at.server, &page)?;
         let mut rendered = lock(&self.rendered);
         let rendered = match rendered.entry(key) {
             Entry::Occupied(existing) => existing.into_mut(),
@@ -364,7 +364,7 @@ fn report(app: &AppHandle, at: &TaskRef, panel: &BrowserId, page: &Mutex<Page>) 
 
 /// The page a webview shows at `loaded`, as the server records it.
 fn page_of(app: &AppHandle, loaded: &Url) -> Url {
-    app.state::<Arc<Pages>>().page_of(loaded)
+    app.state::<Arc<ServedFiles>>().page_of(loaded)
 }
 
 fn open_tab(app: &AppHandle, at: &TaskRef, panel: &BrowserId, url: &Url, select: bool) {

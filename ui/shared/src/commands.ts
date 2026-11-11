@@ -10,7 +10,7 @@ import {
   toggleSidebar,
   zoom,
 } from "./state";
-import { filesOf, renderable } from "./taskFiles";
+import { filesOf } from "./taskFiles";
 
 export const mac = navigator.userAgent.includes("Mac");
 
@@ -25,8 +25,9 @@ const openFiles = () => {
   return open === undefined ? undefined : filesOf(open);
 };
 const selectedRenders = () => {
-  const active = openFiles()?.state.active;
-  return active !== null && active !== undefined && renderable(active);
+  const files = openFiles();
+  const active = files?.state.active ?? null;
+  return files !== undefined && active !== null && files.switchable(active);
 };
 
 type BrowserKeys = {

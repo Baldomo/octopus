@@ -526,6 +526,48 @@ body {
   border: 0;
 }
 
+.rendered-host .rendered {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.rendered-image {
+  flex: 1;
+  position: relative;
+}
+
+.rendered-image :is(img, video) {
+  position: absolute;
+  inset: var(--g2);
+  margin: auto;
+  max-width: calc(100% - 2 * var(--g2));
+  max-height: calc(100% - 2 * var(--g2));
+}
+
+.rendered-audio {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: var(--g2);
+}
+
+.rendered-audio audio {
+  width: 100%;
+}
+
+.rendered-pdf {
+  display: flex;
+  flex-direction: column;
+  gap: var(--g1);
+  padding: var(--g2);
+}
+
+.rendered-pdf canvas {
+  width: 100%;
+  background: #fff;
+}
+
 .rendered-doc {
   padding: var(--g2) var(--rail);
   font: var(--t-sub);
