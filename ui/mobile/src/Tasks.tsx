@@ -7,6 +7,7 @@ import { swatchColor } from "@octopus/shared/tokens.ts";
 import { Icon } from "./Icon";
 import { animateList } from "@octopus/shared/flip.ts";
 import {
+  dropHeader,
   dropTarget,
   isAway,
   isLanding,
@@ -98,6 +99,7 @@ function SectionRows(props: { section: Section }) {
   const closed = () => isCollapsed(props.section.name) || isSectionFolded(props.section.name);
   const groups = () => props.section.groups.filter((group) => group.rows.length > 0 || liftsIn(props.section.name));
   const empty = () => !closed() && groups().length === 0;
+  const header = dropHeader(props.section.name);
   return (
     <div
       class="sec"
@@ -107,8 +109,9 @@ function SectionRows(props: { section: Section }) {
     >
       <div
         class="sech"
-        classList={{ lifting: isSectionLifted(props.section.name) }}
+        classList={{ lifting: isSectionLifted(props.section.name), over: header.over() }}
         data-key={`section/${props.section.name}`}
+        {...header.attributes}
         {...pressed(
           () => {},
           () => openSheet({ is: "section", name: props.section.name }),

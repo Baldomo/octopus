@@ -1,5 +1,5 @@
 import { getOwner, onCleanup, onMount, runWithOwner } from "solid-js";
-import { curve, SNAPPY, standing, type Spring } from "@octopus/shared/motion.ts";
+import { curve, FADE_MS, play, reduced, SNAPPY, standing, type Spring, type Toward } from "@octopus/shared/motion.ts";
 
 /** An exit takes this share of its entry's time. */
 const EXIT = 0.8;
@@ -103,6 +103,66 @@ export function onPainted(work: () => void) {
     clearTimeout(timer);
   });
 }
+
+/** How far the page a move goes deeper from slides the other way, as the screen under a push does. */
+const PARALLAX = "-30%";
+
+/** The turn each page is in, which a turn of the same page stops where it stands. */
+const turning = new WeakMap<HTMLElement, () => void>();
+
+/**
+ * Turns `page` to its new contents as a push and a pop turn a screen, `left` holding what it showed before: `left`
+ * lies where it or `page` stood mid-turn, raised by the `scrolled` it was scrolled, and leaves once out of sight.
+ * Going deeper the page slides in from the right over `left`, which shifts a third of the way left; going back `left`
+ * slides off to the right, uncovering it; going across, or under reduced motion, `left` fades out over it. Both pages
+ * are opaque, so each covers the other as screens do.
+ */
+export function turnPage(page: HTMLElement, left: HTMLElement, toward: Toward, scrolled: number) {
+  const stood = getComputedStyle(turning.has(left) ? left : page).translate;
+  turning.get(page)?.();
+  turning.get(left)?.();
+  const fade = toward === "across" || reduced();
+  left.classList.add("gone");
+  left.style.top = `${page.offsetTop - scrolled}px`;
+  if (toward === "deeper" && !fade) page.before(left);
+  else page.after(left);
+  page.scrollTop = 0;
+  const from = stood === "none" ? "0 0" : stood;
+  const timing = fade ? { duration: FADE_MS, easing: "ease-out" } : curve(PUSH);
+  const [enters, leaves] = toward === "deeper" ? ["100%", PARALLAX] : [PARALLAX, "100%"];
+  const entering = fade ? null : page.animate([{ translate: `${enters} 0` }, { translate: "0 0" }], timing);
+  const leaving = left.animate(
+    fade
+      ? [
+          { translate: from, opacity: 1 },
+          { translate: from, opacity: 0 },
+        ]
+      : [{ translate: from }, { translate: `${leaves} 0` }],
+    { ...timing, fill: "forwards" },
+  );
+  const stop = () => {
+    entering?.cancel();
+    leaving.cancel();
+    left.remove();
+    if (turning.get(page) === stop) turning.delete(page);
+  };
+  leaving.finished.then(stop, () => {});
+  turning.set(page, stop);
+}
+
+/** Opens `element` to its full height from nothing, so what is under it makes room on a spring rather than at once. */
+export const unfold = (element: HTMLElement) =>
+  queueMicrotask(() => {
+    const height = `${element.offsetHeight}px`;
+    play(
+      element,
+      [
+        { height: "0px", minHeight: "0px", opacity: 0 },
+        { height, minHeight: height, opacity: 1 },
+      ],
+      SNAPPY,
+    );
+  });
 
 /** Hands the springs to the stylesheet's transitions as `--snappy` and `--snappy-ms`. */
 export function followMotion() {

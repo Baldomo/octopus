@@ -15,8 +15,11 @@ const readInsets = () =>
     }
   }, report);
 
-/** What sits at the foot of the screen: a task's foot, the unreachable row and the dock, and a sheet. */
-const FEET = ".app.shown .foot, .sheet";
+/**
+ * What sits at the foot of the screen: a task's foot, the unreachable row and the dock, and a sheet short enough to
+ * stand on it. A full sheet hangs from under the top inset, so its top stays and its contents end above the keyboard.
+ */
+const FEET = ".app.shown .foot, .sheet:not(.full)";
 
 /** Where an element's bottom sits in the layout, in its own points, wherever a move in flight draws it. */
 function laidOutBottom(element: HTMLElement) {

@@ -20,17 +20,20 @@ import {
 import { setWindowShown, windowShown } from "@octopus/shared/terminalSession.ts";
 import { applyFilesChanged, forgetFilesExcept } from "@octopus/shared/taskFiles.ts";
 import { Board } from "./Board";
+import { steadyCaret } from "./caret";
 import { Browser } from "./Browser";
 import { ClientMenu, ServerMenu } from "./ClientMenu";
 import { EditorScreen, Files } from "./Files";
 import { Sprite } from "./Icon";
 import { loadSymbols } from "./symbols";
-import { setMicDenied, sheetEntry, type Screen, type Sheet, type Toward } from "./nav";
+import { FolderSheet } from "./FolderSheet";
+import type { Toward } from "@octopus/shared/motion.ts";
+import { setMicDenied, sheetEntries, type Screen, type Sheet, type SheetEntry } from "./nav";
 import { NewTask } from "./NewTask";
 import { PairSheet, Scan, scanning, Welcome } from "./Pairing";
 import { phone } from "./phone";
 import { Search } from "./Search";
-import { SheetPresence } from "./Sheet";
+import { SheetPresence, type Drawn } from "./Sheet";
 import { Stack, sliding } from "./stack";
 import { Task } from "./Task";
 import { Reopen, TaskMenu } from "./TaskMenu";
@@ -94,33 +97,71 @@ function SheetPage(props: { sheet: Sheet }) {
         <AddWorkspace />
       </Match>
       <Match when={shown.is === "newtask" && shown}>{(form) => <NewTask section={form().section} />}</Match>
+      <Match when={shown.is === "folder" && shown}>{(folder) => <FolderSheet picker={folder().picker} />}</Match>
     </Switch>
   );
 }
 
-type ShownSheet = { sheet: Sheet; inPlace: Toward | null; leaving: () => boolean; leave: () => void };
+type ShownSheet = {
+  entry: SheetEntry;
+  replacing: { toward: Toward; drawn: Drawn } | null;
+  over: Drawn | null;
+  drawn: Drawn;
+  leaving: () => boolean;
+  leave: () => void;
+};
 
-/** The sheet up, and each one still on its way down; one shown in place of another replaces it at once. */
+/** The sheets up, the lowest first, and each one still on its way down. */
+const [shown, setShown] = createSignal<ShownSheet[]>([]);
+
+/** What carries the top sheet back, while one is up and staying. */
+const sheetBack = () => shown().findLast((each) => !each.leaving())?.drawn.back ?? null;
+
+/**
+ * Draws the sheets up. A sheet at a depth no sheet held rises, over the one below it; one shown in place of another
+ * replaces it at once; one no longer up lowers.
+ */
 function Sheets() {
-  const [shown, setShown] = createSignal<ShownSheet[]>([]);
-  const entry = (sheet: Sheet, inPlace: Toward | null): ShownSheet => {
+  const make = (entry: SheetEntry, replaced: ShownSheet | undefined, under: ShownSheet | undefined): ShownSheet => {
     const [leaving, setLeaving] = createSignal(false);
-    return { sheet, inPlace, leaving, leave: () => setLeaving(true) };
+    const replacing = replaced && entry.turned ? { toward: entry.turned, drawn: replaced.drawn } : null;
+    return {
+      entry,
+      replacing,
+      over: replacing ? null : (under?.drawn ?? null),
+      drawn: { panel: null, page: null, height: 0, scrolled: 0, back: null },
+      leaving,
+      leave: () => setLeaving(true),
+    };
   };
   createEffect(
-    on(sheetEntry, (now, before) => {
-      const up = shown().find((each) => each.sheet === before?.sheet && !each.leaving());
-      if (now === null) return up?.leave();
-      const inPlace = up === undefined ? null : now.toward;
-      setShown((all) => [...all.filter((each) => each !== up || up.leaving()), entry(now.sheet, inPlace)]);
+    on(sheetEntries, (now, before = []) => {
+      let next = shown();
+      const upAt = (entry: SheetEntry | undefined) => next.find((each) => each.entry === entry && !each.leaving());
+      for (let depth = 0; depth < Math.max(now.length, before.length); depth++) {
+        const [was, is] = [before[depth], now[depth]];
+        if (was === is) continue;
+        const up = upAt(was);
+        if (is === undefined) up?.leave();
+        else next = [...next.filter((each) => each !== up), make(is, up, upAt(now[depth - 1]))];
+      }
+      setShown(next);
     }),
   );
   const gone = (left: ShownSheet) => setShown((all) => all.filter((each) => each !== left));
   return (
     <For each={shown()}>
       {(each) => (
-        <SheetPresence.Provider value={{ inPlace: each.inPlace, leaving: each.leaving, gone: () => gone(each) }}>
-          <SheetPage sheet={each.sheet} />
+        <SheetPresence.Provider
+          value={{
+            replacing: each.replacing,
+            over: each.over,
+            drawn: each.drawn,
+            leaving: each.leaving,
+            gone: () => gone(each),
+          }}
+        >
+          <SheetPage sheet={each.entry.sheet} />
         </SheetPresence.Provider>
       )}
     </For>
@@ -161,7 +202,7 @@ function App() {
   return (
     <>
       <Sprite />
-      <Stack>{(shown) => <Shown screen={shown} />}</Stack>
+      <Stack sheetBack={sheetBack}>{(screen) => <Shown screen={screen} />}</Stack>
       <Sheets />
       <Toast />
     </>
@@ -183,6 +224,7 @@ const followFront = () => {
 };
 
 async function start() {
+  steadyCaret();
   followViewport();
   followFront();
   followNetwork();

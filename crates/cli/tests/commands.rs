@@ -15,7 +15,7 @@ fn a_call_missing_flags_names_all_of_them_at_once() {
         .expect("run octopus");
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        "error: missing required flags: --parent (pass none for a root task), --state, --checkout, --harness, --session (pass fresh for a fresh session)\n"
+        "error: missing required flags: --folder, --mode, --parent (pass none for a root task), --state, --harness, --session (pass fresh for a fresh session)\n"
     );
 }
 
@@ -47,6 +47,6 @@ async fn every_command_sends_an_op_the_server_serves_and_a_call_names_every_miss
         );
     }
     let partial = laptop.call_raw(TaskCreate::NAME, json!({ "workspace": "wsp_1", "title": "x" })).await;
-    let missing = ["parent", "state", "checkout", "harness", "session"].map(String::from).to_vec();
+    let missing = ["folder", "mode", "parent", "state", "harness", "session"].map(String::from).to_vec();
     assert_eq!(partial.expect("call"), Outcome::Err(Error::MissingField { fields: missing }));
 }

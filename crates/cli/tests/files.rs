@@ -6,7 +6,7 @@ use common::{connect, create, focus, refused, server, workspace};
 use octopus_proto::ops::{
     Entry, EntryKind, FileCopy, FileCreate, FileDelete, FileList, FileMove, FileSearch, FileWrite, Match,
 };
-use octopus_proto::types::{CheckoutKind, ReadDir, Stream};
+use octopus_proto::types::{Mode, ReadDir, Stream};
 use octopus_proto::{Error, Event, Outcome};
 use tokio::io::AsyncWriteExt;
 
@@ -17,13 +17,13 @@ async fn a_client_works_on_a_tasks_files_through_its_server() {
     std::fs::create_dir(&checkout).expect("mkdir");
     let laptop = connect(&running.socket, "laptop").await;
     let workspace = workspace(&laptop, &checkout).await;
-    let task = create(&laptop, &workspace, CheckoutKind::Root, "none").await;
+    let task = create(&laptop, &workspace, Mode::InPlace, "none").await;
     let mut pushes = laptop.pushes();
     focus(&laptop, &task).await;
 
     let write = FileWrite { task: task.clone(), path: "src/main.rs".into(), content: "fn main() {}\n".into() };
     assert_eq!(laptop.call(&write).await.expect("file.write").bytes, 13);
-    let read = |path, start, len| common::read(&laptop, ReadDir::Checkout(task.clone()), path, start, len);
+    let read = |path, start, len| common::read(&laptop, ReadDir::Task(task.clone()), path, start, len);
     assert_eq!(read("src/main.rs", 0, Stream::TO_END).await.expect("read"), (13, b"fn main() {}\n".to_vec()));
     assert_eq!(read("src/main.rs", 3, 4).await.expect("a range"), (13, b"main".to_vec()));
     assert_eq!(read("src/main.rs", 13, 4).await.expect("a range at the end"), (13, vec![]));
@@ -59,7 +59,7 @@ async fn a_client_rearranges_a_checkout_without_reaching_past_it() {
     std::os::unix::fs::symlink(dir.path().join("secret"), checkout.join("out")).expect("symlink");
     let laptop = connect(&running.socket, "laptop").await;
     let workspace = workspace(&laptop, &checkout).await;
-    let task = create(&laptop, &workspace, CheckoutKind::Root, "none").await;
+    let task = create(&laptop, &workspace, Mode::InPlace, "none").await;
     let (create, rename, copy) = (
         |path: &str, kind| FileCreate { task: task.clone(), path: path.into(), kind },
         |from: &str, to: &str| FileMove { task: task.clone(), from: from.into(), to: to.into() },

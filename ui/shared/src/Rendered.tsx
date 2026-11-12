@@ -5,7 +5,7 @@ import { report } from "./state";
 import { fetched, renderingOf } from "./opening";
 import type { TaskFiles } from "./taskFiles";
 
-function checkoutPath(from: string, reference: string) {
+function taskPath(from: string, reference: string) {
   if (reference === "" || /^([a-z][a-z\d+.-]*:|\/\/|#)/i.test(reference)) return null;
   const parts = reference.startsWith("/") ? [] : from.split("/").slice(0, -1);
   const [location = ""] = reference.split(/[?#]/);
@@ -40,11 +40,11 @@ class Assets {
     return found;
   }
 
-  /** Points each image the file references by a relative path at its file in the checkout. */
+  /** Points each image the file references by a relative path at its file in the task's directory. */
   linkImages(root: ParentNode, from: string) {
     for (const [selector, attribute] of IMAGES)
       for (const element of root.querySelectorAll(selector)) {
-        const path = checkoutPath(from, element.getAttribute(attribute) ?? "");
+        const path = taskPath(from, element.getAttribute(attribute) ?? "");
         if (path !== null) element.setAttribute(attribute, this.files.urlOf(path));
       }
   }
@@ -75,7 +75,7 @@ async function page(text: string, from: string, assets: Assets) {
   assets.linkImages(parsed, from);
   await Promise.all(
     [...parsed.querySelectorAll<HTMLLinkElement>("link[rel~=stylesheet][href]")].map(async (link) => {
-      const path = checkoutPath(from, link.getAttribute("href") ?? "");
+      const path = taskPath(from, link.getAttribute("href") ?? "");
       if (path === null) return;
       const style = parsed.createElement("style");
       style.textContent = await assets.text(path);

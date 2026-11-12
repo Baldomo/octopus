@@ -341,7 +341,7 @@ impl Connection {
         }
     }
 
-    /// Sends `content` as a new file of a task's checkout, resolving once the server has landed it.
+    /// Sends `content` as a new file of a task's directory, resolving once the server has landed it.
     pub async fn upload(
         &self,
         task: TaskId,

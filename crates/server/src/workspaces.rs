@@ -1,30 +1,18 @@
-//! The workspaces a server serves: adding, renaming, coloring and removing them.
+//! The workspaces a server files tasks in: adding, renaming, coloring and removing them.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use octopus_proto::ops::{
     Revised, WorkspaceAdd, WorkspaceCreated, WorkspaceRemove, WorkspaceRename, WorkspaceSetColor,
 };
 use octopus_proto::{Error, Event};
 
-use crate::{Server, checkouts, lock, nonempty};
-
-/// A workspace root: an absolute path to a directory, as its canonical spelling.
-fn directory(root: &str) -> Result<String, Error> {
-    if !Path::new(root).is_absolute() {
-        return Err(Error::invalid(format!("root {root} is not an absolute path")));
-    }
-    let canonical = std::fs::canonicalize(root).map_err(|error| Error::invalid(format!("root {root}: {error}")))?;
-    if !canonical.is_dir() {
-        return Err(Error::invalid(format!("root {root} is not a directory")));
-    }
-    Ok(canonical.to_string_lossy().into_owned())
-}
+use crate::{Server, folders, lock, nonempty, worktrees};
 
 impl Server {
     pub(crate) fn workspace_add(&self, op: WorkspaceAdd) -> Result<WorkspaceCreated, Error> {
         nonempty("a workspace name", &op.name)?;
-        let root = directory(&op.root)?;
+        let root = folders::directory("root", &op.root)?;
         let mut state = lock(&self.state);
         let (workspace, rev) = state.store.add_workspace(&op.name, &root, op.color)?;
         let id = workspace.id.clone();
@@ -61,17 +49,12 @@ impl Server {
             state.browsers.remove(&task.id);
             state.forget_terminals(&task.id);
         }
-        let root = PathBuf::from(&workspace.root);
-        for task in tasks.iter().filter(|task| task.checkout.branch().is_some()) {
-            let directory = PathBuf::from(&task.directory);
-            if directory.exists() {
-                checkouts::remove(&root, &directory)?;
+        for worktree in tasks.iter().filter_map(|task| task.worktree.as_ref()) {
+            if Path::new(&worktree.path).exists() {
+                worktrees::remove(&worktree.path)?;
             }
         }
-        let (rerooted, rev) = state.store.remove_workspace(&workspace.id)?;
-        for row in &rerooted {
-            self.publish_task(&state, row);
-        }
+        let rev = state.store.remove_workspace(&workspace.id)?;
         self.publish(&state, rev, Event::WorkspaceRemoved { workspace: workspace.id });
         Ok(Revised { rev })
     }

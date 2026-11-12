@@ -17,9 +17,24 @@ import {
 } from "./lift";
 import { curve, play, PROJECT_S, reduced, SNAPPY } from "./motion";
 import { moveTo, placeAmong } from "./sectionOrder";
-import { account, arrange, arranged, model, orderSections, report, sectionView, sections } from "./state";
+import {
+  account,
+  arrange,
+  arranged,
+  model,
+  orderSections,
+  report,
+  sectionView,
+  sections,
+  serverLabel,
+  workspaces,
+} from "./state";
 
-type Aim = { state: TaskState; under: TaskView | null };
+/**
+ * Where a lifted task would land: under a task, or in a section, on a state's group or, with a null state, on the
+ * section's header, keeping its own state.
+ */
+type Aim = { section: string; state: TaskState | null; under: TaskView | null };
 
 /** Rows stay `away` from the first time the task heads to a state until it flies home, so the list shifts once at most. */
 type Hand = {
@@ -69,13 +84,25 @@ export const liftsIn = (section: string) => {
   return held?.section === section && (!held.dropped || held.toward !== null);
 };
 
+const aimedAt = (section: string, state: TaskState | null) => {
+  const held = hand();
+  const toward = held?.dropped ? null : held?.toward;
+  return toward?.section === section && toward.state === state && toward.under === null;
+};
+
 export const dropTarget = (section: string, state: TaskState) => ({
-  over: () => {
-    const held = hand();
-    return held?.section === section && !held.dropped && held.toward?.state === state && held.toward.under === null;
-  },
+  over: () => aimedAt(section, state),
   attributes: { "data-drop-section": section, "data-drop-state": state },
 });
+
+export const dropHeader = (section: string) => ({
+  over: () => aimedAt(section, null),
+  attributes: { "data-drop-header": section },
+});
+
+/** The workspace a task of `server` refiles into when dropped on `section`, which it lacks without one there. */
+const workspaceIn = (section: string, server: string) =>
+  workspaces().find((workspace) => workspace.name === section && workspace.server === server);
 
 const stateOf = (element: Element | null | undefined) =>
   TASK_STATES.find((state) => state === element?.closest<HTMLElement>("[data-state]")?.dataset.state);
@@ -94,9 +121,10 @@ export const lift =
   (element, from, surface) => {
     const { list, free, throws, covered, zoom, feel } = surface;
     endLift();
-    const shown = sectionView(section);
-    const rowsOf = (state: TaskState | undefined) =>
-      (free ? shown?.columns : shown?.groups)?.find((each) => each.state === state)?.rows ?? [];
+    const rowsOf = (state: TaskState | undefined, of = section) => {
+      const shown = sectionView(of);
+      return (free ? shown?.columns : shown?.groups)?.find((each) => each.state === state)?.rows ?? [];
+    };
     const own = rowsOf(stateOf(element));
     const after = own.slice(own.findIndex((each) => each.key === row.key) + 1);
     const outside = after.findIndex((each) => each.depth <= row.depth);
@@ -114,7 +142,7 @@ export const lift =
         const box = each.getBoundingClientRect();
         return x >= box.left && x < box.right && y >= box.top && y < box.bottom;
       });
-    const nested = row.depth > 0;
+    const parented = parent !== null;
 
     const { ghost, origin, motion, fly, follow } = raise(element, surface);
     setHand({ key: row.key, section, carried: keys, toward: null, away: false, dropped: false });
@@ -141,8 +169,9 @@ export const lift =
         under.section === section &&
         under.at.server === row.at.server &&
         under.task.id !== parent;
-      return fits ? { aim: { state, under }, element: target } : null;
+      return fits ? { aim: { section, state, under }, element: target } : null;
     };
+    const elsewhere = (other: string) => other !== section && !free && workspaceIn(other, row.at.server) !== undefined;
     const targetAt = (at: Point) => {
       if (covered(at) || onOwnPlace(at)) return null;
       const hit = document.elementFromPoint(at.x, at.y);
@@ -150,11 +179,17 @@ export const lift =
       const under = model.tasks[nest?.dataset.key ?? ""];
       const nesting = nest && under ? nestAt(at, nest, under) : undefined;
       if (nesting !== undefined) return nesting;
+      const header = hit?.closest<HTMLElement>("[data-drop-header]");
+      const headed = header?.dataset.dropHeader;
+      if (header && headed !== undefined && elsewhere(headed)) {
+        return { aim: { section: headed, state: null, under: null }, element: header };
+      }
       const target = hit?.closest<HTMLElement>("[data-drop-state]");
-      if (!target || target.dataset.dropSection !== section) return null;
+      const into = target?.dataset.dropSection;
+      if (!target || into === undefined || (into !== section && !elsewhere(into))) return null;
       const state = TASK_STATES.find((candidate) => candidate === target.dataset.dropState);
-      if (state === undefined || (state === row.state && !nested)) return null;
-      return { aim: { state, under: null }, element: target };
+      if (state === undefined || (into === section && state === row.state && !parented)) return null;
+      return { aim: { section: into, state, under: null }, element: target };
     };
 
     let gap: { element: HTMLElement; side: "marginTop" | "paddingBottom" } | null = null;
@@ -170,16 +205,14 @@ export const lift =
         top: rest(under, zoom).top + under.offsetHeight * zoom,
       });
     };
-    const openGap = (state: TaskState) => {
-      const group = list.querySelector<HTMLElement>(
-        `[data-state="${state}"][data-drop-section="${CSS.escape(section)}"]`,
-      );
+    const openGap = (into: string, state: TaskState) => {
+      const group = list.querySelector<HTMLElement>(`[data-state="${state}"][data-drop-section="${CSS.escape(into)}"]`);
       if (group === null) return;
       const hint = group.querySelector(".drophint");
       if (hint)
         return void (slot = () => ({ left: free ? rest(hint, zoom).left : origin.left, top: rest(hint, zoom).top }));
       const rowElement = (key: string) => group.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`);
-      const rows = rowsOf(state).filter((each) => each.depth === 0);
+      const rows = rowsOf(state, into).filter((each) => each.depth === 0);
       const first = rows[0] && rowElement(rows[0].key);
       const next = rows.find((each) => sortsBefore(row, each));
       const nextElement = next && rowElement(next.key);
@@ -201,15 +234,20 @@ export const lift =
       const was = hand();
       if (was === null) return;
       const toward = target?.aim ?? null;
-      const turned = toward?.state !== was.toward?.state || toward?.under?.key !== was.toward?.under?.key;
+      const turned =
+        toward?.section !== was.toward?.section ||
+        toward?.state !== was.toward?.state ||
+        toward?.under?.key !== was.toward?.under?.key;
       if (!turned && dropped === was.dropped) return;
       if (turned) closeGap();
       setHand({ ...was, toward, dropped, away: was.away || toward?.under === null });
-      const thins = target !== null && (!list.contains(target.element) || (target.aim.under !== null && !dropped));
+      const thins =
+        target !== null &&
+        (!list.contains(target.element) || target.aim.state === null || (target.aim.under !== null && !dropped));
       ghost.classList.toggle("aiming", thins);
       if (target !== null && turned) {
-        if (target.aim.under === null) openGap(target.aim.state);
-        else below(target.element);
+        if (target.aim.under !== null) below(target.element);
+        else if (target.aim.state !== null) openGap(target.aim.section, target.aim.state);
       }
       followChange(list);
       if (toward !== null && turned && !dropped) feel("select");
@@ -235,9 +273,15 @@ export const lift =
       void fly(ownPlace()).then((arrived) => arrived && finish());
     };
     const placed = (toward: Aim) => {
-      const under = toward.under === null ? (nested ? null : parent) : toward.under.task.id;
-      return (arrival: HTMLElement) =>
-        stateOf(arrival) === toward.state && (model.tasks[row.key]?.task.parent ?? null) === under;
+      const under = toward.under?.task.id ?? null;
+      return (arrival: HTMLElement) => {
+        const now = model.tasks[row.key];
+        return (
+          stateOf(arrival) === (toward.state ?? row.state) &&
+          now?.section === toward.section &&
+          (now.task.parent ?? null) === under
+        );
+      };
     };
     const land = (toward: Aim) => {
       setLanding(keys);
@@ -296,8 +340,11 @@ export const lift =
     };
     const send = async (toward: Aim) => {
       if (toward.under !== null) return backend.taskSetParent(row.at, toward.under.at);
-      if (nested) await backend.taskSetParent(row.at, null);
-      if (toward.state !== row.state) await backend.taskMove(row.at, toward.state);
+      const refiled = toward.section === section ? null : workspaceIn(toward.section, row.at.server);
+      if (refiled === undefined) throw `${serverLabel(row.at.server)} holds no ${toward.section} workspace`;
+      if (parented) await backend.taskSetParent(row.at, null);
+      if (refiled !== null) await backend.taskSetWorkspace(row.at, refiled.workspace);
+      if (toward.state !== null && toward.state !== row.state) await backend.taskMove(row.at, toward.state);
     };
 
     const projected = () => {
@@ -320,7 +367,8 @@ export const lift =
         if (target === null) return home();
         aim(target, true);
         feel("drop");
-        const refused = list.contains(target.element) ? land(target.aim) : into(target.element, target.aim);
+        const lands = target.aim.state !== null && list.contains(target.element);
+        const refused = lands ? land(target.aim) : into(target.element, target.aim);
         let failed = false;
         const fail = () => {
           if (failed || !underWay(takeOver)) return;

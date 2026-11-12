@@ -50,7 +50,7 @@ mod tests {
         );
         let args = json!({"task": "tsk_1", "page": {"url": "u", "panel": "p", "zoom": 2}, "tabs": []});
         assert_eq!(parse_args::<Nested>(&args).unwrap_err(), Error::UnknownField { fields: vec!["page.zoom".into()] });
-        let args = json!({"workspace": "wsp_8f2", "title": "x", "parent": null, "state": "pinned", "checkout": "root", "harness": "claude-code", "session": "fresh"});
+        let args = json!({"workspace": "wsp_8f2", "folder": "/w", "mode": "in_place", "title": "x", "parent": null, "state": "pinned", "harness": "claude-code", "session": "fresh"});
         assert_eq!(parse_args::<ops::TaskCreate>(&args).unwrap().parent, None);
     }
 
@@ -64,10 +64,9 @@ mod tests {
         );
         let error = Error::PtyLocked { holder: "laptop".into() };
         assert_eq!(serde_json::to_value(error).unwrap(), json!({"code": "pty_locked", "holder": "laptop"}));
-        let read =
-            Stream::Read { dir: ReadDir::Checkout(TaskId("tsk_1".into())), path: "a.mp4".into(), start: 2, len: 3 };
+        let read = Stream::Read { dir: ReadDir::Task(TaskId("tsk_1".into())), path: "a.mp4".into(), start: 2, len: 3 };
         let header = StreamHeader { open: read, client: "laptop".into() };
-        let expected = json!({"read": {"dir": {"checkout": "tsk_1"}, "path": "a.mp4", "start": 2, "len": 3}});
+        let expected = json!({"read": {"dir": {"task": "tsk_1"}, "path": "a.mp4", "start": 2, "len": 3}});
         assert_eq!(serde_json::to_value(header).unwrap(), json!({"open": expected, "client": "laptop"}));
         assert_eq!(serde_json::to_value(Stream::Pty(PtyId("pty_2".into()))).unwrap(), json!({"pty": "pty_2"}));
     }

@@ -18,7 +18,7 @@ pub struct ServerRun {
     /// The SQLite file the server keeps its state in.
     #[arg(long)]
     pub store: PathBuf,
-    /// Where task worktrees live: <worktrees>/<workspace>/<task>.
+    /// Where task worktrees live: <worktrees>/<repo>/<task>.
     #[arg(long)]
     pub worktrees: PathBuf,
     /// Socket of the terminal host, the process that keeps this server's terminals running across restarts;

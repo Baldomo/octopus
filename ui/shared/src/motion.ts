@@ -102,6 +102,30 @@ export function play(element: Element, keyframes: Keyframe[], spring: Spring, de
   return element.animate(keyframes, { ...curve(spring), delay, fill: "backwards" });
 }
 
+/** Where new contents take a page from its last ones: a level deeper, back up one, or across to an unrelated page. */
+export type Toward = "deeper" | "back" | "across";
+
+/** Raises a floating panel into place, or lowers it away, resolving once it is gone. */
+export function floatPanel(panel: HTMLElement, away = false) {
+  const hidden = reduced() ? { opacity: 0 } : { opacity: 0, translate: "0 -6px", scale: "0.98" };
+  const frames = away ? [{}, hidden] : [hidden, {}];
+  return panel.animate(frames, { ...curve(SNAPPY), fill: away ? "forwards" : "none" }).finished;
+}
+
+/** Brings in a list's new contents at its top: from the right going deeper, from the left going back, else fading in. */
+export function shiftIn(list: HTMLElement, toward: Toward) {
+  list.scrollTop = 0;
+  if (toward === "across" || reduced()) return void list.animate([{ opacity: 0 }, { opacity: 1 }], FADE_MS);
+  const shift = toward === "deeper" ? "24px" : "-24px";
+  list.animate(
+    [
+      { translate: `${shift} 0`, opacity: 0 },
+      { translate: "0 0", opacity: 1 },
+    ],
+    curve(SNAPPY),
+  );
+}
+
 /** The pointer's velocity, in pixels a second, over its last 100 ms, so a pointer held still lets go at rest. */
 export function tracker() {
   let samples: { at: number; x: number; y: number }[] = [];

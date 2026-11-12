@@ -1,10 +1,10 @@
 //! Every file a webview loads from a server comes from `octopus-file://<root>/<path>`. A root is a directory on one
-//! server: a browser panel's page root, the directory of the file a page loads from, or a task's checkout, which the
+//! server: a browser panel's page root, the directory of the file a page loads from, or a task's directory, which the
 //! Files tab reads. Each root gets a random name this client keeps for as long as it runs, so no page names a root it
 //! was not served from. A page root's name is its origin, so a page shares its origin with its own root's files alone;
-//! Android, whose webview serves a custom scheme as one `http` host, shows no file page. A checkout's files go to the
+//! Android, whose webview serves a custom scheme as one `http` host, shows no file page. A task's files go to the
 //! UI's own webviews alone, which may read them across origins; on iOS a page shows in a frame of the UI's webview, so
-//! there the checkout's unguessable name is what keeps a page from it. This client answers each request with the bytes
+//! there the root's unguessable name is what keeps a page from it. This client answers each request with the bytes
 //! its server reads at `<path>` under the root, which the server keeps the path inside: the range a `Range` header
 //! asks for, so a video plays and seeks, or else the whole file.
 
@@ -70,9 +70,9 @@ impl ServedFiles {
         Ok(loaded)
     }
 
-    /// The URL a checkout's files load under, each at its path, percent-encoded, after a `/`.
-    pub fn checkout(&self, at: TaskRef) -> String {
-        self.base(Root { server: at.server, dir: ReadDir::Checkout(at.task) })
+    /// The URL a task's files load under, each at its path, percent-encoded, after a `/`.
+    pub fn task(&self, at: TaskRef) -> String {
+        self.base(Root { server: at.server, dir: ReadDir::Task(at.task) })
     }
 
     fn base(&self, root: Root) -> String {
@@ -136,14 +136,14 @@ impl ServedFiles {
     }
 }
 
-/// Whether the webview labelled `asker` may load files of `dir`: a checkout's are the UI's alone.
+/// Whether the webview labelled `asker` may load files of `dir`: a task's are the UI's alone.
 fn serves(dir: &ReadDir, asker: &str) -> bool {
     matches!(dir, ReadDir::Page(_)) || UI_WEBVIEWS.contains(&asker)
 }
 
-/// Lets the app's own UI read a checkout's files across origins, and nothing else read any root's.
+/// Lets the app's own UI read a task's files across origins, and nothing else read any root's.
 fn readable_by(dir: &ReadDir, mut reply: Response<Vec<u8>>) -> Response<Vec<u8>> {
-    if let ReadDir::Checkout(_) = dir {
+    if let ReadDir::Task(_) = dir {
         let headers = reply.headers_mut();
         headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, header::HeaderValue::from_static(UI_ORIGIN));
         headers.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, header::HeaderValue::from_static("range"));
@@ -331,16 +331,17 @@ mod tests {
     }
 
     #[test]
-    fn a_checkout_is_a_root_of_its_own_that_the_ui_alone_reads_across_origins() {
+    fn a_tasks_directory_is_a_root_of_its_own_that_the_ui_alone_reads_across_origins() {
         let served = ServedFiles::default();
         let at = |server: &str| TaskRef { server: server.to_string(), task: TaskId("tsk_1".into()) };
-        let checkout = served.checkout(at("mac mini"));
-        assert_eq!(served.checkout(at("mac mini")), checkout, "one checkout, one root");
-        assert_ne!(served.checkout(at("laptop")), checkout, "another server's task of the same id");
+        let directory = served.task(at("mac mini"));
+        assert_eq!(served.task(at("mac mini")), directory, "one task, one root");
+        assert_ne!(served.task(at("laptop")), directory, "another server's task of the same id");
         let page = served.loaded_from("mac mini", &url("file:///Users/me/repo/index.html")).expect("a file page");
-        assert_ne!(page.host_str(), url(&checkout).host_str(), "a page is never a checkout's origin");
-        let (root, path) = served.served(&url(&format!("{checkout}/docs/my%20plan.pdf"))).expect("the checkout");
-        assert_eq!((root.dir, path.as_str()), (ReadDir::Checkout(TaskId("tsk_1".into())), "docs/my plan.pdf"));
+        assert_ne!(page.host_str(), url(&directory).host_str(), "a page is never a task's origin");
+        let (root, path) =
+            served.served(&url(&format!("{directory}/docs/my%20plan.pdf"))).expect("the task's directory");
+        assert_eq!((root.dir, path.as_str()), (ReadDir::Task(TaskId("tsk_1".into())), "docs/my plan.pdf"));
 
         let allowed = |dir: &ReadDir| {
             let reply = readable_by(dir, respond(StatusCode::OK, String::new()));
@@ -349,10 +350,10 @@ mod tests {
                 .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
                 .map(|origin| origin.to_str().expect("ASCII").to_owned())
         };
-        assert_eq!(allowed(&ReadDir::Checkout(TaskId("tsk_1".into()))).as_deref(), Some(UI_ORIGIN));
+        assert_eq!(allowed(&ReadDir::Task(TaskId("tsk_1".into()))).as_deref(), Some(UI_ORIGIN));
         assert_eq!(allowed(&ReadDir::Page("/tmp/site".into())), None, "a page root is its own origin's alone");
-        assert!(serves(&ReadDir::Checkout(TaskId("tsk_1".into())), BASE_WEBVIEW));
-        assert!(!serves(&ReadDir::Checkout(TaskId("tsk_1".into())), "browser-0"), "a browser panel's webview");
+        assert!(serves(&ReadDir::Task(TaskId("tsk_1".into())), BASE_WEBVIEW));
+        assert!(!serves(&ReadDir::Task(TaskId("tsk_1".into())), "browser-0"), "a browser panel's webview");
         assert!(serves(&ReadDir::Page("/tmp/site".into()), "browser-0"));
     }
 }

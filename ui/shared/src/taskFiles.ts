@@ -91,7 +91,7 @@ export class TaskFiles {
   readonly state: Tree;
   private readonly set: SetStoreFunction<Tree>;
   private readonly opened = new Map<string, Opened>();
-  /** The URL the checkout's files load under, which the first read asks this client for. */
+  /** The URL the task's files load under, which the first read asks this client for. */
   private root: string | undefined;
   /** Counts the reads of each file, so a read that a newer read or a save overtook shows nothing. */
   private readonly reads = new Map<string, number>();
@@ -307,7 +307,7 @@ export class TaskFiles {
     return view === undefined || view.as === "text" ? undefined : view;
   }
 
-  /** Where a file of the checkout loads from, once a read has named the checkout's URL. */
+  /** Where a file of the task's directory loads from, once a read has named its URL. */
   urlOf(path: string) {
     return `${this.root}/${path.split("/").map(encodeURIComponent).join("/")}`;
   }
@@ -397,7 +397,7 @@ export function filesOf(task: TaskView) {
 }
 
 /** Where files are on the task's server: dropped ones are there already when it runs here; anything else is first
- * copied into the checkout's root. */
+ * copied into the task's directory. */
 export async function onServer(task: TaskView, incoming: Incoming[]) {
   if (isLocal(task.at.server) && incoming.every((item) => typeof item === "string")) return incoming;
   const copies = await filesOf(task).bringIn(incoming, ".");

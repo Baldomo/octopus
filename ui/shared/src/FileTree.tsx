@@ -54,7 +54,7 @@ function startDraft(files: TaskFiles, next: Draft) {
   });
 }
 
-const where = (dir: string) => (dir === "." ? "the checkout" : dir);
+const where = (dir: string) => (dir === "." ? "the task's directory" : dir);
 
 async function vacant(files: TaskFiles, dir: string, name: string) {
   if ((await files.names(dir)).has(name)) throw new Error(`${where(dir)} already has ${name}`);
@@ -146,7 +146,7 @@ type MenuProps = {
   files: TaskFiles;
   task: TaskView;
   outside?: Outside;
-  /** The entry right-clicked, or `.` for the checkout. */
+  /** The entry right-clicked, or `.` for the task's directory. */
   path: string;
   kind: EntryKind;
   paths: string[];
@@ -170,7 +170,7 @@ function EntryMenu(props: MenuProps) {
       }
     >
       <Head
-        title={root ? "Checkout" : subject(props.paths)}
+        title={root ? "Task directory" : subject(props.paths)}
         lines={[props.paths.length === 1 ? absolute(props.task, props.path) : props.paths.join(", ")]}
       />
       <Item run={() => startDraft(props.files, { kind: "file", dir })}>New file…</Item>

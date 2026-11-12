@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, watch};
 
 use crate::emulator::Emulator;
+use crate::program_status::{ANSWER, Listener, ProgramStatus};
 use crate::{lock, now, report};
 
 const LIVE_PIECES: usize = 1024;
@@ -75,6 +76,8 @@ pub struct Pty {
     output: Mutex<Output>,
     /// When the terminal last wrote output, or started.
     output_at: AtomicI64,
+    /// What the program last reported it is doing, once it has.
+    status: watch::Sender<Option<ProgramStatus>>,
     exited: watch::Sender<bool>,
 }
 
@@ -111,6 +114,7 @@ impl Pty {
             process: Mutex::new(Some(child)),
             output: Mutex::new(Output::new(Some(live))),
             output_at: AtomicI64::new(now()),
+            status: watch::Sender::new(None),
             exited: watch::Sender::new(false),
         });
         let (pump, reaper) = (Arc::clone(&pty), Arc::clone(&pty));
@@ -119,12 +123,23 @@ impl Pty {
         Ok(pty)
     }
 
+    /// Answers a probe before any client sees it, so the answer beats a client's answer to a query sent with it.
     fn pump(&self, mut reader: Box<dyn Read + Send>) {
         let mut buffer = [0u8; READ_BYTES];
+        let mut listener = Listener::default();
         while let Ok(read) = reader.read(&mut buffer)
             && read > 0
         {
             self.output_at.store(now(), Ordering::Relaxed);
+            let said = listener.read(&buffer[..read]);
+            if said.probed
+                && let Err(error) = self.write(ANSWER)
+            {
+                report!("answer a program's status probe: {error}");
+            }
+            if let Some(status) = said.status {
+                self.status.send_replace(Some(status));
+            }
             lock(&self.output).add(&buffer[..read]);
         }
         lock(&self.output).live = None;
@@ -181,6 +196,10 @@ impl Pty {
             }
         }
         Ok(Activity { output_at: self.output_at.load(Ordering::Relaxed), detached_descendant })
+    }
+
+    pub(crate) fn statuses(&self) -> watch::Receiver<Option<ProgramStatus>> {
+        self.status.subscribe()
     }
 
     pub async fn exit(&self) {

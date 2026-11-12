@@ -1,53 +1,34 @@
-import { createSignal, For, Show } from "solid-js";
-import { backend } from "@octopus/shared/backend.ts";
-import { CHECKOUTS, FRESH_SESSION, TASK_STATES } from "@octopus/shared/generated.ts";
-import { newTaskDraft, workspaceKey } from "@octopus/shared/newTaskDraft.ts";
-import { model, report, serverLabel, serverView, workspaces } from "@octopus/shared/state.ts";
+import { For, Show } from "solid-js";
+import { MODES, TASK_STATES } from "@octopus/shared/generated.ts";
+import { modeLabel, newTaskDraft, workspaceKey } from "@octopus/shared/newTaskDraft.ts";
+import { serverLabel, workspaces } from "@octopus/shared/state.ts";
 import { keepInView } from "@octopus/shared/keepInView.ts";
 import { feel } from "./feel";
 import { Icon } from "./Icon";
-import { openTask, showInSheet } from "./nav";
-import { Field, Flab, Gap, Para, Secondary, sectionColor, Seg } from "./parts";
+import { unfold } from "./motion";
+import { openTask, raiseSheet, showInSheet } from "./nav";
+import { Chev, Field, Flab, Gap, Para, Secondary, sectionColor, Seg, Slot } from "./parts";
 import { Sheet, SheetHead } from "./Sheet";
 
 /**
  * Every field of `task.create` on one full sheet, with `section`'s workspace on its first reachable server chosen.
- * Create stays inert until the title, workspace and harness are set.
+ * The folder opens a sheet over the form to type and browse it in. Create stays inert until the title, workspace and
+ * harness are set and the server reads the folder as a directory; a refusal shows under the header.
  */
 export function NewTask(props: { section: string | null }) {
   const draft = newTaskDraft(props.section);
-  const { workspace, setWorkspace, title, setTitle, state, setState, checkout, setCheckout } = draft;
-  const { harness, setHarness, chosen, complete } = draft;
-  const [parent, setParent] = createSignal("");
-  const [session, setSession] = createSignal("");
-  const parents = () =>
-    Object.values(model.tasks).filter(
-      (view) =>
-        view.live &&
-        view.at.server === chosen()?.server &&
-        view.task.workspace === chosen()?.workspace &&
-        view.task.archived_at === null,
-    );
-  const [creating, setCreating] = createSignal(false);
-  const create = () => {
-    const target = chosen();
-    if (target === undefined || !complete() || creating()) return;
-    setCreating(true);
-    backend
-      .taskCreate(
-        draft.payload(
-          target,
-          parents().some((view) => view.task.id === parent()) ? parent() : null,
-          session().trim() === "" ? FRESH_SESSION : session().trim(),
-        ),
-      )
-      .then((key) => {
-        feel("success");
-        openTask(key);
-      }, report)
-      .finally(() => setCreating(false));
+  const create = () =>
+    void draft.create().then((key) => {
+      if (key === undefined) return;
+      if (key === null) return feel("error");
+      feel("success");
+      openTask(key);
+    });
+  const pickFolder = () => {
+    const picker = draft.pickFolder();
+    if (picker !== undefined) raiseSheet({ is: "folder", picker });
   };
-  const parentTitle = () => parents().find((view) => view.task.id === parent())?.task.title ?? "none";
+  const parentTitle = () => draft.parents().find((view) => view.task.id === draft.parent())?.task.title ?? "none";
   return (
     <Show
       when={workspaces().length > 0}
@@ -67,57 +48,99 @@ export function NewTask(props: { section: string | null }) {
         <SheetHead
           title="New task"
           end={
-            <button class="btn solid" classList={{ inert: !complete() || creating() }} onClick={create}>
+            <button class="btn solid" classList={{ inert: !draft.complete() || draft.creating() }} onClick={create}>
               Create
             </button>
           }
         />
+        <Show when={draft.refusal()}>
+          {(refusal) => (
+            <div ref={unfold} class="note err wrap">
+              <Slot>
+                <Icon name="warn" />
+              </Slot>
+              <span class="name">{refusal()}</span>
+            </div>
+          )}
+        </Show>
         <Flab>title</Flab>
-        <Field value={title()} input={setTitle} focus />
+        <Field value={draft.title()} input={draft.setTitle} focus />
         <Flab>workspace</Flab>
         <div class="pick">
           <For each={workspaces()}>
-            {(option) => (
-              <span
-                ref={keepInView(() => workspaceKey(option) === workspace())}
-                class="chip"
-                role="button"
-                classList={{ on: workspaceKey(option) === workspace(), off: !serverView(option.server)?.reachable }}
-                onClick={() => {
-                  if (workspaceKey(option) !== workspace()) feel("select");
-                  setWorkspace(workspaceKey(option));
-                }}
-              >
-                <i class="dot srv" style={{ background: sectionColor(option.name) }} />
-                {option.name} · {serverLabel(option.server)}
-              </span>
-            )}
+            {(option) => {
+              const reachable = () => draft.reachable(option);
+              return (
+                <span
+                  ref={keepInView(() => workspaceKey(option) === draft.workspace())}
+                  class="chip"
+                  role="button"
+                  classList={{ on: workspaceKey(option) === draft.workspace(), off: !reachable() }}
+                  onClick={() => {
+                    if (!reachable() || workspaceKey(option) === draft.workspace()) return;
+                    feel("select");
+                    draft.setWorkspace(workspaceKey(option));
+                  }}
+                >
+                  <i class="dot srv" style={{ background: sectionColor(option.name) }} />
+                  {option.name} · {serverLabel(option.server)}
+                </span>
+              );
+            }}
           </For>
         </div>
+        <Flab>folder</Flab>
+        <div
+          class="field mono folder"
+          classList={{ off: draft.chosen() === undefined }}
+          role="button"
+          aria-label="Folder"
+          onClick={pickFolder}
+        >
+          <Slot>
+            <Icon name="folder" />
+          </Slot>
+          <span class="path">
+            <bdi>
+              <span class="root">{draft.lead()}</span>
+              {draft.path()}
+            </bdi>
+          </span>
+          <Show when={draft.tag()}>{(tag) => <span class="id tag">{tag()}</span>}</Show>
+          <Chev />
+        </div>
+        <Flab>mode</Flab>
+        <Seg
+          wide
+          options={MODES.map((mode) => [mode, modeLabel(mode)] as const)}
+          value={draft.mode()}
+          choose={draft.setMode}
+          off={draft.modeOff}
+        />
         <Flab>parent</Flab>
         <label class="field">
           <span class="name">{parentTitle()}</span>
-          <span class="chev">
-            <Icon name="chev" />
-          </span>
-          <select class="native" value={parent()} onChange={(event) => setParent(event.currentTarget.value)}>
+          <Chev />
+          <select
+            class="native"
+            value={draft.parent() ?? ""}
+            onChange={(event) => draft.setParent(event.currentTarget.value || null)}
+          >
             <option value="">none</option>
-            <For each={parents()}>{(view) => <option value={view.task.id}>{view.task.title}</option>}</For>
+            <For each={draft.parents()}>{(view) => <option value={view.task.id}>{view.task.title}</option>}</For>
           </select>
         </label>
         <Flab>state</Flab>
-        <Seg wide options={TASK_STATES.map((each) => [each, each] as const)} value={state()} choose={setState} />
-        <Flab>checkout</Flab>
         <Seg
           wide
-          options={[...CHECKOUTS].reverse().map((each) => [each, each] as const)}
-          value={checkout()}
-          choose={setCheckout}
+          options={TASK_STATES.map((each) => [each, each] as const)}
+          value={draft.state()}
+          choose={draft.setState}
         />
         <Flab>harness</Flab>
-        <Field value={harness()} input={setHarness} mono />
+        <Field value={draft.harness()} input={draft.setHarness} mono />
         <Flab>session</Flab>
-        <Field value={session()} input={setSession} placeholder="fresh session, or an id to resume" />
+        <Field value={draft.session()} input={draft.setSession} placeholder="fresh session, or an id to resume" />
         <Gap n={2} />
       </Sheet>
     </Show>

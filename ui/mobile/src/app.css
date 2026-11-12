@@ -111,16 +111,16 @@ body {
   user-select: text;
 }
 
+:root[data-caret-held] :focus {
+  caret-color: transparent !important;
+}
+
 .field input::placeholder {
   color: var(--faint);
 }
 
 .field:focus-within {
   box-shadow: inset 0 0 0 1.5px var(--focus, var(--text));
-}
-
-.primary:disabled {
-  opacity: 0.45;
 }
 
 /* sheets: a scrim over everything, a sheet from the bottom edge over the bottom inset */
@@ -150,6 +150,7 @@ body {
   border-radius: var(--r3) var(--r3) 0 0;
   display: flex;
   flex-direction: column;
+  transform-origin: 50% 0;
 }
 
 .layer.leaving {
@@ -157,22 +158,121 @@ body {
 }
 
 .sheet > *,
-.page-gone > * {
+.page > * {
   flex: none;
 }
 
-/* the page a sheet showed before the one it shows in its place, on its way out */
-.page-gone {
+/* a sheet's page is opaque, so a page turning in covers the one turning out as screens do; its shadow falls sideways */
+.page {
+  display: flex;
+  flex-direction: column;
+  background: var(--sheet);
+  box-shadow: 0 0 32px rgb(0 0 0 / 0.16);
+  clip-path: inset(0 -32px);
+}
+
+/* a page's last contents, on their way out */
+.gone {
   position: absolute;
   left: 0;
   right: 0;
-  display: flex;
-  flex-direction: column;
   pointer-events: none;
 }
 
+/* a full sheet's color runs on below its foot, under a keyboard still rising after the sheet made room for it */
 .sheet.full {
   top: calc(var(--top) + var(--g2));
+  box-shadow: 0 var(--vh) 0 var(--sheet);
+}
+
+/* a sheet another rises over shrinks back from its top, and a full one over it hangs lower, so the one behind shows */
+.sheet.full.over {
+  top: calc(var(--top) + var(--g4));
+}
+
+/* a sheet ending in a list lets the list scroll on under the bottom inset */
+.sheet:has(> .page > .folders) {
+  padding-bottom: 0;
+}
+
+.page:has(> .folders),
+.page > .folders {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.page > .folders {
+  position: relative;
+  overflow: hidden;
+}
+
+.folders > .scroll {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: calc(var(--bot) + var(--g2));
+}
+
+/* the path field's folder turns to a spinner while a folder it lists is a beat late */
+.field.typing .lead .ic,
+.field.typing .wait {
+  transition: opacity 150ms;
+}
+
+.field.typing .wait {
+  position: absolute;
+  left: 3px;
+  top: 5px;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 2px solid var(--faint);
+  border-right-color: transparent;
+  opacity: 0;
+  animation: spin 700ms linear infinite;
+}
+
+.field.typing.pending .wait {
+  opacity: 1;
+  transition-delay: 150ms;
+}
+
+.field.typing.pending .lead .ic {
+  opacity: 0;
+  transition-delay: 150ms;
+}
+
+/* the clear button shows once anything is typed */
+.field.typing .clear {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms;
+}
+
+.field.typing .clear.shown {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.field.typing .clear.shown[data-pressed] {
+  opacity: 0.5;
+}
+
+/* a note that runs past one line wraps, its icon on its first line */
+.note.wrap {
+  height: auto;
+  min-height: var(--h-chip);
+  padding-block: var(--g1);
+  align-items: flex-start;
+  overflow: hidden;
+}
+
+.note.wrap .name {
+  padding-top: var(--g1);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .shead.lead {
@@ -424,10 +524,6 @@ body {
   color: var(--surface);
 }
 
-.term.stale {
-  opacity: 0.45;
-}
-
 .missing {
   display: flex;
   flex-direction: column;
@@ -469,10 +565,6 @@ body {
 .tabs.scroll {
   overflow-x: auto;
   -webkit-mask: linear-gradient(90deg, #000 calc(100% - var(--g5)), transparent);
-}
-
-.btn.inert {
-  opacity: 0.45;
 }
 
 /* a picker field opens the OS's own list from a select laid over it */

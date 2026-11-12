@@ -262,7 +262,7 @@ pub fn lists(caches: &BTreeMap<String, Cache>, waking: &Waking) -> Lists {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use octopus_proto::types::{Checkout, Panel, PtyId, Session, SessionId, Workspace};
+    use octopus_proto::types::{Mode, Panel, PtyId, Session, SessionId, Workspace};
 
     #[test]
     fn a_task_shows_its_agent_while_live_and_how_it_ended_after() {
@@ -312,10 +312,12 @@ pub(crate) mod tests {
             parent: parent.map(|parent| TaskId(parent.into())),
             title: title.into(),
             state,
-            checkout: Checkout::Root,
+            folder: "/repo".into(),
+            mode: Mode::InPlace,
+            directory: "/repo".into(),
+            branch: None,
             harness: "claude-code".into(),
             session: Session { id: SessionId("ses".into()), started: false },
-            directory: "/repo".into(),
             ended_at: None,
             archived_at: None,
             rev: 1,

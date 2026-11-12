@@ -8,6 +8,7 @@ import type {
   EntryKind,
   FileDrag,
   FilesChanged,
+  Folder,
   Match,
   Model,
   NewTask,
@@ -69,6 +70,11 @@ export const backend = {
   taskResume: (at: TaskRef) => invoke<void>(octopus("task_resume"), { at }),
   taskMove: (at: TaskRef, state: TaskState) => invoke<void>(octopus("task_move"), { at, state }),
   taskSetParent: (at: TaskRef, parent: TaskRef | null) => invoke<void>(octopus("task_set_parent"), { at, parent }),
+  /** Files the task with its subtasks in `workspace`, a workspace of the task's own server. */
+  taskSetWorkspace: (at: TaskRef, workspace: WorkspaceId) =>
+    invoke<void>(octopus("task_set_workspace"), { at, workspace }),
+  /** The folder on `server`, resolved, with the git repo it sits in and the folders inside it. */
+  folderGet: (server: string, folder: string) => invoke<Folder>(octopus("folder_get"), { server, folder }),
   taskRename: (at: TaskRef, title: string) => invoke<void>(octopus("task_rename"), { at, title }),
   taskArchive: (at: TaskRef) => invoke<void>(octopus("task_archive"), { at }),
   /** Resolves to the created task's key. */
@@ -77,8 +83,8 @@ export const backend = {
     invoke<number>(octopus("term_attach"), { at, pty, output }),
   termInput: (attachment: number, keys: string) => invoke<void>(octopus("term_input"), { attachment, keys }),
   termDetach: (attachment: number) => invoke<void>(octopus("term_detach"), { attachment }),
-  /** Resolves to the id of the shell panel it opens. */
-  termOpen: (at: TaskRef, directory: string) => invoke<PtyId>(octopus("term_open"), { at, directory }),
+  /** Resolves to the id of the shell panel it opens at `path`, relative to the task's directory. */
+  termOpen: (at: TaskRef, path: string) => invoke<PtyId>(octopus("term_open"), { at, path }),
   termClose: (at: TaskRef, panel: PtyId) => invoke<void>(octopus("term_close"), { at, panel }),
   termClaim: (at: TaskRef, panel: PtyId, cols: number, rows: number) =>
     invoke<void>(octopus("term_claim"), { at, panel, cols, rows }),
@@ -87,7 +93,7 @@ export const backend = {
   termResize: (at: TaskRef, panel: PtyId, cols: number, rows: number) =>
     invoke<void>(octopus("term_resize"), { at, panel, cols, rows }),
   fileList: (at: TaskRef, path: string) => invoke<Entry[]>(octopus("file_list"), { at, path }),
-  /** The URL each file of the checkout loads under, at its path with each part percent-encoded. */
+  /** The URL each file of the task's directory loads under, at its path with each part percent-encoded. */
   fileRootUrl: (at: TaskRef) => invoke<string>(octopus("file_root_url"), { at }),
   fileWrite: (at: TaskRef, path: string, content: string) => invoke<void>(octopus("file_write"), { at, path, content }),
   fileCreate: (at: TaskRef, path: string, kind: EntryKind) => invoke<void>(octopus("file_create"), { at, path, kind }),

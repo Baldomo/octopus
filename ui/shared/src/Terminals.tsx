@@ -27,8 +27,8 @@ const chord = (event: KeyboardEvent) =>
 
 const [chosen, setChosen] = createStore<Record<string, PtyId | null>>({});
 
-export const openShell = (at: TaskRef, key: string, directory: string) =>
-  backend.termOpen(at, directory).then((panel) => setChosen(key, panel));
+export const openShell = (at: TaskRef, key: string, path: string) =>
+  backend.termOpen(at, path).then((panel) => setChosen(key, panel));
 
 export type OpenLink = (task: TaskView, url: string, target: LinkTarget) => void;
 

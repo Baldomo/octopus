@@ -1,21 +1,24 @@
 mod accounts;
 mod agents;
 mod browser;
-mod checkouts;
 mod client;
 mod emulator;
 mod files;
+mod folders;
+mod git;
 mod harness;
 mod host;
 mod listener;
 mod login;
 mod mic;
 mod pairing;
+mod program_status;
 mod pty;
 mod store;
 mod tasks;
 mod terminals;
 mod workspaces;
+mod worktrees;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -26,21 +29,20 @@ use octopus_proto::device::{DeviceKey, PublicKey};
 pub(crate) use octopus_proto::lock;
 pub use octopus_proto::now;
 use octopus_proto::ops::{
-    AccountSync, AgentReport, BrowserClose, BrowserMove, BrowserOpen, BrowserReport, Done, Entries, FileCopy,
-    FileCreate, FileDelete, FileList, FileMove, FileSearch, FileWrite, HarnessSet, Matches, Offer, PairingForget,
+    AccountSync, BrowserClose, BrowserMove, BrowserOpen, BrowserReport, Done, Entries, FileCopy, FileCreate,
+    FileDelete, FileList, FileMove, FileSearch, FileWrite, FolderGet, HarnessSet, Matches, Offer, PairingForget,
     PairingList, PairingOffer, Revised, SessionHello, SessionPing, SessionSync, Snapshot, TaskArchive, TaskCreate,
-    TaskFocus, TaskGet, TaskMove, TaskRename, TaskSetParent, TaskSetSession, TermClaim, TermClose, TermOpen,
-    TermResize, TermSend, TermTakeLock, Welcome, WorkspaceAdd, WorkspaceList, WorkspaceRemove, WorkspaceRename,
-    WorkspaceSetColor, Workspaces, Written,
+    TaskFocus, TaskGet, TaskMove, TaskRename, TaskSetParent, TaskSetSession, TaskSetWorkspace, TermClaim, TermClose,
+    TermOpen, TermResize, TermSend, TermTakeLock, Welcome, WorkspaceAdd, WorkspaceList, WorkspaceRemove,
+    WorkspaceRename, WorkspaceSetColor, Workspaces, Written,
 };
 use octopus_proto::remote::{Connection, RelayUrl};
-use octopus_proto::types::{AGENT_PANEL, AgentStatus, BrowserPanel, PtyId, TaskId};
+use octopus_proto::types::{AGENT_PANEL, BrowserPanel, PtyId, TaskId};
 use octopus_proto::{Error, Event, Op, Outcome, Push, Request, parse_args};
 use tokio::sync::broadcast;
 
 pub use agents::AGENT_RECLAIM_MS;
 use agents::AgentSlot;
-pub use checkouts::{Sweep, WORKTREE_LIFETIME_MS};
 use client::Client;
 use host::HostClient;
 pub use host::{TerminalHost, run_terminal_host};
@@ -51,6 +53,7 @@ pub use mic::give_back_input;
 use pairing::Offers;
 use store::{Store, TaskRow};
 use terminals::Shell;
+pub use worktrees::{Sweep, WORKTREE_LIFETIME_MS};
 
 const PUSH_BACKLOG: usize = 4096;
 
@@ -74,8 +77,6 @@ pub struct Server {
     relay: RelayUrl,
     offers: Mutex<Offers>,
     worktrees: PathBuf,
-    /// The `octopus` binary, through which an agent's hooks report.
-    octopus: PathBuf,
     host: Arc<HostClient>,
     state: Mutex<State>,
     clients: Mutex<HashMap<Client, usize>>,
@@ -128,7 +129,7 @@ impl Server {
         let device = store.device_key()?;
         let browsers = store.browsers()?;
         let trusted = accounts::load(store.accounts()?);
-        let (host_program, host_address) = (host.program.clone(), host.address.clone());
+        let host_address = host.address.clone();
         let host = Arc::new(HostClient::reach_or_start(host)?);
         let mut hosted: HashMap<PtyId, bool> =
             host.list()?.into_iter().map(|hosted| (hosted.id, hosted.running)).collect();
@@ -146,7 +147,6 @@ impl Server {
             relay,
             offers: Mutex::default(),
             worktrees: worktrees.to_path_buf(),
-            octopus: host_program,
             host,
             state: Mutex::new(State {
                 store,
@@ -175,7 +175,8 @@ impl Server {
                 report!("reset the size of {}: {error}", terminal.id);
             }
             if row.name == AGENT_PANEL {
-                state.agents.insert(row.task, AgentSlot::Spawned { terminal, status: AgentStatus::Idle, since: now() });
+                let agent = server.spawned_agent(&row.task, terminal);
+                state.agents.insert(row.task, agent);
             } else {
                 state.shells.entry(row.task).or_default().push(Shell { name: row.name, terminal });
             }
@@ -223,11 +224,12 @@ impl Server {
             WorkspaceRename::NAME => call::<WorkspaceRename>(args, |op| self.workspace_rename(op)),
             WorkspaceSetColor::NAME => call::<WorkspaceSetColor>(args, |op| self.workspace_set_color(op)),
             WorkspaceRemove::NAME => call::<WorkspaceRemove>(args, |op| self.workspace_remove(op)),
+            FolderGet::NAME => call::<FolderGet>(args, folders::folder_get),
             HarnessSet::NAME => call::<HarnessSet>(args, |op| self.harness_set(op)),
-            AgentReport::NAME => call::<AgentReport>(args, |op| self.agent_report(op)),
             TaskCreate::NAME => call::<TaskCreate>(args, |op| self.task_create(op)),
             TaskMove::NAME => call::<TaskMove>(args, |op| self.task_move(op)),
             TaskSetParent::NAME => call::<TaskSetParent>(args, |op| self.task_set_parent(op)),
+            TaskSetWorkspace::NAME => call::<TaskSetWorkspace>(args, |op| self.task_set_workspace(op)),
             TaskRename::NAME => call::<TaskRename>(args, |op| self.task_rename(op)),
             TaskSetSession::NAME => call::<TaskSetSession>(args, |op| self.task_set_session(op)),
             TaskArchive::NAME => call::<TaskArchive>(args, |op| self.task_archive(op)),
@@ -243,29 +245,29 @@ impl Server {
             TermTakeLock::NAME => call::<TermTakeLock>(args, |op| self.term_take_lock(client, op)),
             TermResize::NAME => call::<TermResize>(args, |op| self.term_resize(client, op)),
             FileList::NAME => call::<FileList>(args, |op| {
-                Ok(Entries { entries: files::list(&self.listed_checkout(&op.task)?, &op.path)? })
+                Ok(Entries { entries: files::list(&self.listed_directory(&op.task)?, &op.path)? })
             }),
             FileWrite::NAME => call::<FileWrite>(args, |op| {
-                Ok(Written { bytes: files::write(&self.checkout_dir(&op.task)?, &op.path, op.content.as_bytes())? })
+                Ok(Written { bytes: files::write(&self.task_directory(&op.task)?, &op.path, op.content.as_bytes())? })
             }),
             FileCreate::NAME => call::<FileCreate>(args, |op| {
-                files::create(&self.checkout_dir(&op.task)?, &op.path, op.kind).map(|()| Done {})
+                files::create(&self.task_directory(&op.task)?, &op.path, op.kind).map(|()| Done {})
             }),
             FileMove::NAME => call::<FileMove>(args, |op| {
-                files::rename(&self.checkout_dir(&op.task)?, &op.from, &op.to).map(|()| Done {})
+                files::rename(&self.task_directory(&op.task)?, &op.from, &op.to).map(|()| Done {})
             }),
             FileCopy::NAME => call::<FileCopy>(args, |op| {
-                files::copy(&self.checkout_dir(&op.task)?, &op.from, &op.to).map(|()| Done {})
+                files::copy(&self.task_directory(&op.task)?, &op.from, &op.to).map(|()| Done {})
             }),
             FileDelete::NAME => call::<FileDelete>(args, |op| {
-                files::delete(&self.checkout_dir(&op.task)?, &op.path, op.trash).map(|()| Done {})
+                files::delete(&self.task_directory(&op.task)?, &op.path, op.trash).map(|()| Done {})
             }),
             BrowserOpen::NAME => call::<BrowserOpen>(args, |op| self.browser_open(op)),
             BrowserReport::NAME => call::<BrowserReport>(args, |op| self.browser_report(op)),
             BrowserClose::NAME => call::<BrowserClose>(args, |op| self.browser_close(op)),
             BrowserMove::NAME => call::<BrowserMove>(args, |op| self.browser_move(op)),
             FileSearch::NAME => call::<FileSearch>(args, |op| {
-                Ok(Matches { matches: files::search_literal(&self.checkout_dir(&op.task)?, &op.pattern) })
+                Ok(Matches { matches: files::search_literal(&self.task_directory(&op.task)?, &op.pattern) })
             }),
             op => Outcome::Err(Error::UnknownOp { op: op.to_string() }),
         }

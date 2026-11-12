@@ -220,8 +220,8 @@ impl Account {
         Digest::of(&[ID_LABEL, self.creator.as_bytes(), self.nonce.as_bytes()])
     }
 
-    /// The same account with none of its entries: what a server that trusted a device before accounts holds.
-    pub fn bare(&self) -> Self {
+    /// The same account with none of its entries.
+    fn bare(&self) -> Self {
         Self { creator: self.creator, nonce: self.nonce.clone(), entries: Vec::new() }
     }
 

@@ -4,6 +4,7 @@ import type { Column, Section } from "@octopus/shared/generated.ts";
 import { Glyph, statusWord } from "@octopus/shared/Glyph.tsx";
 import { animateList } from "@octopus/shared/flip.ts";
 import {
+  dropHeader,
   isAway,
   isLanding,
   isLifted,
@@ -108,6 +109,7 @@ function SectionGroups(props: { section: Section }) {
   const id = () => `section:${name()}`;
   const menu = () => <SectionMenu name={name()} />;
   const collapsed = () => isCollapsed(name()) || isSectionFolded(name());
+  const header = dropHeader(name());
   return (
     <div
       class="ws"
@@ -118,7 +120,8 @@ function SectionGroups(props: { section: Section }) {
       <div
         ref={head}
         class="wsh"
-        classList={{ "menu-open": isMenuOpen(id()), lifting: isSectionLifted(name()) }}
+        classList={{ "menu-open": isMenuOpen(id()), lifting: isSectionLifted(name()), over: header.over() }}
+        {...header.attributes}
         onClick={() => toggleCollapsed(name())}
         onContextMenu={(event) => onRightClick(id(), () => head, menu)(event)}
         {...liftOnDrag(IN_SIDEBAR, liftSection(name()))}

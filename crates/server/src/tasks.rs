@@ -5,14 +5,13 @@ use std::path::{Path, PathBuf};
 use octopus_proto::Error;
 use octopus_proto::ops::{
     Revised, TaskArchive, TaskCreate, TaskCreated, TaskMove, TaskRename, TaskSetParent, TaskSetSession,
+    TaskSetWorkspace,
 };
-use octopus_proto::types::{
-    Agent, Checkout, CheckoutKind, FRESH_SESSION, Session, SessionId, SessionStart, Task, TaskId, TaskState,
-};
+use octopus_proto::types::{Agent, FRESH_SESSION, Mode, Session, SessionId, SessionStart, Task, TaskId, TaskState};
 
 use crate::agents::AgentSlot;
 use crate::store::TaskRow;
-use crate::{Server, State, checkouts, lock, nonempty, now, report};
+use crate::{Server, State, folders, lock, nonempty, now, report, worktrees};
 
 /// A session no agent has run in yet, named by a UUID v4.
 fn fresh_session() -> Session {
@@ -37,13 +36,15 @@ impl State {
         Task {
             id: row.id.clone(),
             workspace: row.workspace.clone(),
+            folder: row.folder.clone(),
+            mode: row.mode,
+            directory: row.directory.clone(),
+            branch: row.worktree.as_ref().map(|worktree| worktree.branch.clone()),
             parent: row.parent.clone(),
             title: row.title.clone(),
             state: row.state,
-            checkout: row.checkout.clone(),
             harness: row.harness.clone(),
             session: row.session.clone(),
-            directory: row.directory.clone(),
             ended_at: row.ended_at,
             archived_at: row.archived_at,
             rev: row.rev,
@@ -55,7 +56,9 @@ impl State {
 }
 
 impl Server {
+    /// A worktree or copy is made outside the state lock, since a copy clones its files.
     pub(crate) fn task_create(&self, op: TaskCreate) -> Result<TaskCreated, Error> {
+        nonempty("a task title", &op.title)?;
         let session = match op.session {
             SessionStart::Fresh => fresh_session(),
             SessionStart::Resume(id) => {
@@ -63,69 +66,60 @@ impl Server {
                 Session { id, started: true }
             }
         };
-        let workspace = {
-            let state = lock(&self.state);
-            if let Some(parent) = &op.parent {
-                state.store.task(parent)?;
+        let folder = folders::directory("folder", &op.folder)?;
+        let filed = |state: &State| {
+            let workspace = state.store.workspace(&op.workspace)?;
+            match &op.parent {
+                Some(parent) if state.store.task(parent)?.workspace != workspace.id => {
+                    Err(Error::conflict(format!("{parent} is in another workspace than {}", workspace.name)))
+                }
+                _ => Ok(()),
             }
-            state.store.workspace(&op.workspace)?
         };
-        let id = TaskId::random();
-        let root = PathBuf::from(&workspace.root);
-        let branch = || checkouts::branch_for(&root, &op.title, &id);
-        let checkout = match op.checkout {
-            CheckoutKind::Root => Checkout::Root,
-            CheckoutKind::Worktree => Checkout::Worktree { branch: branch()? },
-            CheckoutKind::Copy => Checkout::Copy { branch: branch()? },
-        };
-        let directory = match checkout {
-            Checkout::Root => root,
-            Checkout::Worktree { .. } | Checkout::Copy { .. } => {
-                let directory = self.worktrees.join(&workspace.name).join(&id.0);
-                checkouts::create(&root, &directory, &checkout)?;
-                directory
+        filed(&lock(&self.state))?;
+        let (directory, worktree) = match op.mode {
+            Mode::InPlace => (PathBuf::from(&folder), None),
+            Mode::Worktree | Mode::Copy => {
+                let held = |path: &str| lock(&self.state).store.holds_worktree(path);
+                let (worktree, directory) =
+                    worktrees::branch_off(Path::new(&folder), &self.worktrees, &op.title, op.mode, held)?;
+                (directory, Some(worktree))
             }
         };
         let mut state = lock(&self.state);
-        let row = state.store.create_task(TaskRow {
-            id,
-            workspace: op.workspace,
-            parent: op.parent,
-            title: op.title,
-            state: op.state,
-            checkout,
-            harness: op.harness,
-            session,
-            directory: directory.to_string_lossy().to_string(),
-            ended_at: ended_at(op.state, now()),
-            archived_at: None,
-            rev: 0,
+        let created = filed(&state).and_then(|()| {
+            state.store.create_task(TaskRow {
+                id: TaskId::random(),
+                workspace: op.workspace,
+                parent: op.parent,
+                title: op.title,
+                state: op.state,
+                folder: folder.clone(),
+                mode: op.mode,
+                directory: directory.to_string_lossy().into_owned(),
+                worktree: worktree.clone(),
+                harness: op.harness,
+                session,
+                ended_at: ended_at(op.state, now()),
+                archived_at: None,
+                rev: 0,
+            })
+        });
+        let row = created.inspect_err(|_| {
+            if let Some(worktree) = &worktree
+                && let Err(undo) = worktrees::discard(Path::new(&folder), worktree)
+            {
+                report!("remove the worktree {} of a task never created: {undo}", worktree.path);
+            }
         })?;
         self.publish_task(&state, &row);
         Ok(TaskCreated { task: row.id, rev: row.rev })
     }
 
-    /// A reopened task whose worktree is gone gets it back, made outside the lock since a copy clones its files.
     pub(crate) fn task_move(&self, op: TaskMove) -> Result<Revised, Error> {
-        let missing = {
-            let state = lock(&self.state);
-            let row = state.store.task(&op.task)?;
-            let directory = PathBuf::from(&row.directory);
-            if !row.state.is_live() && op.state.is_live() && !directory.exists() {
-                Some((PathBuf::from(state.store.workspace(&row.workspace)?.root), directory, row.checkout))
-            } else {
-                None
-            }
-        };
-        if let Some((root, directory, checkout)) = missing {
-            checkouts::create(&root, &directory, &checkout)?;
-        }
-        let mut state = lock(&self.state);
-        let mut row = state.store.task(&op.task)?;
-        let reopening = !row.state.is_live() && op.state.is_live();
-        if reopening && !Path::new(&row.directory).exists() {
-            return Err(Error::conflict(format!("{}'s worktree went while it was made; move it again", row.id)));
-        }
+        let reopens = |row: &TaskRow| !row.state.is_live() && op.state.is_live();
+        let (mut state, mut row) = self.ready_task(&op.task, reopens)?;
+        let reopening = reopens(&row);
         let stops = row.state.is_live() && !op.state.is_live();
         row.state = op.state;
         row.ended_at = ended_at(op.state, now());
@@ -164,6 +158,21 @@ impl Server {
         }
         row.parent = op.parent;
         self.save_and_publish(&mut state, &mut row)
+    }
+
+    pub(crate) fn task_set_workspace(&self, op: TaskSetWorkspace) -> Result<Revised, Error> {
+        let mut state = lock(&self.state);
+        let row = state.store.task(&op.task)?;
+        state.store.workspace(&op.workspace)?;
+        if let Some(parent) = &row.parent {
+            return Err(Error::conflict(format!("{} is a subtask of {parent}, which stays in its workspace", row.id)));
+        }
+        let refiled = state.store.refile(&row.id, &op.workspace)?;
+        for row in &refiled {
+            self.publish_task(&state, row);
+        }
+        let rev = refiled.last().expect("the tree holds the task itself").rev;
+        Ok(Revised { rev })
     }
 
     pub(crate) fn task_rename(&self, op: TaskRename) -> Result<Revised, Error> {

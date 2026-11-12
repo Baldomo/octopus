@@ -5,10 +5,10 @@ use std::process::Command;
 
 use common::{connect, create, refused, server, task, task_create, workspace, workspace_add};
 use octopus_proto::ops::{
-    SessionSync, TaskArchive, TaskCreate, TaskMove, TaskRename, TaskSetParent, WorkspaceAdd, WorkspaceList,
-    WorkspaceRemove, WorkspaceRename, WorkspaceSetColor,
+    Folder, FolderGet, SessionSync, TaskArchive, TaskCreate, TaskFocus, TaskMove, TaskRename, TaskSetParent,
+    TaskSetWorkspace, TermOpen, WorkspaceAdd, WorkspaceList, WorkspaceRemove, WorkspaceRename, WorkspaceSetColor,
 };
-use octopus_proto::types::{Checkout, CheckoutKind, Color, Hue, Swatch, TaskId, TaskState, Tone, WorkspaceId};
+use octopus_proto::types::{Color, Hue, Mode, Swatch, TaskId, TaskState, Tone, WorkspaceId};
 use octopus_proto::{Error, Event, Op, Outcome};
 use octopus_server::WORKTREE_LIFETIME_MS;
 use serde_json::json;
@@ -29,31 +29,90 @@ fn repo(dir: &Path) -> PathBuf {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_worktree_lives_on_its_branch_until_its_lifetime_after_the_task_ends() {
+async fn a_worktree_holds_the_folder_on_its_branch_and_comes_back_until_its_lifetime_after_the_task_ends() {
     let (dir, running) = server().await;
     let repo = repo(dir.path());
+    let app = repo.join("app");
+    std::fs::create_dir(&app).expect("mkdir app");
     let laptop = connect(&running.socket, "laptop").await;
-    let workspace = workspace(&laptop, &repo).await;
+    let workspace = workspace(&laptop, dir.path()).await;
+    let make = async |mode| laptop.call(&task_create(&workspace, &app, mode, "none")).await;
 
-    let id = create(&laptop, &workspace, CheckoutKind::Worktree, "none").await;
+    let id = make(Mode::Worktree).await.expect("task.create").task;
     let view = task(&laptop, &id).await;
-    let directory = dir.path().join("worktrees").join("octopus").join(&id.0);
-    assert_eq!(Path::new(&view.directory), directory);
-    assert_eq!(view.checkout, Checkout::Worktree { branch: "task/strict-serde".into() });
-    assert_eq!(git(&directory, &["branch", "--show-current"]), "task/strict-serde");
+    let worktree = dir.path().join("worktrees").join("repo").join("strict-serde");
+    assert_eq!(Path::new(&view.directory), worktree.join("app"));
+    assert_eq!(Path::new(&view.folder), app.canonicalize().expect("canonical"));
+    assert_eq!((view.mode, view.branch.as_deref()), (Mode::Worktree, Some("task/strict-serde")));
+    assert_eq!(git(&worktree, &["branch", "--show-current"]), "task/strict-serde");
+    let again = task(&laptop, &make(Mode::Worktree).await.expect("task.create").task).await;
+    assert_eq!(Path::new(&again.directory), worktree.with_file_name("strict-serde-2").join("app"));
+    assert_eq!(again.branch.as_deref(), Some("task/strict-serde-2"));
+    let outside = laptop.call(&task_create(&workspace, dir.path(), Mode::Copy, "none")).await;
+    assert!(matches!(refused(outside), Error::InvalidArgs { .. }));
+
+    std::fs::remove_dir_all(&worktree).expect("delete the worktree by hand");
+    laptop.call(&TermOpen { task: id.clone(), path: ".".into() }).await.expect("term.open brings it back");
+    assert_eq!(git(&worktree.join("app"), &["branch", "--show-current"]), "task/strict-serde");
 
     laptop.call(&TaskMove { task: id.clone(), state: TaskState::Completed }).await.expect("complete");
     let ended_at = task(&laptop, &id).await.ended_at.expect("ended_at");
     let early = running.server.remove_expired_worktrees(ended_at + WORKTREE_LIFETIME_MS - 1).expect("sweep");
     assert!(early.removed.is_empty() && early.failed.is_empty());
-    assert!(directory.exists());
+    assert!(worktree.exists());
     let due = running.server.remove_expired_worktrees(ended_at + WORKTREE_LIFETIME_MS).expect("sweep");
     assert_eq!((due.removed, due.failed.len()), (vec![id.clone()], 0));
-    assert!(!directory.exists());
+    assert!(!worktree.exists());
     assert_eq!(git(&repo, &["branch", "--list", "task/strict-serde"]), "task/strict-serde");
+    let other = dir.path().join("other");
+    std::fs::create_dir(&other).expect("mkdir other");
+    let other = self::repo(&other);
+    let elsewhere = laptop.call(&task_create(&workspace, &other, Mode::Worktree, "none")).await.expect("task.create");
+    let elsewhere = task(&laptop, &elsewhere.task).await;
+    assert_eq!(Path::new(&elsewhere.directory), worktree.with_file_name("strict-serde-3"));
 
     laptop.call(&TaskMove { task: id.clone(), state: TaskState::Pinned }).await.expect("reopen");
-    assert_eq!(git(&directory, &["branch", "--show-current"]), "task/strict-serde");
+    assert_eq!(git(&worktree.join("app"), &["branch", "--show-current"]), "task/strict-serde");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_folder_shows_its_repo_branch_and_the_folders_inside_it_and_an_in_place_task_needs_its_folder() {
+    let (dir, running) = server().await;
+    let repo = repo(dir.path());
+    std::fs::create_dir(repo.join("src")).expect("mkdir src");
+    std::fs::write(repo.join("README.md"), "").expect("write a file");
+    let laptop = connect(&running.socket, "laptop").await;
+    let get = |folder: &Path| FolderGet { folder: folder.to_string_lossy().into_owned() };
+
+    let shown = laptop.call(&get(&repo.join("src/.."))).await.expect("folder.get");
+    let canonical = repo.canonicalize().expect("canonical").to_string_lossy().into_owned();
+    assert_eq!(
+        shown,
+        Folder {
+            folder: canonical.clone(),
+            repo: Some(canonical),
+            branch: Some("main".into()),
+            folders: vec![".git".into(), "src".into()]
+        }
+    );
+    let outside = laptop.call(&get(dir.path())).await.expect("folder.get");
+    assert_eq!((outside.repo, outside.branch, outside.folders.contains(&"repo".to_string())), (None, None, true));
+    for folder in [Path::new("repo"), &repo.join("README.md")] {
+        assert!(matches!(refused(laptop.call(&get(folder)).await), Error::InvalidArgs { .. }));
+    }
+
+    let gone = dir.path().join("gone");
+    std::fs::create_dir(&gone).expect("mkdir gone");
+    let workspace = workspace(&laptop, dir.path()).await;
+    let id = laptop.call(&task_create(&workspace, &gone, Mode::InPlace, "none")).await.expect("task.create").task;
+    std::fs::remove_dir(&gone).expect("rmdir gone");
+    let opened = laptop.call(&TermOpen { task: id.clone(), path: ".".into() }).await;
+    assert!(matches!(refused(opened), Error::NotFound { .. }));
+    let focused = laptop.call(&TaskFocus { task: id.clone(), args: vec![] }).await;
+    assert!(matches!(refused(focused), Error::NotFound { .. }));
+    laptop.call(&TaskMove { task: id.clone(), state: TaskState::Completed }).await.expect("complete");
+    let reopened = laptop.call(&TaskMove { task: id, state: TaskState::Pinned }).await;
+    assert!(matches!(refused(reopened), Error::NotFound { .. }));
 }
 
 #[cfg(target_os = "macos")]
@@ -71,10 +130,10 @@ async fn a_copy_starts_with_the_roots_ignored_files_and_gets_them_again_when_it_
     let laptop = connect(&running.socket, "laptop").await;
     let workspace = workspace(&laptop, &repo).await;
 
-    let id = create(&laptop, &workspace, CheckoutKind::Copy, "none").await;
+    let id = create(&laptop, &workspace, Mode::Copy, "none").await;
     let view = task(&laptop, &id).await;
     let copy = PathBuf::from(&view.directory);
-    assert_eq!(view.checkout, Checkout::Copy { branch: "task/strict-serde".into() });
+    assert_eq!((view.mode, view.branch.as_deref()), (Mode::Copy, Some("task/strict-serde")));
     assert_eq!(git(&copy, &["branch", "--show-current"]), "task/strict-serde");
     let read = |path: PathBuf| std::fs::read_to_string(path).expect("read cloned file");
     assert_eq!((read(copy.join("target/built")), read(copy.join(".env"))), ("cache".into(), "KEY=1".into()));
@@ -119,16 +178,17 @@ async fn a_workspace_renames_and_recolors_in_place_and_goes_with_its_tasks_once_
     assert_eq!(colors, [("acme".into(), violet), ("dotfiles".into(), teal)]);
     let plaid = laptop.call_raw(WorkspaceSetColor::NAME, json!({"workspace": doomed, "color": "plaid"})).await;
     assert!(matches!(plaid.expect("call"), Outcome::Err(Error::InvalidArgs { .. })));
+    laptop.call(&add("same root", &repo)).await.expect("a second workspace at the same root");
 
-    let id = create(&laptop, &doomed, CheckoutKind::Worktree, "none").await;
+    let id = create(&laptop, &doomed, Mode::Worktree, "none").await;
     laptop.call(&TaskRename { task: id.clone(), title: "Renamed".into() }).await.expect("task.rename");
     let view = task(&laptop, &id).await;
     assert_eq!(
-        (view.title.as_str(), view.checkout),
-        ("Renamed", Checkout::Worktree { branch: "task/strict-serde".into() })
+        (view.title.as_str(), view.mode, view.branch.as_deref()),
+        ("Renamed", Mode::Worktree, Some("task/strict-serde"))
     );
-    let child = TaskCreate { parent: Some(id.clone()), ..task_create(&other, CheckoutKind::Root, "none") };
-    let child = laptop.call(&child).await.expect("task.create").task;
+    let child = TaskCreate { parent: Some(id.clone()), ..task_create(&other, &repo, Mode::InPlace, "none") };
+    assert!(matches!(refused(laptop.call(&child).await), Error::Conflict { .. }));
 
     let remove = WorkspaceRemove { workspace: doomed.clone() };
     assert!(matches!(refused(laptop.call(&remove).await), Error::Conflict { .. }));
@@ -137,7 +197,6 @@ async fn a_workspace_renames_and_recolors_in_place_and_goes_with_its_tasks_once_
     let snapshot = laptop.call(&SessionSync { since_rev: None }).await.expect("sync");
     assert!(snapshot.workspaces.iter().all(|workspace| workspace.id != doomed));
     assert!(snapshot.tasks.iter().all(|task| task.id != id));
-    assert_eq!(task(&laptop, &child).await.parent, None);
     assert!(!Path::new(&view.directory).exists());
     assert_eq!(git(&repo, &["branch", "--list", "task/strict-serde"]), "task/strict-serde");
 }
@@ -146,7 +205,7 @@ async fn a_workspace_renames_and_recolors_in_place_and_goes_with_its_tasks_once_
 async fn only_an_ended_task_archives_and_a_move_unarchives_it() {
     let (dir, running) = server().await;
     let laptop = connect(&running.socket, "laptop").await;
-    let id = create(&laptop, &workspace(&laptop, dir.path()).await, CheckoutKind::Root, "none").await;
+    let id = create(&laptop, &workspace(&laptop, dir.path()).await, Mode::InPlace, "none").await;
     let archive = TaskArchive { task: id.clone() };
     assert!(matches!(refused(laptop.call(&archive).await), Error::Conflict { .. }));
     let empty = TaskRename { task: id.clone(), title: "".into() };
@@ -160,7 +219,7 @@ async fn only_an_ended_task_archives_and_a_move_unarchives_it() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_task_nests_under_another_task_of_its_workspace_outside_its_own_subtree() {
+async fn a_task_nests_in_its_workspace_outside_its_own_subtree_and_refiles_with_its_subtasks() {
     let (dir, running) = server().await;
     let laptop = connect(&running.socket, "laptop").await;
     let desk = connect(&running.socket, "desk").await;
@@ -171,7 +230,7 @@ async fn a_task_nests_under_another_task_of_its_workspace_outside_its_own_subtre
     let dotfiles = laptop.call(&dotfiles).await.expect("workspace.add").workspace;
     let make = async |workspace: &WorkspaceId, parent: Option<&TaskId>, state| {
         let create =
-            TaskCreate { parent: parent.cloned(), state, ..task_create(workspace, CheckoutKind::Root, "none") };
+            TaskCreate { parent: parent.cloned(), state, ..task_create(workspace, dir.path(), Mode::InPlace, "none") };
         laptop.call(&create).await.expect("task.create").task
     };
     let root = make(&octopus, None, TaskState::Pinned).await;
@@ -197,5 +256,17 @@ async fn a_task_nests_under_another_task_of_its_workspace_outside_its_own_subtre
     assert!(matches!(&push.event, Event::TaskUpdated { task } if task.id == child && push.rev == rev), "{push:?}");
 
     laptop.call(&set(&child, None)).await.expect("task.set_parent");
-    assert_eq!(task(&laptop, &child).await.parent, None);
+    let before = task(&laptop, &child).await;
+    assert_eq!(before.parent, None);
+
+    let refile =
+        |task: &TaskId, workspace: &WorkspaceId| TaskSetWorkspace { task: task.clone(), workspace: workspace.clone() };
+    assert!(matches!(refused(laptop.call(&refile(&grandchild, &dotfiles)).await), Error::Conflict { .. }));
+    let nowhere = WorkspaceId("wsp_missing".into());
+    assert!(matches!(refused(laptop.call(&refile(&child, &nowhere)).await), Error::NotFound { .. }));
+    let rev = laptop.call(&refile(&child, &dotfiles)).await.expect("task.set_workspace").rev;
+    let (moved, below) = (task(&laptop, &child).await, task(&laptop, &grandchild).await);
+    assert_eq!((&moved.workspace, &moved.folder, &moved.directory), (&dotfiles, &before.folder, &before.directory));
+    assert_eq!((&below.workspace, below.parent.as_ref(), below.rev), (&dotfiles, Some(&child), rev));
+    assert_eq!(task(&laptop, &root).await.workspace, octopus);
 }

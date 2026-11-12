@@ -94,7 +94,7 @@ pub(crate) enum Outside {
     Open,
 }
 
-/// Acts on a checkout entry through this machine's own apps, which reach it only when its server runs here.
+/// Acts on an entry of a task's directory through this machine's own apps, which reach it only when its server runs here.
 #[tauri::command]
 pub(crate) fn file_outside(hub: Hubbed<'_>, at: TaskRef, path: String, how: Outside) -> Result<(), String> {
     if hub.is_another_machine(&at.server) {
@@ -102,7 +102,7 @@ pub(crate) fn file_outside(hub: Hubbed<'_>, at: TaskRef, path: String, how: Outs
     }
     let relative = Path::new(&path);
     if relative.components().any(|component| !matches!(component, Component::Normal(_) | Component::CurDir)) {
-        return Err(format!("{path} is not a path inside the checkout"));
+        return Err(format!("{path} is not a path inside the task's directory"));
     }
     let entry = Path::new(&hub.task(&at)?.directory).join(relative);
     match how {

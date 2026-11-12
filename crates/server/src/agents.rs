@@ -1,13 +1,14 @@
 //! Each task's agent: which harness runs it, when it starts, the status it reports and when it is reclaimed.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use octopus_proto::Error;
 use octopus_proto::Event;
-use octopus_proto::ops::{AgentReport, HarnessSet, Revised, TaskFocus};
-use octopus_proto::types::{AGENT_PANEL, AgentStatus, Hooks, PtyId, TaskId};
+use octopus_proto::ops::{HarnessSet, Revised, TaskFocus};
+use octopus_proto::types::{AGENT_PANEL, AgentStatus, PtyId, TaskId};
 
+use crate::program_status::ProgramStatus;
 use crate::store::{Harness, PanelRow, TaskRow};
 use crate::terminals::Terminal;
 use crate::{Server, State, harness, lock, login, now, report};
@@ -75,43 +76,71 @@ impl Server {
         if harness::names_session(&op.resume) && !harness::names_session(&op.start) {
             return Err(Error::invalid(format!("resume names {} and start does not", harness::SESSION)));
         }
-        let harness =
-            Harness { argv: op.argv, start: op.start, resume: op.resume, install: op.install, hooks: op.hooks };
+        let harness = Harness { argv: op.argv, start: op.start, resume: op.resume, install: op.install };
         let mut state = lock(&self.state);
         let rev = state.store.set_harness(&op.id, &harness)?;
         self.publish(&state, rev, Event::HarnessUpdated { harness: op.id });
         Ok(Revised { rev })
     }
 
-    pub(crate) fn agent_report(&self, op: AgentReport) -> Result<Revised, Error> {
-        let mut state = lock(&self.state);
-        let mut row = state.store.task(&op.task)?;
-        if state.store.harness(&row.harness)?.is_none_or(|harness| harness.hooks == Hooks::None) {
-            return Err(Error::conflict(format!("harness {} declares no hooks", row.harness)));
+    /// The agent in `terminal`, which shows idle until its program reports otherwise.
+    pub(crate) fn spawned_agent(&self, task: &TaskId, terminal: Arc<Terminal>) -> AgentSlot {
+        if terminal.running() {
+            self.follow_agent(task.clone(), Arc::clone(&terminal));
         }
-        match state.agents.get_mut(&row.id) {
-            Some(AgentSlot::Spawned { terminal, status, since }) if terminal.running() => {
-                if *status != op.status {
-                    (*status, *since) = (op.status, now());
-                }
-            }
-            _ => return Err(Error::conflict(format!("the agent of {} is not running", row.id))),
-        }
-        row.session.started |= op.status == AgentStatus::Working;
-        self.save_and_publish(&mut state, &mut row)
+        AgentSlot::Spawned { terminal, status: AgentStatus::Idle, since: now() }
     }
 
-    /// Starts the agent of a live task whose agent is not running. The login shell runs outside the state lock, so a
-    /// slow profile stalls no other op; the task is read again after it, in case another focus or a move landed
-    /// meanwhile.
+    /// Follows what the agent in `terminal` reports it is doing until it exits.
+    fn follow_agent(&self, task: TaskId, terminal: Arc<Terminal>) {
+        let server = Weak::clone(&self.me);
+        std::thread::spawn(move || {
+            let statuses = match terminal.statuses() {
+                Ok(statuses) => statuses,
+                Err(Error::NotFound { .. }) => return,
+                Err(error) => return report!("follow the status of the agent of {task}: {error}"),
+            };
+            for status in statuses {
+                let Some(server) = server.upgrade() else { return };
+                server.agent_reported(&task, &terminal.id, status);
+            }
+        });
+    }
+
+    /// Shows what the agent reported, and marks its session created by any report a turn makes: every state but
+    /// `idle`, which a program also reports at start, and `clear`.
+    fn agent_reported(&self, task: &TaskId, id: &PtyId, reported: ProgramStatus) {
+        let shown = agent_status(reported);
+        let mut state = lock(&self.state);
+        let Some(AgentSlot::Spawned { terminal, status, since }) = state.agents.get_mut(task) else { return };
+        if terminal.id != *id {
+            return;
+        }
+        let moved = *status != shown;
+        if moved {
+            (*status, *since) = (shown, now());
+        }
+        let saved = state.store.task(task).and_then(|mut row| {
+            let turned = !matches!(reported, ProgramStatus::Idle | ProgramStatus::Clear);
+            let created = !row.session.started && turned;
+            row.session.started |= created;
+            if moved || created { self.save_and_publish(&mut state, &mut row).map(drop) } else { Ok(()) }
+        });
+        if let Err(error) = saved {
+            report!("publish what the agent of {task} is doing: {error}");
+        }
+    }
+
+    /// Starts the agent of a live task whose agent is not running, in the task's directory once it is there. The login
+    /// shell runs outside the state lock, so a slow profile stalls no other op; the task is read again after it, in
+    /// case another focus or a move landed meanwhile.
     pub(crate) fn task_focus(&self, op: TaskFocus) -> Result<Revised, Error> {
         let (directory, harness) = {
-            let mut state = lock(&self.state);
-            let row = state.store.task(&op.task)?;
+            let (mut state, row) = self.ready_task(&op.task, |row| row.state.is_live())?;
             if !row.state.is_live() {
                 return Ok(Revised { rev: row.rev });
             }
-            self.watch_checkout(&mut state, &row)?;
+            self.watch_directory(&mut state, &row)?;
             if state.agent_running(&row.id) {
                 return Ok(Revised { rev: row.rev });
             }
@@ -151,14 +180,12 @@ impl Server {
         let session_args = if row.session.started { &harness.resume } else { &harness.start };
         let argv = std::iter::once(program.to_string_lossy().into_owned())
             .chain(args.iter().cloned())
-            .chain(harness::args(harness.hooks, &self.octopus))
             .chain(focus_args)
             .chain(session_args.iter().map(|arg| arg.replace(harness::SESSION, &row.session.id.0)))
             .collect();
         let panel = PanelRow { id: PtyId::random(), task: row.id.clone(), name: AGENT_PANEL.to_string() };
         let terminal = self.spawn_panel(state, &panel, argv, &directory, env)?;
-        row.session.started |= harness.hooks == Hooks::None && harness::names_session(&harness.start);
-        Ok(AgentSlot::Spawned { terminal, status: AgentStatus::Idle, since: now() })
+        Ok(self.spawned_agent(&row.id, terminal))
     }
 
     /// Stops every agent that has been idle, silent and unshown for `AGENT_RECLAIM_MS` at `now` and runs no detached
@@ -174,7 +201,7 @@ impl Server {
         for (task, terminal) in candidates {
             let activity = match terminal.activity() {
                 Ok(activity) => activity,
-                Err(error) if terminal.running() && !matches!(error, Error::InvalidArgs { .. }) => {
+                Err(error) if terminal.running() => {
                     report!("read the activity of the agent of {task}: {error}");
                     continue;
                 }
@@ -197,5 +224,14 @@ impl Server {
             }
         }
         reclaimed
+    }
+}
+
+/// An agent works while its program works, waits while its program is blocked on the user, and is idle otherwise.
+fn agent_status(status: ProgramStatus) -> AgentStatus {
+    match status {
+        ProgramStatus::Working => AgentStatus::Working,
+        ProgramStatus::Blocked => AgentStatus::Waiting,
+        ProgramStatus::Done | ProgramStatus::Idle | ProgramStatus::Error | ProgramStatus::Clear => AgentStatus::Idle,
     }
 }

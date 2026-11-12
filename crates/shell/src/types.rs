@@ -1,12 +1,12 @@
 //! The TypeScript the UI compiles against, rendered from the Rust types and constants that cross the IPC boundary.
 
-use octopus_proto::ops::{Entry, EntryKind, Match, Offer, PairedAccount, PairedClient};
+use octopus_proto::ops::{Entry, EntryKind, Folder, Match, Offer, PairedAccount, PairedClient};
 use octopus_proto::settings::{AgentFlags, Current, Setting};
 use octopus_proto::term::HISTORY_LINES;
 use octopus_proto::types::{
-    AGENT_PANEL, Agent, AgentStatus, BACKGROUND_BROWSER_PANEL, BrowserId, BrowserPanel, Checkout, CheckoutKind,
-    FRESH_SESSION, HOLDER_GRACE_MS, Hue, LockHolder, NEW_BROWSER_PANEL, Panel, PtyId, Session, SessionId, Swatch, Task,
-    TaskId, TaskState, Tone, WorkspaceId,
+    AGENT_PANEL, Agent, AgentStatus, BACKGROUND_BROWSER_PANEL, BrowserId, BrowserPanel, FRESH_SESSION, HOLDER_GRACE_MS,
+    Hue, LockHolder, Mode, NEW_BROWSER_PANEL, Panel, PtyId, Session, SessionId, Swatch, Task, TaskId, TaskState, Tone,
+    WorkspaceId,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -52,8 +52,7 @@ pub fn render() -> String {
         SessionId,
         Session,
         TaskState,
-        Checkout,
-        CheckoutKind,
+        Mode,
         AgentStatus,
         Hue,
         Tone,
@@ -66,6 +65,7 @@ pub fn render() -> String {
         EntryKind,
         Entry,
         Match,
+        Folder,
         Offer,
         ShownOffer,
         PairedClient,
@@ -110,7 +110,7 @@ pub fn render() -> String {
     let constants = [
         constant("TASK_STATES", &TaskState::ALL),
         constant("LIVE_STATES", &TaskState::LIVE),
-        constant("CHECKOUTS", &CheckoutKind::ALL),
+        constant("MODES", &Mode::ALL),
         constant("HUES", &Hue::ALL),
         constant("TONES", &Tone::ALL),
         constant("ZOOMS", &ZOOMS),

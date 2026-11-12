@@ -5,7 +5,7 @@ Run your coding agents in parallel, on your own machines, from your laptop or yo
 <img src="https://github.com/zabealbe/octopus/raw/assets/readme/hero.png" alt="One task on three devices: the tablet holds the agent's terminal and fills its screen, the laptop shows the same terminal read-only beside the changed file with Take over, and the phone lists the live tasks with each agent's status" width="100%">
 
 - **Agents in parallel.** Every task runs its own Claude Code agent in its own terminal. Tasks nest into subtasks and group by workspace, and a glance at the sidebar or the Tasks board shows which agents are working and which wait on you.
-- **A checkout per task.** A task works in its own git worktree, in a worktree that also clones your ignored files such as `.env` and `node_modules` (on a file system that clones files, like APFS), or in the repository itself.
+- **Any folder, three ways.** A task works in any folder on its server: in place, in a git worktree of its own, or in a worktree that also clones your ignored files such as `.env` and `node_modules` (on a file system that clones files, like APFS).
 - **Files, browser and terminals in one window.** Each task has an editor, a browser and terminal panels beside its agent.
 - **One terminal, many screens.** Open the same task on your laptop and your phone. A visible lock shows which device types into the terminal, and any other takes over with one tap.
 - **A phone app for iOS and Android.** Pair it with your servers by scanning a QR code, then check on agents and answer them from anywhere.

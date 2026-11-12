@@ -34,7 +34,7 @@ id!(BrowserId, "brw_");
 
 arg_shape!(Shape::Workspace => WorkspaceId);
 arg_shape!(Shape::Text => TaskId, BrowserId, BrowserTarget, SessionId);
-arg_shape!(choice(&Self::ALL) => TaskState, CheckoutKind, AgentStatus, Hooks);
+arg_shape!(choice(&Self::ALL) => TaskState, Mode);
 
 /// The browser panel `browser.open` shows a page in: `new`, `background`, or an existing panel's id.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,44 +168,18 @@ impl TaskState {
     }
 }
 
-/// Where a task's files live: the workspace root, or a worktree of its own on its branch, which a copy starts with
-/// the workspace root's ignored files cloned in.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Checkout {
-    Root,
-    Worktree { branch: String },
-    Copy { branch: String },
-}
-
-impl Checkout {
-    pub fn kind(&self) -> CheckoutKind {
-        match self {
-            Self::Root => CheckoutKind::Root,
-            Self::Worktree { .. } => CheckoutKind::Worktree,
-            Self::Copy { .. } => CheckoutKind::Copy,
-        }
-    }
-
-    pub fn branch(&self) -> Option<&str> {
-        match self {
-            Self::Root => None,
-            Self::Worktree { branch } | Self::Copy { branch } => Some(branch),
-        }
-    }
-}
-
-/// The checkout `task.create` gives a task; the server names a worktree's branch.
+/// Where a task runs: in its folder, or in the same folder inside a worktree of its own on a branch of its own, which a
+/// copy starts with the repo's ignored files cloned in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
-pub enum CheckoutKind {
-    Root,
+pub enum Mode {
+    InPlace,
     Worktree,
     Copy,
 }
 
-impl CheckoutKind {
-    pub const ALL: [Self; 3] = [Self::Root, Self::Worktree, Self::Copy];
+impl Mode {
+    pub const ALL: [Self; 3] = [Self::InPlace, Self::Worktree, Self::Copy];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -379,22 +353,6 @@ pub enum AgentStatus {
     Idle,
 }
 
-impl AgentStatus {
-    pub const ALL: [Self; 3] = [Self::Working, Self::Waiting, Self::Idle];
-}
-
-/// The hooks the server installs in a harness's agent, through which the agent reports its status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Hooks {
-    None,
-    ClaudeCode,
-}
-
-impl Hooks {
-    pub const ALL: [Self; 2] = [Self::None, Self::ClaudeCode];
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Agent {
@@ -409,13 +367,18 @@ pub enum Agent {
 pub struct Task {
     pub id: TaskId,
     pub workspace: WorkspaceId,
+    /// The directory on the server's machine the task works in, fixed for its life.
+    pub folder: String,
+    pub mode: Mode,
+    /// Where the task runs: the folder, or the same folder inside the task's worktree.
+    pub directory: String,
+    /// The worktree's branch, or null for an `in_place` task.
+    pub branch: Option<String>,
     pub parent: Option<TaskId>,
     pub title: String,
     pub state: TaskState,
-    pub checkout: Checkout,
     pub harness: String,
     pub session: Session,
-    pub directory: String,
     pub ended_at: Option<i64>,
     pub archived_at: Option<i64>,
     pub rev: u64,
@@ -454,8 +417,8 @@ pub enum Stream {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ReadDir {
-    /// A task's checkout.
-    Checkout(TaskId),
+    /// A task's directory.
+    Task(TaskId),
     /// A file page's root: the directory, an absolute path on the server's machine, of the file the page loads from.
     Page(String),
 }

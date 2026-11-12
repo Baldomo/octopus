@@ -34,13 +34,24 @@ export function TextField(props: {
   );
 }
 
-export function Segments<T extends string>(props: { options: readonly T[]; value: T; choose: (value: T) => void }) {
+export function Segments<T extends string>(props: {
+  options: readonly T[];
+  value: T;
+  choose: (value: T) => void;
+  label?: (value: T) => string;
+  off?: (value: T) => boolean;
+}) {
   return (
     <div class="seg">
       <For each={props.options}>
         {(option) => (
-          <button type="button" classList={{ on: props.value === option }} onClick={() => props.choose(option)}>
-            {option}
+          <button
+            type="button"
+            classList={{ on: props.value === option }}
+            disabled={props.off?.(option)}
+            onClick={() => props.choose(option)}
+          >
+            {props.label?.(option) ?? option}
           </button>
         )}
       </For>

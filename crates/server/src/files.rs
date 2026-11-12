@@ -1,5 +1,5 @@
-//! A task's files as a client reaches them, kept inside the checkout no path leaves, and the files a file page reads
-//! under its root.
+//! A task's files as a client reaches them, kept inside the task's directory no path leaves, and the files a file page
+//! reads under its root.
 
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
@@ -22,7 +22,7 @@ fn io(path: &Path, error: std::io::Error) -> Error {
     }
 }
 
-/// A checkout-relative path as the wire spells it, `/`-separated on every platform.
+/// A path relative to a task's directory as the wire spells it, `/`-separated on every platform.
 pub(crate) fn wire_path(relative: &Path) -> String {
     let components: Vec<_> = relative.components().map(|component| component.as_os_str().to_string_lossy()).collect();
     components.join("/")
@@ -36,21 +36,21 @@ fn canonical(path: &Path) -> Result<PathBuf, Error> {
     path.canonicalize().map_err(|error| io(path, error))
 }
 
-/// The entry `path` names, every directory above it resolving inside the checkout, so no symlink on the way leads
+/// The entry `path` names, every directory above it resolving inside the directory, so no symlink on the way leads
 /// out; the entry itself may be a symlink, which the caller acts on as a link.
-fn entry(checkout: &Path, path: &str) -> Result<PathBuf, Error> {
+fn entry(dir: &Path, path: &str) -> Result<PathBuf, Error> {
     let relative = Path::new(path);
     if relative.components().any(|component| !matches!(component, Component::Normal(_) | Component::CurDir)) {
-        return Err(outside(path, checkout));
+        return Err(outside(path, dir));
     }
     let inside: PathBuf = relative.components().filter(|component| matches!(component, Component::Normal(_))).collect();
     if inside.as_os_str().is_empty() {
-        return Ok(checkout.to_path_buf());
+        return Ok(dir.to_path_buf());
     }
-    let joined = checkout.join(inside);
-    let parent = joined.parent().expect("a path inside the checkout has a parent");
-    if !resolves_within(nearest(parent), &canonical(checkout)?) {
-        return Err(outside(path, checkout));
+    let joined = dir.join(inside);
+    let parent = joined.parent().expect("a path inside the directory has a parent");
+    if !resolves_within(nearest(parent), &canonical(dir)?) {
+        return Err(outside(path, dir));
     }
     Ok(joined)
 }
@@ -65,28 +65,28 @@ fn resolves_within(path: &Path, root: &Path) -> bool {
     path.canonicalize().is_ok_and(|real| real.starts_with(root))
 }
 
-/// The entry `path` names, which resolves inside the checkout even through a symlink.
-fn followed(checkout: &Path, path: &str) -> Result<PathBuf, Error> {
-    let joined = entry(checkout, path)?;
-    if joined.symlink_metadata().is_ok() && !resolves_within(&joined, &canonical(checkout)?) {
-        return Err(outside(path, checkout));
+/// The entry `path` names, which resolves inside the directory even through a symlink.
+fn followed(dir: &Path, path: &str) -> Result<PathBuf, Error> {
+    let joined = entry(dir, path)?;
+    if joined.symlink_metadata().is_ok() && !resolves_within(&joined, &canonical(dir)?) {
+        return Err(outside(path, dir));
     }
     Ok(joined)
 }
 
-/// An entry the checkout holds, never the checkout itself.
-fn inner(checkout: &Path, path: &str) -> Result<PathBuf, Error> {
+/// An entry the directory holds, never the task's directory itself.
+fn inner(dir: &Path, path: &str) -> Result<PathBuf, Error> {
     if !Path::new(path).components().any(|component| matches!(component, Component::Normal(_))) {
-        return Err(Error::invalid("the checkout itself cannot be moved, copied or deleted"));
+        return Err(Error::invalid("the task's directory itself cannot be moved, copied or deleted"));
     }
-    let joined = entry(checkout, path)?;
+    let joined = entry(dir, path)?;
     joined.symlink_metadata().map_err(|error| io(&joined, error))?;
     Ok(joined)
 }
 
 /// A path no entry holds yet.
-fn vacant(checkout: &Path, path: &str) -> Result<PathBuf, Error> {
-    let joined = entry(checkout, path)?;
+fn vacant(dir: &Path, path: &str) -> Result<PathBuf, Error> {
+    let joined = entry(dir, path)?;
     if joined.symlink_metadata().is_ok() {
         return Err(Error::conflict(format!("{path} already exists")));
     }
@@ -95,13 +95,13 @@ fn vacant(checkout: &Path, path: &str) -> Result<PathBuf, Error> {
 
 /// Creates the directories above `target` that are missing.
 fn make_parents(target: &Path) -> Result<&Path, Error> {
-    let parent = target.parent().expect("a path inside the checkout has a parent");
+    let parent = target.parent().expect("a path inside the directory has a parent");
     std::fs::create_dir_all(parent).map_err(|error| io(parent, error))?;
     Ok(parent)
 }
 
-pub fn list(checkout: &Path, path: &str) -> Result<Vec<Entry>, Error> {
-    let directory = followed(checkout, path)?;
+pub fn list(dir: &Path, path: &str) -> Result<Vec<Entry>, Error> {
+    let directory = followed(dir, path)?;
     let mut entries = Vec::new();
     for entry in std::fs::read_dir(&directory).map_err(|error| io(&directory, error))? {
         let entry = entry.map_err(|error| io(&directory, error))?;
@@ -113,11 +113,11 @@ pub fn list(checkout: &Path, path: &str) -> Result<Vec<Entry>, Error> {
     Ok(entries)
 }
 
-/// A directory of the checkout, for a shell to start in.
-pub fn directory(checkout: &Path, path: &str) -> Result<PathBuf, Error> {
-    let directory = followed(checkout, path)?;
+/// A folder of the task's directory, for a shell to start in.
+pub fn directory(dir: &Path, path: &str) -> Result<PathBuf, Error> {
+    let directory = followed(dir, path)?;
     if !directory.is_dir() {
-        return Err(Error::invalid(format!("{path} is not a directory of the checkout")));
+        return Err(Error::invalid(format!("{path} is not a folder of the task's directory")));
     }
     Ok(directory)
 }
@@ -136,15 +136,15 @@ pub fn open_read(dir: &Path, path: &str, start: u64, len: u64) -> Result<(u64, T
     Ok((size, tokio::fs::File::from_std(opened).take(len.min(size.saturating_sub(start)))))
 }
 
-pub fn write(checkout: &Path, path: &str, content: &[u8]) -> Result<u64, Error> {
-    let file = followed(checkout, path)?;
+pub fn write(dir: &Path, path: &str, content: &[u8]) -> Result<u64, Error> {
+    let file = followed(dir, path)?;
     make_parents(&file)?;
     std::fs::write(&file, content).map_err(|error| io(&file, error))?;
     Ok(content.len() as u64)
 }
 
-pub fn create(checkout: &Path, path: &str, kind: EntryKind) -> Result<(), Error> {
-    let target = vacant(checkout, path)?;
+pub fn create(dir: &Path, path: &str, kind: EntryKind) -> Result<(), Error> {
+    let target = vacant(dir, path)?;
     make_parents(&target)?;
     let made = match kind {
         EntryKind::File => std::fs::File::create_new(&target).map(drop),
@@ -160,8 +160,8 @@ pub struct Upload {
     target: PathBuf,
 }
 
-pub fn upload(checkout: &Path, path: &str, bytes: u64) -> Result<Upload, Error> {
-    let target = vacant(checkout, path)?;
+pub fn upload(dir: &Path, path: &str, bytes: u64) -> Result<Upload, Error> {
+    let target = vacant(dir, path)?;
     let parent = make_parents(&target)?;
     let gathering = tempfile::Builder::new()
         .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o644))
@@ -211,17 +211,17 @@ fn same_entry(a: &Path, b: &Path) -> bool {
     }
 }
 
-pub fn rename(checkout: &Path, from: &str, to: &str) -> Result<(), Error> {
-    let source = inner(checkout, from)?;
-    let target = entry(checkout, to)?;
+pub fn rename(dir: &Path, from: &str, to: &str) -> Result<(), Error> {
+    let source = inner(dir, from)?;
+    let target = entry(dir, to)?;
     if !same_entry(&source, &target) {
         into_itself(&source, &target)?;
-        make_parents(&vacant(checkout, to)?)?;
+        make_parents(&vacant(dir, to)?)?;
     }
     std::fs::rename(&source, &target).map_err(|error| io(&source, error))
 }
 
-/// A symlink copies as the link, so a copy never reads past the checkout.
+/// A symlink copies as the link, so a copy never reads past the directory.
 fn copy_entry(from: &Path, to: &Path) -> Result<(), Error> {
     let kind = from.symlink_metadata().map_err(|error| io(from, error))?.file_type();
     if kind.is_symlink() {
@@ -239,16 +239,16 @@ fn copy_entry(from: &Path, to: &Path) -> Result<(), Error> {
     }
 }
 
-pub fn copy(checkout: &Path, from: &str, to: &str) -> Result<(), Error> {
-    let source = inner(checkout, from)?;
-    let target = vacant(checkout, to)?;
+pub fn copy(dir: &Path, from: &str, to: &str) -> Result<(), Error> {
+    let source = inner(dir, from)?;
+    let target = vacant(dir, to)?;
     into_itself(&source, &target)?;
     make_parents(&target)?;
     copy_entry(&source, &target)
 }
 
-pub fn delete(checkout: &Path, path: &str, trash: bool) -> Result<(), Error> {
-    let target = inner(checkout, path)?;
+pub fn delete(dir: &Path, path: &str, trash: bool) -> Result<(), Error> {
+    let target = inner(dir, path)?;
     if trash {
         #[cfg_attr(not(target_os = "macos"), expect(unused_mut))]
         let mut context = trash::TrashContext::default();
@@ -268,16 +268,16 @@ pub fn delete(checkout: &Path, path: &str, trash: bool) -> Result<(), Error> {
 }
 
 /// Skips files git ignores.
-pub(crate) fn search_literal(checkout: &Path, pattern: &str) -> Vec<Match> {
+pub(crate) fn search_literal(dir: &Path, pattern: &str) -> Vec<Match> {
     let mut matches = Vec::new();
-    for entry in ignore::WalkBuilder::new(checkout).build().flatten() {
+    for entry in ignore::WalkBuilder::new(dir).build().flatten() {
         if !entry.file_type().is_some_and(|kind| kind.is_file()) {
             continue;
         }
         let Ok(file) = std::fs::File::open(entry.path()) else {
             continue;
         };
-        let relative = wire_path(entry.path().strip_prefix(checkout).expect("the walker yields paths under its root"));
+        let relative = wire_path(entry.path().strip_prefix(dir).expect("the walker yields paths under its root"));
         for (index, line) in BufReader::new(file).lines().map_while(Result::ok).enumerate() {
             if line.contains(pattern) {
                 matches.push(Match { path: relative.clone(), line: index as u64 + 1, text: line });
@@ -291,27 +291,27 @@ pub(crate) fn search_literal(checkout: &Path, pattern: &str) -> Vec<Match> {
 }
 
 impl Server {
-    pub(crate) fn checkout_dir(&self, task: &TaskId) -> Result<PathBuf, Error> {
+    pub(crate) fn task_directory(&self, task: &TaskId) -> Result<PathBuf, Error> {
         Ok(PathBuf::from(lock(&self.state).store.task(task)?.directory))
     }
 
-    /// The checkout a client lists, watched from then on while live, so the tree of a task no focus reached still follows
-    /// it.
-    pub(crate) fn listed_checkout(&self, task: &TaskId) -> Result<PathBuf, Error> {
+    /// The task's directory a client lists, watched from then on while live, so the tree of a task no focus reached
+    /// still follows it.
+    pub(crate) fn listed_directory(&self, task: &TaskId) -> Result<PathBuf, Error> {
         let mut state = lock(&self.state);
         let row = state.store.task(task)?;
         if row.state.is_live()
-            && let Err(error) = self.watch_checkout(&mut state, &row)
+            && let Err(error) = self.watch_directory(&mut state, &row)
         {
-            report!("watch the checkout of {task}: {error}");
+            report!("watch the directory of {task}: {error}");
         }
         Ok(PathBuf::from(row.directory))
     }
 
-    /// The directory a read's paths are relative to: a task's checkout, or a file page's root.
+    /// The directory a read's paths are relative to: a task's directory, or a file page's root.
     pub(crate) fn read_dir(&self, dir: &ReadDir) -> Result<PathBuf, Error> {
         match dir {
-            ReadDir::Checkout(task) => self.checkout_dir(task),
+            ReadDir::Task(task) => self.task_directory(task),
             ReadDir::Page(root) if Path::new(root).is_absolute() => Ok(PathBuf::from(root)),
             ReadDir::Page(root) => Err(Error::invalid(format!("{root} is no absolute directory"))),
         }

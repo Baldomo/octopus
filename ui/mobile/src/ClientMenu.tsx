@@ -305,7 +305,7 @@ export function ServerMenu(props: { name: string }) {
       refetch();
     }, report);
   const rename = (name: string) =>
-    backend.serverRename(props.name, name).then(() => showInSheet({ is: "server", name }, "here"));
+    backend.serverRename(props.name, name).then(() => showInSheet({ is: "server", name }, "across"));
   const forget = () =>
     backend.serverForget(props.name).then(() => {
       feel("success");

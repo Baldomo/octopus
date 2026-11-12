@@ -111,7 +111,7 @@ function Pdf(props: { url: string; scroller: () => HTMLElement }) {
   );
 }
 
-/** A file that shows with no code: rendered from the checkout, or as a line naming it with its size. A change to the
+/** A file that shows with no code: rendered from the task's directory, or as a line naming it with its size. A change to the
  * file comes as a new `view`, which mounts this anew. */
 export function Media(props: { files: TaskFiles; path: string; view: MediaView }) {
   let view!: HTMLDivElement;

@@ -13,11 +13,11 @@ Open the window onto every server in this client's list.
 
 ## `octopus workspace add`
 
-Add a workspace: a directory this server runs tasks in.
+Add a workspace: a named place this server files tasks in.
 
 - `--server <server>`: The paired server's name.
 - `--name <name>`: The workspace's name, unique on its server.
-- `--root <root>`: The directory on the server's machine, as an absolute path.
+- `--root <root>`: Where new tasks' folders start: a directory on the server's machine, as an absolute path.
 - `--color auto|red-mist|orange-mist|amber-mist|lime-mist|green-mist|mint-mist|teal-mist|sky-mist|blue-mist|indigo-mist|violet-mist|pink-mist|red-soft|orange-soft|amber-soft|lime-soft|green-soft|mint-soft|teal-soft|sky-soft|blue-soft|indigo-soft|violet-soft|pink-soft|red-vivid|orange-vivid|amber-vivid|lime-vivid|green-vivid|mint-vivid|teal-vivid|sky-vivid|blue-vivid|indigo-vivid|violet-vivid|pink-vivid|red-deep|orange-deep|amber-deep|lime-deep|green-deep|mint-deep|teal-deep|sky-deep|blue-deep|indigo-deep|violet-deep|pink-deep`: The workspace's color: auto, or a <hue>-<tone> of the matrix.
 
 ## `octopus workspace list`
@@ -49,6 +49,13 @@ Remove a workspace with no live task, with every task in it; their worktrees go 
 - `--server <server>`: The paired server's name.
 - `--workspace <workspace>`: The workspace, by name.
 
+## `octopus folder get`
+
+Show a folder on the server's machine, for a new task to pick: the git repo and branch it sits in and the folders inside it.
+
+- `--server <server>`: The paired server's name.
+- `--folder <folder>`: The folder, as an absolute path.
+
 ## `octopus harness set`
 
 Declare how a harness starts its agent.
@@ -59,26 +66,18 @@ Declare how a harness starts its agent.
 - `--start <start>`: The args appended to argv on a session's first start, with {session} for the session id, e.g. ["--session-id","{session}"].
 - `--resume <resume>`: The args appended to argv on every later start, with {session} for the session id, e.g. ["--resume","{session}"].
 - `--install <install>`: The command that installs the agent, shown when it is missing.
-- `--hooks none|claude-code`: The hooks the server installs in the agent, through which it reports its status with `agent report`.
-
-## `octopus agent report`
-
-Report what a task's agent is doing; harness hooks call this.
-
-- `--server <server>`: The paired server's name.
-- `--task <task>`: The task's id.
-- `--status working|waiting|idle`: The agent's status.
 
 ## `octopus task create`
 
-Create a task.
+Create a task, which works in its folder for life.
 
 - `--server <server>`: The paired server's name.
-- `--workspace <workspace>`: The workspace the task works in, by name.
+- `--workspace <workspace>`: The workspace the task is filed in, by name.
+- `--folder <folder>`: The directory on the server's machine the task works in, as an absolute path.
+- `--mode in_place|worktree|copy`: Where the task runs: in_place in the folder, or worktree or copy in the same folder inside a worktree of the folder's git repo, a copy with the repo's ignored files cloned in.
 - `--title <title>`: The task's title.
-- `--parent <parent>`: The parent task's id; none for a root task.
+- `--parent <parent>`: The parent task's id, a task of the same workspace; none for a root task.
 - `--state pinned|temporary|completed|cancelled`: The task's state.
-- `--checkout root|worktree|copy`: Where the task's files live.
 - `--harness <harness>`: The harness that runs the task's agent.
 - `--session <session>`: An existing session's id for the agent to resume; fresh for a fresh session.
 
@@ -97,6 +96,14 @@ Nest a task under another task of its workspace, or make it a root task; it keep
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
 - `--parent <parent>`: The parent task's id; none for a root task.
+
+## `octopus task set-workspace`
+
+File a root task and all its subtasks in another workspace, changing nothing else.
+
+- `--server <server>`: The paired server's name.
+- `--task <task>`: The task's id.
+- `--workspace <workspace>`: The workspace to file it in, by name.
 
 ## `octopus task rename`
 
@@ -127,7 +134,7 @@ Focus a task, starting its agent if it has none.
 
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
-- `--args <args>`: The args an agent this focus starts runs after its harness's argv and hooks, before its start or resume args, e.g. ["--model","opus"]; a running agent keeps the args it started with.
+- `--args <args>`: The args an agent this focus starts runs after its harness's argv, before its start or resume args, e.g. ["--model","opus"]; a running agent keeps the args it started with.
 
 ## `octopus task get`
 
@@ -138,11 +145,11 @@ Print a task.
 
 ## `octopus term open`
 
-Open a shell panel in a live task: the user's login shell, in a directory of the task's checkout.
+Open a shell panel in a live task: the user's login shell, in a folder of the task's directory.
 
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
-- `--directory <directory>`: The directory the shell starts in, relative to the checkout; . for its root.
+- `--path <path>`: The directory the shell starts in, relative to the task's directory; . for the directory itself.
 
 ## `octopus term close`
 
@@ -194,60 +201,60 @@ Stream a terminal panel into this terminal; Ctrl-] detaches.
 
 ## `octopus file list`
 
-List a directory of a task's checkout.
+List a folder of a task's directory.
 
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
-- `--path <path>`: The directory, relative to the checkout; . for its root.
+- `--path <path>`: The directory, relative to the task's directory; . for the directory itself.
 
 ## `octopus file write`
 
-Create a file in a task's checkout, or replace its content.
+Create a file in a task's directory, or replace its content.
 
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
-- `--path <path>`: The file, relative to the checkout.
+- `--path <path>`: The file, relative to the task's directory.
 - `--content <content>`: The file's new content, as text.
 
 ## `octopus file create`
 
-Create an empty file or directory in a task's checkout, with the directories above it; fails conflict when the path exists.
+Create an empty file or directory in a task's directory, with the directories above it; fails conflict when the path exists.
 
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
-- `--path <path>`: The new entry, relative to the checkout.
+- `--path <path>`: The new entry, relative to the task's directory.
 - `--kind file|directory`: What to create.
 
 ## `octopus file move`
 
-Move or rename a file or directory of a task's checkout; fails conflict when the destination exists.
+Move or rename a file or directory of a task's directory; fails conflict when the destination exists.
 
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
-- `--from <from>`: The entry, relative to the checkout.
-- `--to <to>`: Its new path, relative to the checkout.
+- `--from <from>`: The entry, relative to the task's directory.
+- `--to <to>`: Its new path, relative to the task's directory.
 
 ## `octopus file copy`
 
-Copy a file or directory of a task's checkout, a directory with everything in it; fails conflict when the destination exists.
+Copy a file or directory of a task's directory, a directory with everything in it; fails conflict when the destination exists.
 
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
-- `--from <from>`: The entry, relative to the checkout.
-- `--to <to>`: The copy's path, relative to the checkout.
+- `--from <from>`: The entry, relative to the task's directory.
+- `--to <to>`: The copy's path, relative to the task's directory.
 
 ## `octopus file delete`
 
-Delete a file or directory of a task's checkout, a directory with everything in it.
+Delete a file or directory of a task's directory, a directory with everything in it.
 
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
-- `--path <path>`: The entry, relative to the checkout.
+- `--path <path>`: The entry, relative to the task's directory.
 - `--trash true|false`: Whether it goes to the trash of the server's machine rather than being removed for good.
 
 ## `octopus file search`
 
-Find each line of a task's checkout that contains a text.
+Find each line of a task's directory that contains a text.
 
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
@@ -255,19 +262,19 @@ Find each line of a task's checkout that contains a text.
 
 ## `octopus file read`
 
-Write a file of a task's checkout to stdout, byte for byte.
+Write a file of a task's directory to stdout, byte for byte.
 
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
-- `--path <path>`: The file, relative to the checkout.
+- `--path <path>`: The file, relative to the task's directory.
 
 ## `octopus file upload`
 
-Create a file of a task's checkout from stdin, byte for byte; fails conflict when the path exists.
+Create a file of a task's directory from stdin, byte for byte; fails conflict when the path exists.
 
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
-- `--path <path>`: The new file, relative to the checkout.
+- `--path <path>`: The new file, relative to the task's directory.
 
 ## `octopus browser open`
 
@@ -337,7 +344,7 @@ Run this machine's server in the foreground.
 - `--name <name>`: The server's name, which agents in its terminals see as OCTOPUS_SERVER.
 - `--socket <socket>`: The Unix socket clients on this machine connect to.
 - `--store <store>`: The SQLite file the server keeps its state in.
-- `--worktrees <worktrees>`: Where task worktrees live: <worktrees>/<workspace>/<task>.
+- `--worktrees <worktrees>`: Where task worktrees live: <worktrees>/<repo>/<task>.
 - `--terminal-host <terminal-host>`: Socket of the terminal host, the process that keeps this server's terminals running across restarts; started if nothing answers there.
 - `--udp <udp>`: The UDP address clients on other machines reach this server on directly, e.g. 0.0.0.0:7300, which takes IPv6 on the same port too.
 - `--relay <relay>`: The iroh relay this server is homed on, which clients on other machines dial it through: one of n0's, e.g. https://euc1-1.relay.n0.iroh.link./, or one of your own.
@@ -350,7 +357,7 @@ Run the server at every login as a user service (launchd or systemd --user).
 - `--name <name>`: The server's name, which agents in its terminals see as OCTOPUS_SERVER.
 - `--socket <socket>`: The Unix socket clients on this machine connect to.
 - `--store <store>`: The SQLite file the server keeps its state in.
-- `--worktrees <worktrees>`: Where task worktrees live: <worktrees>/<workspace>/<task>.
+- `--worktrees <worktrees>`: Where task worktrees live: <worktrees>/<repo>/<task>.
 - `--terminal-host <terminal-host>`: Socket of the terminal host, the process that keeps this server's terminals running across restarts; started if nothing answers there.
 - `--udp <udp>`: The UDP address clients on other machines reach this server on directly, e.g. 0.0.0.0:7300, which takes IPv6 on the same port too.
 - `--relay <relay>`: The iroh relay this server is homed on, which clients on other machines dial it through: one of n0's, e.g. https://euc1-1.relay.n0.iroh.link./, or one of your own.

@@ -8,13 +8,14 @@ use octopus_proto::Error;
 use octopus_proto::account::{AccountId, Link};
 use octopus_proto::device::PublicKey;
 use octopus_proto::ops::{
-    Entry, EntryKind, FileCopy, FileCreate, FileDelete, FileList, FileMove, FileSearch, FileWrite, Match, Offer,
-    PairedAccount, PairingForget, PairingList, PairingOffer, TaskArchive, TaskCreate, TaskMove, TaskRename,
-    TaskSetParent, TermClaim, TermClose, TermOpen, TermResize, TermTakeLock, WorkspaceAdd, WorkspaceRemove,
+    Entry, EntryKind, FileCopy, FileCreate, FileDelete, FileList, FileMove, FileSearch, FileWrite, Folder, FolderGet,
+    Match, Offer, PairedAccount, PairingForget, PairingList, PairingOffer, TaskArchive, TaskCreate, TaskMove,
+    TaskRename, TaskSetParent, TaskSetWorkspace, TermClaim, TermClose, TermOpen, TermResize, TermTakeLock,
+    WorkspaceAdd, WorkspaceRemove,
 };
 use octopus_proto::pairing::Invite;
 use octopus_proto::settings::Setting;
-use octopus_proto::types::{CheckoutKind, Color, PtyId, SessionStart, Swatch, TaskId, TaskState, WorkspaceId};
+use octopus_proto::types::{Color, Mode, PtyId, SessionStart, Swatch, TaskId, TaskState, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Runtime, State};
@@ -234,16 +235,23 @@ pub async fn task_set_parent(hub: Hubbed<'_>, at: TaskRef, parent: Option<TaskRe
     hub.call(&at.server, &TaskSetParent { task: at.task, parent }).await.map(drop)
 }
 
+/// Files the task with its subtasks in `workspace`, a workspace of the task's own server.
+#[tauri::command]
+pub async fn task_set_workspace(hub: Hubbed<'_>, at: TaskRef, workspace: WorkspaceId) -> Result<(), String> {
+    hub.call(&at.server, &TaskSetWorkspace { task: at.task, workspace }).await.map(drop)
+}
+
 /// Every field of `task.create`, plus the server that creates it.
 #[derive(Debug, Clone, PartialEq, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NewTask {
     pub server: String,
     pub workspace: WorkspaceId,
+    pub folder: String,
+    pub mode: Mode,
     pub title: String,
     pub parent: Option<TaskId>,
     pub state: TaskState,
-    pub checkout: CheckoutKind,
     pub harness: String,
     /// `FRESH_SESSION` for a fresh session, or an existing session's id for the agent to resume.
     #[ts(type = "string")]
@@ -253,10 +261,15 @@ pub(crate) struct NewTask {
 /// Resolves to the created task's key.
 #[tauri::command]
 pub async fn task_create(hub: Hubbed<'_>, task: NewTask) -> Result<String, String> {
-    let NewTask { server, workspace, title, parent, state, checkout, harness, session } = task;
-    let create = TaskCreate { workspace, title, parent, state, checkout, harness, session };
+    let NewTask { server, workspace, folder, mode, title, parent, state, harness, session } = task;
+    let create = TaskCreate { workspace, folder, mode, title, parent, state, harness, session };
     let created = hub.call(&server, &create).await?;
     Ok(TaskRef { server, task: created.task }.key())
+}
+
+#[tauri::command]
+pub async fn folder_get(hub: Hubbed<'_>, server: String, folder: String) -> Result<Folder, String> {
+    hub.call(&server, &FolderGet { folder }).await
 }
 
 #[tauri::command]
@@ -283,8 +296,8 @@ pub fn term_detach(terminals: State<Terminals>, attachment: u64) {
 
 /// Resolves to the id of the shell panel it opens.
 #[tauri::command]
-pub async fn term_open(hub: Hubbed<'_>, at: TaskRef, directory: String) -> Result<PtyId, String> {
-    Ok(hub.call(&at.server, &TermOpen { task: at.task, directory }).await?.panel)
+pub async fn term_open(hub: Hubbed<'_>, at: TaskRef, path: String) -> Result<PtyId, String> {
+    Ok(hub.call(&at.server, &TermOpen { task: at.task, path }).await?.panel)
 }
 
 #[tauri::command]
@@ -320,7 +333,7 @@ pub async fn file_list(hub: Hubbed<'_>, at: TaskRef, path: String) -> Result<Vec
 
 #[tauri::command]
 pub fn file_root_url(served: State<'_, Arc<ServedFiles>>, at: TaskRef) -> String {
-    served.checkout(at)
+    served.task(at)
 }
 
 #[tauri::command]
@@ -358,7 +371,7 @@ impl Dropped {
     }
 }
 
-/// Copies `local`, a dropped file or folder, to the new `path` of the task's checkout, a folder with every file and
+/// Copies `local`, a dropped file or folder, to the new `path` of the task's directory, a folder with every file and
 /// folder in it.
 #[tauri::command]
 pub async fn file_upload(
@@ -396,7 +409,7 @@ pub async fn file_upload(
     Ok(())
 }
 
-/// Sends `content`, a file this client holds rather than one on its disk, as the new `path` of the task's checkout.
+/// Sends `content`, a file this client holds rather than one on its disk, as the new `path` of the task's directory.
 #[tauri::command]
 pub async fn file_upload_content(hub: Hubbed<'_>, at: TaskRef, path: String, content: Vec<u8>) -> Result<(), String> {
     let connection = hub.connection(&at.server)?;

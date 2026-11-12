@@ -2,7 +2,7 @@
 //!
 //! Each connection to the host opens with one `HostRequest` line and gets one `Outcome` line back. An `attach`
 //! connection then carries the terminal's pieces, its screen and then its live output; an `input` connection carries
-//! bytes to it.
+//! bytes to it; a `watch_status` connection carries a line per status its program reports, the current one first.
 
 use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
@@ -26,6 +26,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
 
+use crate::program_status::ProgramStatus;
 use crate::pty::{Activity, Attachment, Pty};
 use crate::{lock, report};
 
@@ -56,6 +57,7 @@ enum HostRequest {
     WaitExit { id: PtyId },
     Activity { id: PtyId },
     Program { id: PtyId },
+    WatchStatus { id: PtyId },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -79,6 +81,7 @@ enum Then {
     Close,
     Output(Attachment),
     Input(Arc<Pty>),
+    Statuses(Arc<Pty>),
 }
 
 /// Serves terminals at `address` until the address is gone, ending every terminal on the way out.
@@ -167,11 +170,11 @@ async fn answer<R: AsyncRead + Unpin>(
         }
         HostRequest::WaitExit { id } => {
             let pty = find(terminals, &id)?;
-            let mut probe = [0u8; 1];
+            let mut hangup = [0u8; 1];
             tokio::select! {
                 () = pty.exit() => {}
                 // The read returns when the waiter hangs up, which frees this task.
-                _ = read.read(&mut probe) => {}
+                _ = read.read(&mut hangup) => {}
             }
             Ok((Value::Null, Then::Close))
         }
@@ -184,6 +187,7 @@ async fn answer<R: AsyncRead + Unpin>(
             let program = find(terminals, &id)?.program().map(|pid| pid.as_raw());
             Ok((serde_json::to_value(program).map_err(Error::internal)?, Then::Close))
         }
+        HostRequest::WatchStatus { id } => Ok((Value::Null, Then::Statuses(find(terminals, &id)?))),
     }
 }
 
@@ -208,7 +212,32 @@ async fn serve<S: AsyncRead + AsyncWrite + Send + 'static>(terminals: Terminals,
             let _peer_gone = stream_output(attachment, &mut write).await;
         }
         Then::Input(pty) => forward_input(pty, read).await,
+        Then::Statuses(pty) => {
+            let _peer_gone = stream_statuses(&pty, read, &mut write).await;
+        }
     }
+}
+
+/// Ends when the program exits or the watcher hangs up.
+async fn stream_statuses<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
+    pty: &Pty,
+    mut read: R,
+    write: &mut W,
+) -> std::io::Result<()> {
+    let mut statuses = pty.statuses();
+    let mut hangup = [0u8; 1];
+    loop {
+        let status = *statuses.borrow_and_update();
+        if let Some(status) = status {
+            write.write_all(line(&status).as_bytes()).await?;
+        }
+        tokio::select! {
+            Ok(()) = statuses.changed() => {}
+            () = pty.exit() => break,
+            _ = read.read(&mut hangup) => break,
+        }
+    }
+    write.shutdown().await
 }
 
 /// Ends an attachment that falls behind, so its client never sees output with a gap.
@@ -430,6 +459,19 @@ impl HostClient {
 
     pub(crate) fn terminate(&self, id: &PtyId) -> Result<(), Error> {
         self.call(&HostRequest::Terminate { id: id.clone() })
+    }
+
+    /// Each status the terminal's program reports, the current one first, until it exits.
+    pub(crate) fn statuses(&self, id: &PtyId) -> Result<impl Iterator<Item = ProgramStatus> + use<>, Error> {
+        let stream = self.open(&HostRequest::WatchStatus { id: id.clone() })?.0;
+        let address = self.address.clone();
+        let failed = move |what: String| report!("terminal host {}: {what}", address.display());
+        let unread = failed.clone();
+        Ok(std::io::BufRead::lines(std::io::BufReader::new(stream))
+            .map_while(move |line| line.inspect_err(|error| unread(format!("read statuses: {error}"))).ok())
+            .filter_map(move |line| {
+                serde_json::from_str(&line).inspect_err(|error| failed(format!("a status {line:?}: {error}"))).ok()
+            }))
     }
 
     /// The pid of the program the terminal started, which leads its session, while it runs.

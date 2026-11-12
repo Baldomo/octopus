@@ -2,7 +2,17 @@ import { createSignal, For, Match, onMount, Show, Switch } from "solid-js";
 import type { Appearance, DeviceView, ShownLink } from "./generated";
 import { backend } from "./backend";
 import { commands, hint } from "./commands";
-import { closePopover, Confirm, copyKey, copyOnShortcut, dismissible, Head, Item, Sep } from "./Menu";
+import {
+  closeOnLastingBlur,
+  closePopover,
+  Confirm,
+  copyKey,
+  copyOnShortcut,
+  dismissible,
+  Head,
+  Item,
+  Sep,
+} from "./Menu";
 import { expiry } from "./pairing";
 import { ServerMenu } from "./ServerMenu";
 import { VERSION } from "./generated";
@@ -174,6 +184,7 @@ export function ClientMenu(props: { floats: (element: HTMLElement) => void; show
   onMount(() => {
     closePopover();
     dismissible(element, () => showClientMenu(false));
+    closeOnLastingBlur(() => showClientMenu(false));
   });
   return (
     <div

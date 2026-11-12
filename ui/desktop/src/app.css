@@ -345,6 +345,24 @@ body {
 .dialog.keys {
   width: 484px;
 }
+.dialog.new-task {
+  top: calc(var(--title-h) + var(--s3));
+  max-height: calc(100vh - var(--title-h) - var(--status-h) - var(--s3) * 2);
+  overflow-y: auto;
+}
+.dialog.new-task > * {
+  flex: none;
+}
+.dialog.new-task .foot {
+  position: sticky;
+  bottom: calc(-1 * var(--s3));
+  margin: 0 calc(-1 * var(--s3)) calc(-1 * var(--s3));
+  padding: var(--s2) var(--s3) var(--s3);
+  background: inherit;
+}
+.dialog .anchor {
+  position: relative;
+}
 .client-menu {
   top: calc(var(--title-h) + var(--s1));
   right: var(--s2);

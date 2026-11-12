@@ -15,6 +15,7 @@ use octopus_proto::types::{AGENT_PANEL, ENV_SERVER, ENV_TASK, HOLDER_GRACE_MS, L
 
 use crate::client::Client;
 use crate::host::HostClient;
+use crate::program_status::ProgramStatus;
 use crate::pty::{Activity, INITIAL_SIZE};
 use crate::store::PanelRow;
 use crate::{Server, State, files, lock, login, now, report};
@@ -115,6 +116,11 @@ impl Terminal {
 
     pub fn screen(&self) -> Screen {
         lock(&self.screen).clone()
+    }
+
+    /// Each status the terminal's program reports, the current one first, until it exits.
+    pub(crate) fn statuses(&self) -> Result<impl Iterator<Item = ProgramStatus> + use<>, Error> {
+        self.host.statuses(&self.id)
     }
 
     /// Gives `client` a free lock sized to `cols`×`rows`, or resizes the one it holds; reports whether the screen
@@ -394,12 +400,11 @@ impl Server {
 
     pub(crate) fn term_open(&self, op: TermOpen) -> Result<Opened, Error> {
         let shell = login::shell()?;
-        let mut state = lock(&self.state);
-        let row = state.store.task(&op.task)?;
+        let (mut state, row) = self.ready_task(&op.task, |row| row.state.is_live())?;
         if !row.state.is_live() {
             return Err(Error::conflict(format!("{} is ended; reopen it to open a shell", row.id)));
         }
-        let directory = files::directory(Path::new(&row.directory), &op.directory)?;
+        let directory = files::directory(Path::new(&row.directory), &op.path)?;
         let stem = shell.file_stem().unwrap_or(shell.as_os_str()).to_string_lossy().into_owned();
         let taken: HashSet<&str> = state.terminals(&op.task).map(|(name, _)| name).chain([AGENT_PANEL]).collect();
         let name = std::iter::once(stem.clone())

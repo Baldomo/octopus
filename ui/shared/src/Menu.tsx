@@ -56,7 +56,13 @@ function place(menu: HTMLElement, within: HTMLElement, { anchor, point }: Opened
 
 const BLUR_SETTLES_MS = 150;
 
+/** How many floating layers are up, each taking Escape before the modal under it. */
+let floatingUp = 0;
+export const floatingOpen = () => floatingUp > 0;
+
+/** Closes a floating layer on a press outside it or on Escape. */
 export function dismissible(element: HTMLElement, close: () => void) {
+  floatingUp++;
   const outside = (event: PointerEvent) => {
     const target = event.target as Element;
     if (!element.contains(target) && target.closest("[data-menu-trigger]") === null) close();
@@ -68,15 +74,22 @@ export function dismissible(element: HTMLElement, close: () => void) {
   };
   document.addEventListener("pointerdown", outside, { capture: true });
   document.addEventListener("keydown", escape, { capture: true });
-  // A click outside the float layer lands in another webview, which takes the keyboard from this one. The keyboard
-  // also passes through the base layer when one menu closes just before the next opens, so only a lasting loss counts.
-  const left = () => setTimeout(() => document.hasFocus() || close(), BLUR_SETTLES_MS);
-  window.addEventListener("blur", left);
   onCleanup(() => {
+    floatingUp--;
     document.removeEventListener("pointerdown", outside, { capture: true });
     document.removeEventListener("keydown", escape, { capture: true });
-    window.removeEventListener("blur", left);
   });
+}
+
+/**
+ * Closes a menu in the float layer once the window loses the keyboard for good. A click outside the float layer lands
+ * in another webview, which takes the keyboard from this one; the keyboard also passes through the base layer when one
+ * menu closes just before the next opens, so only a lasting loss counts.
+ */
+export function closeOnLastingBlur(close: () => void) {
+  const left = () => setTimeout(() => document.hasFocus() || close(), BLUR_SETTLES_MS);
+  window.addEventListener("blur", left);
+  onCleanup(() => window.removeEventListener("blur", left));
 }
 
 function Popover(props: { menu: Opened }) {
@@ -86,6 +99,7 @@ function Popover(props: { menu: Opened }) {
     replace.observe(element);
     onCleanup(() => replace.disconnect());
     dismissible(element, closePopover);
+    closeOnLastingBlur(closePopover);
   });
   return (
     <div ref={element} class="menu" role="menu">

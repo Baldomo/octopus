@@ -107,25 +107,6 @@ pub fn create_parent(path: &std::path::Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))
 }
 
-/// Takes each `remote` entry out of the list, which kept paired servers before accounts did: its name, key and relay.
-pub(crate) fn take_remote(listed: &mut serde_json::Value) -> anyhow::Result<Vec<(String, PublicKey, RelayUrl)>> {
-    let Some(servers) = listed.get_mut("servers").and_then(serde_json::Value::as_array_mut) else { return Ok(vec![]) };
-    let is_remote = |server: &serde_json::Value| server["address"]["path"].as_str() == Some("remote");
-    let taken = servers
-        .iter()
-        .filter(|server| is_remote(server))
-        .map(|server| {
-            let name = server["name"].as_str().context("a listed server has a name")?.to_string();
-            let key = serde_json::from_value(server["address"]["key"].clone()).context("a remote server's key")?;
-            let relay =
-                serde_json::from_value(server["address"]["relay"].clone()).context("a remote server's relay")?;
-            Ok((name, key, relay))
-        })
-        .collect::<anyhow::Result<_>>()?;
-    servers.retain(|server| !is_remote(server));
-    Ok(taken)
-}
-
 impl Servers {
     /// The servers on this machine.
     pub fn load(config: &Config) -> anyhow::Result<Self> {
@@ -199,23 +180,10 @@ impl Identity {
         Self::open(machine_name()?, key, config)
     }
 
-    /// This device under `name`, with the account kept in `config`, to which a server list that still holds paired
-    /// servers gives them.
+    /// This device under `name`, with the account kept in `config`.
     pub fn open(name: String, key: DeviceKey, config: &Config) -> anyhow::Result<Self> {
         let account = Book::load(config, &key)?;
-        let me = Self::new(name, key, account)?;
-        let path = config.file(SERVERS_FILE);
-        let Some(text) = read_text(&path)? else { return Ok(me) };
-        let mut listed: serde_json::Value =
-            serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
-        let paired = take_remote(&mut listed).with_context(|| format!("parse {}", path.display()))?;
-        if !paired.is_empty() {
-            for (name, server, relay) in paired {
-                me.account.append(&me.key, Change::ListServer { server, relay, name, host: None })?;
-            }
-            write_text(&path, &serde_json::to_string_pretty(&listed)?)?;
-        }
-        Ok(me)
+        Self::new(name, key, account)
     }
 }
 

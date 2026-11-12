@@ -15,22 +15,20 @@ const THROW = 0.5;
 /** How far across the screen a predictive back gesture at full progress carries it. */
 const PREDICTIVE_REACH = 0.4;
 
-/** A gesture that can carry the top sheet back, which the sheet up registers while it shows. */
-type BackDrive = { start: () => void; move: (progress: number) => void; cancel: () => void };
-let sheetDrive: BackDrive | null = null;
+/** A gesture that can carry a sheet back. */
+export type BackDrive = { start: () => void; move: (progress: number) => void; cancel: () => void };
 
 /** The screens moving now, the one under first; empty while every screen stands. */
 const [moving, setMoving] = createSignal<Screen[]>([]);
 export const sliding = () => moving().length > 0;
-export const driveSheetBack = (drive: BackDrive) => (sheetDrive = drive);
-export const releaseSheetBack = (drive: BackDrive) => sheetDrive === drive && (sheetDrive = null);
 
 /**
  * Every pushed screen, root first, each a layer the one above slides over: a push slides the new one in from the
  * right edge over the one it covers, which shifts left under a shade, and a pop reverses it from wherever the screen
- * stands. A screen shows only while it is the top one or moving.
+ * stands. A screen shows only while it is the top one or moving. Android's back gesture carries the top sheet through
+ * `sheetBack` while one is up.
  */
-export function Stack(props: { children: (screen: Screen) => JSX.Element }) {
+export function Stack(props: { children: (screen: Screen) => JSX.Element; sheetBack: () => BackDrive | null }) {
   const [layers, setLayers] = createSignal<Screen[]>(screens());
   const elements = new Map<Screen, HTMLDivElement>();
   /** How far each moving screen stands off the right edge, 0 covering the screen and 1 gone. */
@@ -138,7 +136,7 @@ export function Stack(props: { children: (screen: Screen) => JSX.Element }) {
   const shown = (screen: Screen) => screen === layers().at(-1) || moving().includes(screen);
 
   followEdgeSwipe(grab);
-  followPredictiveBack(grab);
+  followPredictiveBack(grab, props.sheetBack);
 
   return (
     <For each={layers()}>
@@ -186,13 +184,13 @@ function followEdgeSwipe(grab: Grab) {
  * Android hands the page the system back gesture's progress while the page has something to pop: it carries the top
  * sheet or screen, letting go settles it back, and committing pops it from where it stands.
  */
-function followPredictiveBack(grab: Grab) {
+function followPredictiveBack(grab: Grab, sheetBack: () => BackDrive | null) {
   let held: ReturnType<Grab> = null;
   let drive: BackDrive | null = null;
   addEventListener("octopus-back", (event) => {
     const { phase, progress } = (event as CustomEvent<{ phase: string; progress: number }>).detail;
     if (phase === "start") {
-      drive = sheetDrive;
+      drive = sheetBack();
       if (drive) drive.start();
       else held = grab();
     } else if (phase === "move") {

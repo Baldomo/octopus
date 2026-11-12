@@ -9,8 +9,8 @@ use crate::remote::RelayUrl;
 use crate::schema::{Field, record};
 use crate::settings::Settings;
 use crate::types::{
-    AgentStatus, BrowserId, BrowserTarget, CheckoutKind, Color, Hooks, PtyId, SessionId, SessionStart, Task, TaskId,
-    TaskState, Workspace, WorkspaceId,
+    BrowserId, BrowserTarget, Color, Mode, PtyId, SessionId, SessionStart, Task, TaskId, TaskState, Workspace,
+    WorkspaceId,
 };
 
 /// Declares an op: its args as a `record!`, its wire name, and the type of its result.
@@ -204,11 +204,11 @@ op!(
 );
 
 op!(
-    /// Add a workspace: a directory this server runs tasks in.
+    /// Add a workspace: a named place this server files tasks in.
     WorkspaceAdd = "workspace.add" -> WorkspaceCreated {
         /// The workspace's name, unique on its server.
         name: String,
-        /// The directory on the server's machine, as an absolute path.
+        /// Where new tasks' folders start: a directory on the server's machine, as an absolute path.
         root: String,
         /// The workspace's color: auto, or a <hue>-<tone> of the matrix.
         color: Color,
@@ -243,6 +243,26 @@ op!(
         workspace: WorkspaceId,
     }
 );
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct Folder {
+    /// The folder, its symlinks, `.` and `..` resolved.
+    pub folder: String,
+    /// The top of the git repo the folder sits in, or null outside one.
+    pub repo: Option<String>,
+    /// The branch the repo's HEAD is on, which a worktree branches from, or null outside a repo or on a detached HEAD.
+    pub branch: Option<String>,
+    /// The names of the folders directly inside it, in name order.
+    pub folders: Vec<String>,
+}
+
+op!(
+    /// Show a folder on the server's machine, for a new task to pick: the git repo and branch it sits in and the folders inside it.
+    FolderGet = "folder.get" -> Folder {
+        /// The folder, as an absolute path.
+        folder: String,
+    }
+);
 op!(
     /// Declare how a harness starts its agent.
     HarnessSet = "harness.set" -> Revised {
@@ -258,32 +278,24 @@ op!(
         resume: Vec<String>,
         /// The command that installs the agent, shown when it is missing.
         install: String,
-        /// The hooks the server installs in the agent, through which it reports its status with `agent report`.
-        hooks: Hooks,
     }
 );
 op!(
-    /// Report what a task's agent is doing; harness hooks call this.
-    AgentReport = "agent.report" -> Revised {
-        /// The task's id.
-        task: TaskId,
-        /// The agent's status.
-        status: AgentStatus,
-    }
-);
-op!(
-    /// Create a task.
+    /// Create a task, which works in its folder for life.
     TaskCreate = "task.create" -> TaskCreated {
-        /// The workspace the task works in.
+        /// The workspace the task is filed in.
         workspace: WorkspaceId,
+        /// The directory on the server's machine the task works in, as an absolute path.
+        folder: String,
+        /// Where the task runs: in_place in the folder, or worktree or copy in the same folder inside a worktree of
+        /// the folder's git repo, a copy with the repo's ignored files cloned in.
+        mode: Mode,
         /// The task's title.
         title: String,
-        /// The parent task's id.
+        /// The parent task's id, a task of the same workspace.
         parent: Option<TaskId>,
         /// The task's state.
         state: TaskState,
-        /// Where the task's files live.
-        checkout: CheckoutKind,
         /// The harness that runs the task's agent.
         harness: String,
         /// An existing session's id for the agent to resume.
@@ -318,6 +330,15 @@ op!(
     }
 );
 op!(
+    /// File a root task and all its subtasks in another workspace, changing nothing else.
+    TaskSetWorkspace = "task.set_workspace" -> Revised {
+        /// The task's id.
+        task: TaskId,
+        /// The workspace to file it in.
+        workspace: WorkspaceId,
+    }
+);
+op!(
     /// Rename a task; a worktree task's branch keeps its name.
     TaskRename = "task.rename" -> Revised {
         /// The task's id.
@@ -338,7 +359,7 @@ op!(
     TaskFocus = "task.focus" -> Revised {
         /// The task's id.
         task: TaskId,
-        /// The args an agent this focus starts runs after its harness's argv and hooks, before its start or resume
+        /// The args an agent this focus starts runs after its harness's argv, before its start or resume
         /// args, e.g. ["--model","opus"]; a running agent keeps the args it started with.
         args: Vec<String>,
     }
@@ -358,12 +379,12 @@ pub struct Opened {
 }
 
 op!(
-    /// Open a shell panel in a live task: the user's login shell, in a directory of the task's checkout.
+    /// Open a shell panel in a live task: the user's login shell, in a folder of the task's directory.
     TermOpen = "term.open" -> Opened {
         /// The task's id.
         task: TaskId,
-        /// The directory the shell starts in, relative to the checkout; . for its root.
-        directory: String,
+        /// The directory the shell starts in, relative to the task's directory; . for the directory itself.
+        path: String,
     }
 );
 op!(
@@ -482,73 +503,73 @@ pub struct Written {
 }
 
 op!(
-    /// List a directory of a task's checkout.
+    /// List a folder of a task's directory.
     FileList = "file.list" -> Entries {
         /// The task's id.
         task: TaskId,
-        /// The directory, relative to the checkout; . for its root.
+        /// The directory, relative to the task's directory; . for the directory itself.
         path: String,
     }
 );
 op!(
-    /// Create a file in a task's checkout, or replace its content.
+    /// Create a file in a task's directory, or replace its content.
     FileWrite = "file.write" -> Written {
         /// The task's id.
         task: TaskId,
-        /// The file, relative to the checkout.
+        /// The file, relative to the task's directory.
         path: String,
         /// The file's new content, as text.
         content: String,
     }
 );
 op!(
-    /// Create an empty file or directory in a task's checkout, with the directories above it; fails conflict when
+    /// Create an empty file or directory in a task's directory, with the directories above it; fails conflict when
     /// the path exists.
     FileCreate = "file.create" -> Done {
         /// The task's id.
         task: TaskId,
-        /// The new entry, relative to the checkout.
+        /// The new entry, relative to the task's directory.
         path: String,
         /// What to create.
         kind: EntryKind,
     }
 );
 op!(
-    /// Move or rename a file or directory of a task's checkout; fails conflict when the destination exists.
+    /// Move or rename a file or directory of a task's directory; fails conflict when the destination exists.
     FileMove = "file.move" -> Done {
         /// The task's id.
         task: TaskId,
-        /// The entry, relative to the checkout.
+        /// The entry, relative to the task's directory.
         from: String,
-        /// Its new path, relative to the checkout.
+        /// Its new path, relative to the task's directory.
         to: String,
     }
 );
 op!(
-    /// Copy a file or directory of a task's checkout, a directory with everything in it; fails conflict when the
+    /// Copy a file or directory of a task's directory, a directory with everything in it; fails conflict when the
     /// destination exists.
     FileCopy = "file.copy" -> Done {
         /// The task's id.
         task: TaskId,
-        /// The entry, relative to the checkout.
+        /// The entry, relative to the task's directory.
         from: String,
-        /// The copy's path, relative to the checkout.
+        /// The copy's path, relative to the task's directory.
         to: String,
     }
 );
 op!(
-    /// Delete a file or directory of a task's checkout, a directory with everything in it.
+    /// Delete a file or directory of a task's directory, a directory with everything in it.
     FileDelete = "file.delete" -> Done {
         /// The task's id.
         task: TaskId,
-        /// The entry, relative to the checkout.
+        /// The entry, relative to the task's directory.
         path: String,
         /// Whether it goes to the trash of the server's machine rather than being removed for good.
         trash: bool,
     }
 );
 op!(
-    /// Find each line of a task's checkout that contains a text.
+    /// Find each line of a task's directory that contains a text.
     FileSearch = "file.search" -> Matches {
         /// The task's id.
         task: TaskId,
@@ -630,11 +651,12 @@ pub fn commands() -> Vec<Command> {
         command::<WorkspaceRename>(),
         command::<WorkspaceSetColor>(),
         command::<WorkspaceRemove>(),
+        command::<FolderGet>(),
         command::<HarnessSet>(),
-        command::<AgentReport>(),
         command::<TaskCreate>(),
         command::<TaskMove>(),
         command::<TaskSetParent>(),
+        command::<TaskSetWorkspace>(),
         command::<TaskRename>(),
         command::<TaskSetSession>(),
         command::<TaskArchive>(),

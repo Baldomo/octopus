@@ -1,4 +1,5 @@
 import { commands, mac, parseKey, type Command } from "@octopus/shared/commands.ts";
+import { floatingOpen } from "@octopus/shared/Menu.tsx";
 import { act, showModal, ui } from "@octopus/shared/state.ts";
 import { desktop, desktopEvents } from "./backend";
 import type { MenuGroup } from "./generated";
@@ -83,7 +84,7 @@ export function bindKeys() {
       if (held && run(chord(event.ctrlKey, event.metaKey, event.shiftKey, event.code), false)) {
         event.preventDefault();
         event.stopPropagation();
-      } else if (event.key === "Escape" && ui.modal !== null) {
+      } else if (event.key === "Escape" && ui.modal !== null && !floatingOpen()) {
         event.preventDefault();
         showModal(null);
       }

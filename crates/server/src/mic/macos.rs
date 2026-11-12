@@ -162,10 +162,6 @@ impl Inner {
                 lock(&self.leaders).insert(id.clone(), Pid::from_raw(program));
             }
             Ok(None) => {}
-            Err(octopus_proto::Error::InvalidArgs { .. }) => report!(
-                "{id} has no virtual microphone: the terminal host predates asking for a program; ending the host, \
-                 which ends its terminals, brings it"
-            ),
             Err(error) => report!("find the program of {id}: {error}"),
         }
     }

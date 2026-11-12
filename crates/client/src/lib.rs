@@ -33,29 +33,6 @@ mod tests {
         std::env::temp_dir().join(format!("octopus-client-{}-{name}.sock", std::process::id()))
     }
 
-    #[test]
-    fn a_list_from_before_accounts_gives_its_paired_servers_to_the_account() {
-        use crate::servers::{Config, Servers};
-        let dir = std::env::temp_dir().join(format!("octopus-client-{}-migrate", std::process::id()));
-        let _fresh = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("a config dir");
-        let desk = DeviceKey::generate().public();
-        let listed = serde_json::json!({"servers": [
-            {"name": "laptop", "address": {"path": "local", "socket": "/tmp/octopus.sock"}},
-            {"name": "desk", "address": {"path": "remote", "key": desk, "relay": "https://relay.example./", "addresses": []}},
-        ]});
-        std::fs::write(dir.join("servers.json"), listed.to_string()).expect("write the list");
-        let config = Config::at(dir.clone());
-        let me = Identity::open("laptop".into(), DeviceKey::generate(), &config).expect("open");
-        let servers = Servers::load(&config).expect("load");
-        assert_eq!(servers.servers.len(), 1, "the list keeps the server on this machine alone");
-        let reachable: Vec<String> = servers.reachable(&me).into_iter().map(|server| server.name).collect();
-        assert_eq!(reachable, ["laptop", "desk"]);
-        let again = Identity::open("laptop".into(), DeviceKey::generate(), &config).expect("open again");
-        assert_eq!(again.account.state().servers.len(), 1, "the account kept in the file lists the server once");
-        std::fs::remove_dir_all(&dir).expect("clean up");
-    }
-
     #[tokio::test]
     async fn a_call_after_the_server_hangs_up_fails_instead_of_waiting() {
         let socket = address("closed");

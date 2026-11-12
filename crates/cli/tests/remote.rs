@@ -19,9 +19,7 @@ use octopus_proto::ops::{
 };
 use octopus_proto::pairing::Invite;
 use octopus_proto::settings::{Setting, Settings};
-use octopus_proto::types::{
-    BrowserId, BrowserPanel, BrowserTarget, CheckoutKind, Hooks, ReadDir, Stream, Task, TaskId,
-};
+use octopus_proto::types::{BrowserId, BrowserPanel, BrowserTarget, Mode, ReadDir, Stream, Task, TaskId};
 use octopus_proto::{Error, Event};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -129,7 +127,7 @@ async fn a_task_runs_over_iroh_and_a_stalled_file_transfer_never_blocks_its_term
 
     let large = vec![b'x'; 8 << 20];
     std::fs::write(dir.path().join("large.bin"), &large).expect("write a large file");
-    let mut transfer = laptop.read(ReadDir::Checkout(id.clone()), "large.bin".into(), 0, Stream::TO_END).await;
+    let mut transfer = laptop.read(ReadDir::Task(id.clone()), "large.bin".into(), 0, Stream::TO_END).await;
     let mut terminal = laptop.open_data_stream(&agent(&laptop, &id).await).await.expect("attach");
     laptop.call(&send(&id, "agent", "over-iroh")).await.expect("term.send");
     read_until(&mut terminal, "over-iroh").await;
@@ -142,8 +140,8 @@ async fn a_task_runs_over_iroh_and_a_stalled_file_transfer_never_blocks_its_term
 /// A task whose agent terminal `holder` shows and holds the lock of.
 async fn held_terminal(dir: &Path, holder: &Connection) -> (TaskId, DataStream) {
     let workspace = workspace(holder, dir).await;
-    set_harness(holder, "echo", echo_agent("agent:up"), Hooks::None).await;
-    let id = create(holder, &workspace, CheckoutKind::Root, "echo").await;
+    set_harness(holder, "echo", echo_agent("agent:up")).await;
+    let id = create(holder, &workspace, Mode::InPlace, "echo").await;
     focus(holder, &id).await;
     let mut shown = holder.open_data_stream(&agent(holder, &id).await).await.expect("attach");
     read_until(&mut shown, "agent:up").await;
@@ -214,7 +212,7 @@ async fn a_browser_panel_is_task_state_and_its_localhost_page_tunnels_to_the_ser
     let desk = connect(&running.socket, "desk").await;
     let mut pushes = desk.pushes();
     let workspace = workspace(&desk, dir.path()).await;
-    let id = create(&desk, &workspace, CheckoutKind::Root, "none").await;
+    let id = create(&desk, &workspace, Mode::InPlace, "none").await;
 
     let shown = laptop.call(&open(&id, "http://localhost:5173/", BrowserTarget::New)).await.expect("browser.open");
     let settings = "http://localhost:5173/settings";

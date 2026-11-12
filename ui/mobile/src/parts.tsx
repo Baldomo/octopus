@@ -125,28 +125,37 @@ export const Note = (props: { children: JSX.Element; err?: boolean }) => (
 );
 export const Gap = (props: { n: 2 | 3 | 4 | 5 }) => <div class={`sp${props.n}`} />;
 
-/** A segmented control, the current segment on the surface under a thumb that slides to each choice. */
+/**
+ * A segmented control, the current segment on the surface under a thumb that slides to each choice. A segment `off`
+ * says is dim and takes no tap, keeping its place.
+ */
 export function Seg<T extends string>(props: {
   options: readonly (readonly [T, string])[];
   value: T;
   choose: (value: T) => void;
   wide?: boolean;
+  off?: (value: T) => boolean;
 }) {
   return (
     <div class="seg" classList={{ wide: props.wide }} ref={slidingThumb}>
       <For each={props.options}>
-        {([value, label]) => (
-          <span
-            role="button"
-            classList={{ on: props.value === value }}
-            onClick={() => {
-              if (props.value !== value) feel("select");
-              props.choose(value);
-            }}
-          >
-            {label}
-          </span>
-        )}
+        {([value, label]) => {
+          const off = () => props.off?.(value) ?? false;
+          return (
+            <span
+              role="button"
+              classList={{ on: props.value === value, off: off() }}
+              aria-disabled={off() ? "true" : undefined}
+              onClick={() => {
+                if (off()) return;
+                if (props.value !== value) feel("select");
+                props.choose(value);
+              }}
+            >
+              {label}
+            </span>
+          );
+        }}
       </For>
     </div>
   );

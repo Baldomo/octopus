@@ -347,7 +347,7 @@ async fn open(server: &Arc<Server>, stream: Stream, client: &Client) -> Result<O
         }
         Stream::Upload { task, bytes, path } => {
             let upload =
-                blocking(server, move |server| crate::files::upload(&server.checkout_dir(&task)?, &path, bytes));
+                blocking(server, move |server| crate::files::upload(&server.task_directory(&task)?, &path, bytes));
             Ok(Opened::Upload(upload.await?))
         }
         Stream::Pty(id) => {

@@ -10,11 +10,9 @@ use octopus_client::servers::Address;
 use octopus_client::{CallError, Connection, Identity};
 use octopus_proto::device::DeviceKey;
 use octopus_proto::local::Listener;
-use octopus_proto::ops::{HarnessSet, TaskCreate, TaskFocus, TaskGet, TermSend, WorkspaceAdd};
+use octopus_proto::ops::{HarnessSet, TaskCreate, TaskFocus, TaskGet, TermSend, WorkspaceAdd, WorkspaceList};
 use octopus_proto::remote::{self, RelayUrl};
-use octopus_proto::types::{
-    CheckoutKind, Color, Hooks, Panel, ReadDir, SessionStart, Stream, Task, TaskId, TaskState, WorkspaceId,
-};
+use octopus_proto::types::{Color, Mode, Panel, ReadDir, SessionStart, Stream, Task, TaskId, TaskState, WorkspaceId};
 use octopus_server::{Server, TerminalHost, serve};
 use tempfile::TempDir;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -172,13 +170,30 @@ pub fn echo_agent(line: &str) -> Vec<String> {
     vec!["sh".into(), "-c".into(), format!("echo {line}; exec cat")]
 }
 
-/// A harness that is always installed and names no session.
-pub fn harness(id: &str, argv: Vec<String>, hooks: Hooks) -> HarnessSet {
-    HarnessSet { id: id.into(), argv, install: "true".into(), start: vec![], resume: vec![], hooks }
+/// An agent that probes its terminal for status reports, reports `status` once its terminal answers, then acts as
+/// `echo_agent`.
+pub fn reporting_agent(status: &str, line: &str) -> Vec<String> {
+    let probe = r"'\033]7501;?\033\\'";
+    let script = format!(
+        "stty raw -echo; printf {probe}; answer=$(dd bs=1 count=10 2>/dev/null); stty sane; \
+         [ \"$answer\" = \"$(printf {probe})\" ] && printf '\\033]7501;state={status}:app=test\\033\\\\'; \
+         echo {line}; exec cat"
+    );
+    vec!["sh".into(), "-c".into(), script]
 }
 
-pub async fn set_harness(connection: &Connection, id: &str, argv: Vec<String>, hooks: Hooks) {
-    connection.call(&harness(id, argv, hooks)).await.expect("harness.set");
+/// What `cat` in a terminal prints back for a program reporting `status`, as the text of a `term.send`.
+pub fn status_report(status: &str) -> String {
+    format!("\u{1b}]7501;state={status}:app=test\u{1b}\\")
+}
+
+/// A harness that is always installed and names no session.
+pub fn harness(id: &str, argv: Vec<String>) -> HarnessSet {
+    HarnessSet { id: id.into(), argv, install: "true".into(), start: vec![], resume: vec![] }
+}
+
+pub async fn set_harness(connection: &Connection, id: &str, argv: Vec<String>) {
+    connection.call(&harness(id, argv)).await.expect("harness.set");
 }
 
 pub async fn focus(connection: &Connection, id: &TaskId) {
@@ -203,21 +218,25 @@ pub async fn workspace(connection: &Connection, root: &Path) -> WorkspaceId {
     connection.call(&workspace_add(root)).await.expect("workspace.add").workspace
 }
 
-/// Creates the pinned root task "Strict serde" on a fresh session.
-pub fn task_create(workspace: &WorkspaceId, checkout: CheckoutKind, harness: &str) -> TaskCreate {
+/// Creates the pinned root task "Strict serde" in `folder`, on a fresh session.
+pub fn task_create(workspace: &WorkspaceId, folder: &Path, mode: Mode, harness: &str) -> TaskCreate {
     TaskCreate {
         workspace: workspace.clone(),
+        folder: folder.to_string_lossy().into_owned(),
+        mode,
         title: "Strict serde".into(),
         parent: None,
         state: TaskState::Pinned,
-        checkout,
         harness: harness.into(),
         session: SessionStart::Fresh,
     }
 }
 
-pub async fn create(connection: &Connection, workspace: &WorkspaceId, checkout: CheckoutKind, harness: &str) -> TaskId {
-    connection.call(&task_create(workspace, checkout, harness)).await.expect("task.create").task
+/// Creates the pinned root task "Strict serde" in the workspace's root, on a fresh session.
+pub async fn create(connection: &Connection, workspace: &WorkspaceId, mode: Mode, harness: &str) -> TaskId {
+    let listed = connection.call(&WorkspaceList {}).await.expect("workspace.list").workspaces;
+    let root = listed.into_iter().find(|listed| &listed.id == workspace).expect("the workspace").root;
+    connection.call(&task_create(workspace, Path::new(&root), mode, harness)).await.expect("task.create").task
 }
 
 pub async fn task(connection: &Connection, task: &TaskId) -> Task {

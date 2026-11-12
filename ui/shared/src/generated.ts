@@ -18,9 +18,7 @@ started: boolean, };
 
 export type TaskState = "pinned" | "temporary" | "completed" | "cancelled";
 
-export type Checkout = { "kind": "root" } | { "kind": "worktree", branch: string, } | { "kind": "copy", branch: string, };
-
-export type CheckoutKind = "root" | "worktree" | "copy";
+export type Mode = "in_place" | "worktree" | "copy";
 
 export type AgentStatus = "working" | "waiting" | "idle";
 
@@ -54,13 +52,43 @@ title: string,
  */
 load: number, };
 
-export type Task = { id: TaskId, workspace: WorkspaceId, parent: TaskId | null, title: string, state: TaskState, checkout: Checkout, harness: string, session: Session, directory: string, ended_at: number | null, archived_at: number | null, rev: number, agent: Agent, panels: Array<Panel>, browsers: Array<BrowserPanel>, };
+export type Task = { id: TaskId, workspace: WorkspaceId, 
+/**
+ * The directory on the server's machine the task works in, fixed for its life.
+ */
+folder: string, mode: Mode, 
+/**
+ * Where the task runs: the folder, or the same folder inside the task's worktree.
+ */
+directory: string, 
+/**
+ * The worktree's branch, or null for an `in_place` task.
+ */
+branch: string | null, parent: TaskId | null, title: string, state: TaskState, harness: string, session: Session, ended_at: number | null, archived_at: number | null, rev: number, agent: Agent, panels: Array<Panel>, browsers: Array<BrowserPanel>, };
 
 export type EntryKind = "file" | "directory";
 
 export type Entry = { name: string, kind: EntryKind, };
 
 export type Match = { path: string, line: number, text: string, };
+
+export type Folder = { 
+/**
+ * The folder, its symlinks, `.` and `..` resolved.
+ */
+folder: string, 
+/**
+ * The top of the git repo the folder sits in, or null outside one.
+ */
+repo: string | null, 
+/**
+ * The branch the repo's HEAD is on, which a worktree branches from, or null outside a repo or on a detached HEAD.
+ */
+branch: string | null, 
+/**
+ * The names of the folders directly inside it, in name order.
+ */
+folders: Array<string>, };
 
 export type Offer = { invite: string, 
 /**
@@ -282,7 +310,7 @@ me: string,
  */
 key: string, account: AccountView, servers: Array<ServerView>, model: Model, ui: Ui, };
 
-export type NewTask = { server: string, workspace: WorkspaceId, title: string, parent: TaskId | null, state: TaskState, checkout: CheckoutKind, harness: string, 
+export type NewTask = { server: string, workspace: WorkspaceId, folder: string, mode: Mode, title: string, parent: TaskId | null, state: TaskState, harness: string, 
 /**
  * `FRESH_SESSION` for a fresh session, or an existing session's id for the agent to resume.
  */
@@ -298,7 +326,7 @@ export const TASK_STATES = ["pinned","temporary","completed","cancelled"] as con
 
 export const LIVE_STATES = ["pinned","temporary"] as const;
 
-export const CHECKOUTS = ["root","worktree","copy"] as const;
+export const MODES = ["in_place","worktree","copy"] as const;
 
 export const HUES = ["red","orange","amber","lime","green","mint","teal","sky","blue","indigo","violet","pink"] as const;
 
@@ -320,6 +348,6 @@ export const HOLDER_GRACE_MS = 10000 as const;
 
 export const VERSION = "0.0.0" as const;
 
-export const COMMANDS = ["boot","ready","ui_act","quit","server_pair","server_offer","server_accounts","server_revoke","account_link","account_join","settings_set","account_remove","account_leave","account_start_over","servers_refresh","server_rename","server_forget","workspace_add","workspace_remove","section_rename","section_color","auto_color","task_focus","task_resume","task_move","task_set_parent","task_rename","task_archive","task_create","term_attach","term_input","term_detach","term_open","term_close","term_claim","term_take_lock","term_resize","file_list","file_root_url","file_write","file_create","file_move","file_copy","file_delete","file_upload","file_upload_content","file_search"] as const;
+export const COMMANDS = ["boot","ready","ui_act","quit","server_pair","server_offer","server_accounts","server_revoke","account_link","account_join","settings_set","account_remove","account_leave","account_start_over","servers_refresh","server_rename","server_forget","workspace_add","workspace_remove","section_rename","section_color","auto_color","task_focus","task_resume","task_move","task_set_parent","task_set_workspace","task_rename","task_archive","task_create","folder_get","term_attach","term_input","term_detach","term_open","term_close","term_claim","term_take_lock","term_resize","file_list","file_root_url","file_write","file_create","file_move","file_copy","file_delete","file_upload","file_upload_content","file_search"] as const;
 
 export const EVENTS = {"account":"account","fileDrag":"file-drag","filesChanged":"files_changed","microphoneDenied":"microphone_denied","model":"model","servers":"servers","ui":"ui","windowFocused":"window-focused","windowShown":"window-shown"} as const;

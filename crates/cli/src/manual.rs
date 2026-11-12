@@ -154,25 +154,25 @@ impl TermVerb {
 
 #[derive(Subcommand)]
 pub enum FileVerb {
-    /// Write a file of a task's checkout to stdout, byte for byte.
+    /// Write a file of a task's directory to stdout, byte for byte.
     Read {
         #[arg(long, help = SERVER_HELP)]
         server: String,
         /// The task's id.
         #[arg(long)]
         task: String,
-        /// The file, relative to the checkout.
+        /// The file, relative to the task's directory.
         #[arg(long)]
         path: String,
     },
-    /// Create a file of a task's checkout from stdin, byte for byte; fails conflict when the path exists.
+    /// Create a file of a task's directory from stdin, byte for byte; fails conflict when the path exists.
     Upload {
         #[arg(long, help = SERVER_HELP)]
         server: String,
         /// The task's id.
         #[arg(long)]
         task: String,
-        /// The new file, relative to the checkout.
+        /// The new file, relative to the task's directory.
         #[arg(long)]
         path: String,
     },
@@ -183,7 +183,7 @@ impl FileVerb {
         match self {
             Self::Read { server, task, path } => {
                 let connection = connect(&server).await?;
-                let dir = ReadDir::Checkout(TaskId(task));
+                let dir = ReadDir::Task(TaskId(task));
                 let read = connection.read(dir, path.clone(), 0, Stream::TO_END).await;
                 let mut bytes = Vec::new();
                 read.map_err(call_error)?.1.read_to_end(&mut bytes).await.with_context(|| format!("read {path}"))?;
