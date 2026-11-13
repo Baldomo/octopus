@@ -37,8 +37,6 @@ struct Inner {
     output: Mutex<Option<ca::Output>>,
     /// The terminals whose lock a client connected over QUIC holds.
     remote_held: Mutex<HashSet<PtyId>>,
-    /// The terminals whose holder is sending its microphone.
-    streaming: Mutex<HashSet<PtyId>>,
 }
 
 impl Platform {
@@ -56,7 +54,6 @@ impl Platform {
             order: Mutex::default(),
             output: Mutex::default(),
             remote_held: Mutex::default(),
-            streaming: Mutex::default(),
         });
         let watched = Arc::downgrade(&inner);
         std::thread::spawn(move || watch(&watched));
@@ -85,15 +82,6 @@ impl Platform {
     pub fn remote_held(&self, terminals: HashSet<PtyId>) {
         *lock(&self.inner.remote_held) = terminals;
     }
-
-    pub fn streaming(&self, id: &PtyId, streaming: bool) {
-        let mut sending = lock(&self.inner.streaming);
-        if streaming {
-            sending.insert(id.clone())
-        } else {
-            sending.remove(id)
-        };
-    }
 }
 
 /// The one thread that switches the default input, so a switch that fails, or a saved input that was gone, is
@@ -112,13 +100,12 @@ fn watch(inner: &Weak<Inner>) {
 }
 
 impl Inner {
-    /// The device stands in for the default input exactly while a terminal it would carry listens and its remote
-    /// holder sends.
+    /// The device stands in for the default input exactly while a remote client holds one of this server's
+    /// terminals, so a program records from it from its first sample.
     fn poll(&self) -> anyhow::Result<()> {
         let (recording, skipped) = ca::recording_processes(self.device).context("list the processes recording")?;
-        let listening = self.listen(&recording);
-        let carried = &*lock(&self.streaming) & &*lock(&self.remote_held);
-        let switched = if listening.iter().any(|id| carried.contains(id)) {
+        self.listen(&recording);
+        let switched = if !lock(&self.remote_held).is_empty() {
             self.take_input()
         } else {
             restore_input(self.device, &self.restore_path())
@@ -127,7 +114,7 @@ impl Inner {
         skipped.map_or(Ok(()), |error| Err(error.context("read an audio process")))
     }
 
-    fn listen(&self, recording: &[ca::Recording]) -> HashSet<PtyId> {
+    fn listen(&self, recording: &[ca::Recording]) {
         let terminals = lock(&self.terminals).clone();
         let remote_held = lock(&self.remote_held).clone();
         let now = listeners(recording, &terminals, &remote_held, |pid| self.terminal_of(pid));
@@ -136,7 +123,6 @@ impl Inner {
             advance(&mut order, &now);
             order.first().cloned()
         };
-        let listening = now.clone();
         self.shared.set_listening(now);
         let mut output = lock(&self.output);
         match (first, output.as_mut()) {
@@ -147,7 +133,6 @@ impl Inner {
             },
             (None, _) => *output = None,
         }
-        listening
     }
 
     fn terminal_of(&self, pid: Pid) -> Option<PtyId> {

@@ -458,13 +458,11 @@ async fn relay_terminal<R, W>(
 
 /// Takes the holder's audio until it closes the stream or the lock leaves it, which closes the stream.
 async fn hear<R: AsyncRead + Unpin>(server: &Server, client: &Client, terminal: &Terminal, mut input: BufReader<R>) {
-    server.mic.streaming(&terminal.id, true);
     let mut buffer = [0u8; INPUT_BYTES];
     while let Ok(read) = input.read(&mut buffer).await
         && read > 0
         && server.hear(client, terminal, &buffer[..read]).is_ok()
     {}
-    server.mic.streaming(&terminal.id, false);
 }
 
 async fn blocking<T: Send + 'static>(server: &Arc<Server>, work: impl FnOnce(&Server) -> T + Send + 'static) -> T {

@@ -164,11 +164,6 @@ impl Microphones {
     pub(crate) fn remote_held(&self, terminals: HashSet<PtyId>) {
         self.on_platform(|platform| platform.remote_held(terminals));
     }
-
-    /// Whether the terminal's holder has its `Stream::Mic` open.
-    pub(crate) fn streaming(&self, id: &PtyId, streaming: bool) {
-        self.on_platform(|platform| platform.streaming(id, streaming));
-    }
 }
 
 impl Server {

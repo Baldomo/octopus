@@ -1,8 +1,17 @@
-# octopus
+<h1 align="center">
+  <img src="crates/desktop/icons/icon.png" alt="" width="128">
+  <br>octopus
+</h1>
 
-Run your coding agents in parallel, on your own machines, from your laptop or your phone.
+<p align="center">
+  Run your coding agents in parallel, on your own machines, from your laptop or your phone.
+  <br>
+  <a href="#quick-start">Quick start</a>
+  ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
 
-<img src="https://github.com/zabealbe/octopus/raw/assets/readme/hero.png" alt="One task on three devices: the tablet holds the agent's terminal and fills its screen, the laptop shows the same terminal read-only beside the changed file with Take over, and the phone lists the live tasks with each agent's status" width="100%">
+<img src="https://github.com/zabealbe/octopus/raw/assets/readme/hero.png" alt="One task on three devices: the tablet holds the agent's terminal and fills its screen, the laptop shows the same terminal read-only beside a k6 load-test report in its browser with Take over, and the phone lists the live tasks with each agent's status" width="100%">
 
 - **Agents in parallel.** Every task runs its own Claude Code agent in its own terminal. Tasks nest into subtasks and group by workspace, and a glance at the sidebar or the Tasks board shows which agents are working and which wait on you.
 - **Any folder, three ways.** A task works in any folder on its server: in place, in a git worktree of its own, or in a worktree that also clones your ignored files such as `.env` and `node_modules` (on a file system that clones files, like APFS).

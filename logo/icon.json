@@ -1,5 +1,5 @@
 {
   "default": "octopus.png",
-  "bg_color": "#0c161f",
+  "bg_color": "#070a14",
   "android_fg": "android-foreground.svg"
 }

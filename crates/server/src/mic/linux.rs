@@ -140,8 +140,6 @@ impl Platform {
     pub fn started(&self, _id: &PtyId) {}
 
     pub(crate) fn remote_held(&self, _terminals: HashSet<PtyId>) {}
-
-    pub(crate) fn streaming(&self, _id: &PtyId, _streaming: bool) {}
 }
 
 impl Inner {

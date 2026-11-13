@@ -122,8 +122,8 @@ pub struct Lists {
     pub workspaces: Vec<WorkspaceRef>,
 }
 
-/// The hues auto draws from: none reads as a task's status, as red, orange, amber, lime and green do.
-const AUTO_HUES: [Hue; 7] = [Hue::Mint, Hue::Teal, Hue::Sky, Hue::Blue, Hue::Indigo, Hue::Violet, Hue::Pink];
+/// The hues auto draws from: none reads as a task's status or as the accent.
+const AUTO_HUES: [Hue; 5] = [Hue::Teal, Hue::Sky, Hue::Blue, Hue::Violet, Hue::Pink];
 
 /// The soft tone of a hue hashed from the section's name.
 pub(crate) fn auto_swatch(name: &str) -> Swatch {
@@ -436,10 +436,10 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn auto_never_lands_on_a_status_hue() {
-        let status = [Hue::Red, Hue::Orange, Hue::Amber, Hue::Lime, Hue::Green];
+    fn auto_never_lands_on_a_status_or_accent_hue() {
+        let excluded = [Hue::Red, Hue::Orange, Hue::Amber, Hue::Lime, Hue::Green, Hue::Mint, Hue::Indigo];
         let picks: Vec<Swatch> = (0..1000).map(|n| auto_swatch(&format!("workspace-{n}"))).collect();
-        assert!(picks.iter().all(|swatch| swatch.tone == Tone::Soft && !status.contains(&swatch.hue)));
+        assert!(picks.iter().all(|swatch| swatch.tone == Tone::Soft && !excluded.contains(&swatch.hue)));
         assert!(
             AUTO_HUES.iter().all(|hue| picks.iter().any(|swatch| swatch.hue == *hue)),
             "auto spreads over every hue it may take"

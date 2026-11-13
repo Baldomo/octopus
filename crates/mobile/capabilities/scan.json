@@ -3,5 +3,9 @@
   "description": "The pairing form reads an invite from a QR code.",
   "webviews": ["main"],
   "platforms": ["iOS", "android"],
-  "permissions": ["barcode-scanner:allow-scan", "barcode-scanner:allow-cancel"]
+  "permissions": [
+    "barcode-scanner:allow-request-permissions",
+    "barcode-scanner:allow-scan",
+    "barcode-scanner:allow-cancel"
+  ]
 }

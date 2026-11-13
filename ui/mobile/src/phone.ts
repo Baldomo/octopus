@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { cancel, Format, scan } from "@tauri-apps/plugin-barcode-scanner";
+import { cancel, Format, requestPermissions, scan } from "@tauri-apps/plugin-barcode-scanner";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Feel } from "./feel";
 
@@ -36,10 +36,13 @@ type Page = { url: string; tunneled: boolean };
 type Insets = { top: number; left: number; right: number; bottom: number };
 
 /**
- * Shows the camera behind the page, which goes transparent around its finder, and resolves to the text of the first
- * QR code that is an invite or a link.
+ * Asks the OS for the camera, then shows it behind the page, which goes transparent around its finder, and resolves to
+ * the text of the first QR code that is an invite or a link.
  */
 export async function scanInvite(): Promise<string> {
+  if ((await requestPermissions()) !== "granted") {
+    throw new Error("octopus may not use the camera; allow it in this phone's settings.");
+  }
   for (;;) {
     const { content } = await scan({ windowed: true, formats: [Format.QRCode] });
     if (content.startsWith(INVITE)) return content;

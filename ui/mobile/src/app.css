@@ -136,7 +136,7 @@ body {
 
 .sheet {
   --surface: var(--sheet);
-  --fill: light-dark(#f0f1f4, #24262d);
+  --fill: var(--sheet-fill);
   position: absolute;
   left: 0;
   right: 0;

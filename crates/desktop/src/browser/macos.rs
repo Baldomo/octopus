@@ -29,8 +29,6 @@ thread_local! {
 }
 
 const OBSERVED: [&str; 4] = ["URL", "loading", "canGoBack", "canGoForward"];
-/// A navigation another replaced, and a response WebKit hands to a download instead of showing.
-const NOT_A_FAILURE: [isize; 2] = [-999, 102];
 const LINK_ACTIVATED: isize = 0;
 const CANCEL: isize = 0;
 const SHIFT: usize = 1 << 17;
@@ -111,17 +109,24 @@ unsafe extern "C-unwind" fn failed_load(
 ) {
     // SAFETY: WebKit passes the NSError the load failed with.
     let Some(error) = (unsafe { error.as_ref() }) else { return };
-    let (code, url, description) = unsafe {
+    let (domain, code, url, description) = unsafe {
+        let domain = text(msg_send![error, domain]).unwrap_or_default();
         let code: isize = msg_send![error, code];
         let info: *mut AnyObject = msg_send![error, userInfo];
         let key = NSString::from_str("NSErrorFailingURLStringKey");
         let url = info.as_ref().and_then(|info| text(msg_send![info, objectForKey: &*key]));
-        (code, url, text(msg_send![error, localizedDescription]))
+        (domain, code, url, text(msg_send![error, localizedDescription]))
     };
-    if !NOT_A_FAILURE.contains(&code) {
+    if !on_purpose(&domain, code) {
         let error = description.unwrap_or_else(|| format!("error {code}"));
         tell(webview, Change::Failed { url: url.unwrap_or_default(), error });
     }
+}
+
+/// Whether WebKit ended the load on purpose: a navigation another replaced, a load its policy stopped, such as a
+/// download, or a media file it plays in a media document of its own.
+fn on_purpose(domain: &str, code: isize) -> bool {
+    matches!((domain, code), ("NSURLErrorDomain", -999) | ("WebKitErrorDomain", 102 | 204))
 }
 
 /// The new tab a link clicked with ⌘ or the middle button opens, selected when ⇧ is held too.
@@ -373,4 +378,18 @@ pub(crate) fn has_focus(window: &tauri::Window) -> bool {
         let responder: *mut AnyObject = unsafe { msg_send![&*window.cast::<AnyObject>(), firstResponder] };
         watched(responder)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_load_webkit_ends_on_purpose_is_no_failure() {
+        assert!(on_purpose("NSURLErrorDomain", -999));
+        assert!(on_purpose("WebKitErrorDomain", 102));
+        assert!(on_purpose("WebKitErrorDomain", 204));
+        assert!(!on_purpose("NSURLErrorDomain", -1100));
+        assert!(!on_purpose("NSURLErrorDomain", 204));
+    }
 }

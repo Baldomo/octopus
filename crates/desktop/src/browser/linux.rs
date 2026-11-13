@@ -3,9 +3,19 @@
 use std::rc::Rc;
 
 use tauri::Webview;
-use webkit2gtk::{FindControllerExt, FindOptions, HitTestResultExt, WebViewExt};
+use webkit2gtk::{
+    Error, FindControllerExt, FindOptions, HitTestResultExt, NetworkError, PluginError, PolicyError, WebViewExt,
+};
 
 use super::{Change, Go};
+
+/// Whether WebKit ended the load on purpose: a navigation another replaced, a load its policy stopped, such as a
+/// download, or a media file it plays in a media document of its own.
+fn on_purpose(error: &Error) -> bool {
+    error.matches(NetworkError::Cancelled)
+        || error.matches(PolicyError::FrameLoadInterruptedByPolicyChange)
+        || error.matches(PluginError::WillHandleLoad)
+}
 
 pub fn watch(webview: &Webview, watcher: impl Fn(Change) + Send + 'static) -> tauri::Result<()> {
     webview.with_webview(move |platform| {
@@ -28,7 +38,9 @@ pub fn watch(webview: &Webview, watcher: impl Fn(Change) + Send + 'static) -> ta
             hovering(Change::Hovered { link: hit.link_uri().map(|link| link.to_string()) });
         });
         view.connect_load_failed(move |_, _, url, error| {
-            watcher(Change::Failed { url: url.to_string(), error: error.to_string() });
+            if !on_purpose(error) {
+                watcher(Change::Failed { url: url.to_string(), error: error.to_string() });
+            }
             true
         });
     })
