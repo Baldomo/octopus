@@ -38,7 +38,7 @@ pub(crate) fn saturate(n: impl TryInto<u32>) -> u32 {
 
 /// Reaches every layer of the UI, the webviews that listen; an event only fails to once the window is gone, and
 /// then nobody is left to tell.
-pub fn emit(app: &AppHandle, event: &str, payload: impl Serialize + Clone) {
+pub fn emit<R: Runtime>(app: &AppHandle<R>, event: &str, payload: impl Serialize + Clone) {
     if let Err(error) = app.emit(event, payload) {
         eprintln!("octopus app: emit {event}: {error}");
     }

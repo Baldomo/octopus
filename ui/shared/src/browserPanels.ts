@@ -35,6 +35,18 @@ export function heirOf(before: readonly string[], after: readonly string[], clos
 }
 
 /**
+ * The index a tab opened from `opener`'s page takes in `order`: right after `opener` and after the tabs it opened that
+ * follow it, so tabs opened one after another keep the order they were opened in. A gone opener's tab joins the end.
+ */
+export function openedAt(order: readonly string[], opener: string, openerOf: (tab: string) => string | undefined) {
+  const from = order.indexOf(opener);
+  if (from < 0) return order.length;
+  let at = from + 1;
+  while (at < order.length && openerOf(order[at]!) === opener) at++;
+  return at;
+}
+
+/**
  * Follows the task's panels as they change: a panel whose `load` moved since this client last saw the task selects
  * itself, a new panel counting from 0; otherwise the selection holds on to its panel, so panels moving around it leave
  * it where it is, and passes to its heir when it closes.

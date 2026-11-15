@@ -1,12 +1,22 @@
-import { createEffect, createRoot } from "solid-js";
+import { createEffect, createRoot, createSignal } from "solid-js";
 import { chase, endLift, holdLift, LANDS_MS, raise, release, rest, type Start } from "./lift";
 import { reduced } from "./motion";
-import { moveTo } from "./sectionOrder";
+import { inOrder, moveTo } from "./sectionOrder";
 import { slotAmong } from "./slot";
 import { report } from "./state";
 
 const sameOrder = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && a.every((key, nth) => key === b[nth]);
+
+/** A row's tab keys in the order a lifted tab arranges them while it moves, else in the order `keys` gives. */
+export function createArrangement(keys: () => string[]) {
+  const [arranged, arrange] = createSignal<string[] | null>(null);
+  const shown = () => {
+    const order = arranged();
+    return order === null ? keys() : inOrder(keys(), order, (key) => key);
+  };
+  return { shown, arrange };
+}
 
 export const liftTab =
   (
@@ -89,7 +99,7 @@ export const liftTab =
         const to = order.indexOf(key);
         if (to === own.indexOf(key)) return home();
         surface.feel("drop");
-        settle(landed(to));
+        settle(landed(to).then(() => element.scrollIntoView({ block: "nearest", inline: "nearest" })));
       },
       cancel: home,
     };

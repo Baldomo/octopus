@@ -1,30 +1,67 @@
 import { createEffect, createSignal, Match, onCleanup, onMount, Show, Switch, untrack } from "solid-js";
 import { Address } from "@octopus/shared/Address.tsx";
-import { backend } from "@octopus/shared/backend.ts";
-import { browserOpened, browserPages, createPlacing, serially } from "@octopus/shared/browserPages.ts";
+import { backend, on } from "@octopus/shared/backend.ts";
+import { browserPages, createPlacing, downloadNote, serially } from "@octopus/shared/browserPages.ts";
 import { createPanelSelection, openTyped, pageName, panelName, type Target } from "@octopus/shared/browserPanels.ts";
-import { NEW_BROWSER_PANEL, type BrowserId, type Go, type TaskRef } from "@octopus/shared/generated.ts";
-import { act, model } from "@octopus/shared/state.ts";
+import {
+  EVENTS,
+  NEW_BROWSER_PANEL,
+  type BrowserId,
+  type Downloaded,
+  type Go,
+  type Held,
+  type TaskRef,
+} from "@octopus/shared/generated.ts";
+import { act, model, report } from "@octopus/shared/state.ts";
 import { feel } from "./feel";
 import { Icon } from "./Icon";
-import { claimBack, screen, sheet } from "./nav";
-import { Circle, CrumbBar, FolderTabs, Gap, Id, Para, Secondary, sectionColor } from "./parts";
+import { back, claimBack, openSheet, screen, sheet } from "./nav";
+import { Circle, CrumbBar, FolderTabs, Gap, Id, Mi, Para, Secondary, sectionColor } from "./parts";
 import { phone, phoneEvents } from "./phone";
+import { Sheet, SheetHead } from "./Sheet";
 import { sliding } from "./stack";
-import { toasting } from "./Toast";
+import { copy, notify, toasting } from "./Toast";
 
 const pages = browserPages({ load: phone.browserLoad, forget: phone.browserForget });
 export const forgetBrowsersExcept = pages.forgetExcept;
 const [draws, setDraws] = createSignal<boolean>();
 
 act(phone.browserEngine().then(setDraws));
-act(
-  browserOpened(({ task, url }) => {
-    const view = model.tasks[task];
-    if (view !== undefined) act(backend.browserOpen(view.at, NEW_BROWSER_PANEL, url));
-  }),
-);
 act(phoneEvents.browserEnded(({ task, panel }) => pages.drop(task, panel)));
+act(on<Held>(EVENTS.browserHeld)(({ task, panel, link }) => openSheet({ is: "link", key: task, panel, link })));
+act(
+  on<Downloaded>(EVENTS.browserDownloaded)((downloaded) =>
+    (downloaded.success ? notify : report)(downloadNote(downloaded)),
+  ),
+);
+
+export function LinkMenu(props: { taskKey: string; panel: BrowserId; link: string }) {
+  return (
+    <Sheet>
+      <SheetHead title={props.link} />
+      <Mi
+        slot={<Icon name="plus" />}
+        tap={() => {
+          back();
+          const view = model.tasks[props.taskKey];
+          if (view !== undefined) act(pages.openFrom(view, props.panel, props.link, false));
+        }}
+      >
+        Open in new tab
+      </Mi>
+      <Mi
+        slot={<Icon name="copy" />}
+        tap={() => {
+          act(copy(props.link, "the link"));
+          back();
+        }}
+      >
+        Copy link
+      </Mi>
+      <Gap n={2} />
+    </Sheet>
+  );
+}
 
 export function Browser(props: { taskKey: string }) {
   const view = () => model.tasks[props.taskKey];
@@ -130,6 +167,10 @@ export function Browser(props: { taskKey: string }) {
     const task = view();
     if (task !== undefined) act(backend.browserClose(task.at, closing));
   };
+  const move = async (moving: BrowserId, to: number) => {
+    const task = view();
+    if (task !== undefined) await backend.browserMove(task.at, moving, to);
+  };
 
   return (
     <>
@@ -147,10 +188,15 @@ export function Browser(props: { taskKey: string }) {
       />
       <Show when={(view()?.task.browsers.length ?? 0) > 0}>
         <FolderTabs
-          tabs={(view()?.task.browsers ?? []).map((each) => ({ key: each.panel, name: panelName(each) }))}
+          tabs={(view()?.task.browsers ?? []).map((each) => ({
+            key: each.panel,
+            name: panelName(each),
+            loading: pages.loading(props.taskKey, each.panel),
+          }))}
           selected={target()}
           choose={choose}
           close={close}
+          move={move}
           add={{
             label: "New browser panel",
             selected: target() === NEW_BROWSER_PANEL,

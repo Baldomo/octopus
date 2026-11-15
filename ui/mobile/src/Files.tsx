@@ -248,6 +248,7 @@ export function EditorScreen(props: { taskKey: string }) {
                   selected={shown}
                   choose={(tab) => act(files.open(tab))}
                   close={close}
+                  move={async (tab, to) => files.moveTab(tab, to)}
                 />
                 <Show when={files.state.unreadable[shown]}>{(problem) => <div class="empty">{problem()}</div>}</Show>
                 <Switch fallback={<Code files={files} path={shown} />}>

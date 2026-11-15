@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use octopus_shell::webkit::{Change, Go};
+use octopus_shell::webkit::{self, Go, PhoneChange};
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use tauri::http::header;
@@ -40,7 +40,7 @@ pub(crate) fn plugin() -> TauriPlugin<Wry> {
 enum Told {
     Changed {
         key: String,
-        change: Change,
+        change: webkit::Told<PhoneChange>,
     },
     /// The page's main frame heads to another page, and waits for `headed`.
     Heading {

@@ -1,10 +1,14 @@
 import { onCleanup } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import { on } from "./backend.ts";
+import { backend, on } from "./backend.ts";
+import { openedAt } from "./browserPanels.ts";
 import { said } from "./errors.ts";
 import {
+  BACKGROUND_BROWSER_PANEL,
   EVENTS,
+  NEW_BROWSER_PANEL,
   type BrowserId,
+  type Downloaded,
   type Failed,
   type Opened,
   type Paged,
@@ -25,8 +29,6 @@ export type Page = Omit<Paged, "task" | "panel"> & {
   /** The panel's `load` this client last loaded. */
   load: number;
 };
-
-export const browserOpened = on<Opened>(EVENTS.browserOpened);
 
 /** Native calls run in the order the UI makes them, so a view exists before it is placed or let go. */
 let queue: Promise<unknown> = Promise.resolve();
@@ -51,10 +53,11 @@ export function createPlacing(place: (latest: () => boolean) => Promise<unknown>
   };
 }
 
-/** The pages this client keeps, per task key, which `engine` draws. */
+/** The pages this client keeps, per task key, which `engine` draws, and the tabs their pages open. */
 export function browserPages(engine: BrowserEngine) {
   const [kept, setKept] = createStore<Record<string, { at: TaskRef; pages: Record<BrowserId, Page> }>>({});
   const page = (task: string, panel: BrowserId): Page | undefined => kept[task]?.pages[panel];
+  const loading = (task: string, panel: BrowserId) => page(task, panel)?.loading === true;
   const setPage = (task: string, panel: BrowserId, change: Partial<Page>) =>
     setKept(
       produce((all) => {
@@ -103,7 +106,10 @@ export function browserPages(engine: BrowserEngine) {
     );
   };
 
-  /** Lets go of the views of the tasks not among `keep`, and of every panel its server closed. */
+  /** Per task key, the panel whose page opened each panel a page opened on this client. */
+  const openers = new Map<string, Map<BrowserId, BrowserId>>();
+
+  /** Lets go of the views and openers of the tasks not among `keep`, and of every panel its server closed. */
   const forgetExcept = (keep: string[]) => {
     for (const [task, { at, pages }] of Object.entries(kept)) {
       const open = keep.includes(task) ? (model.tasks[task]?.task.browsers ?? []) : [];
@@ -112,7 +118,37 @@ export function browserPages(engine: BrowserEngine) {
         act(serially(() => engine.forget(at, panel)));
       }
     }
+    for (const task of openers.keys()) if (!keep.includes(task)) openers.delete(task);
   };
 
-  return { page, load, drop, forgetExcept };
+  /**
+   * Opens `url` in a new tab after the `opener`'s tab and the tabs it opened before. A tab opened behind loads on this
+   * client at once, and no client selects it.
+   */
+  const openFrom = async (task: TaskView, opener: BrowserId, url: string, select: boolean) => {
+    const panel = await backend.browserOpen(task.at, select ? NEW_BROWSER_PANEL : BACKGROUND_BROWSER_PANEL, url);
+    const opened = openers.get(task.key) ?? new Map<BrowserId, BrowserId>();
+    openers.set(task.key, opened.set(panel, opener));
+    if (!select) load(task, panel, url, 0);
+    const others = (model.tasks[task.key]?.task.browsers ?? [])
+      .map((known) => known.panel)
+      .filter((id) => id !== panel);
+    await backend.browserMove(
+      task.at,
+      panel,
+      openedAt(others, opener, (tab) => opened.get(tab)),
+    );
+  };
+  act(
+    on<Opened>(EVENTS.browserOpened)(({ task, panel, url, select }) => {
+      const view = model.tasks[task];
+      if (view !== undefined) act(openFrom(view, panel, url, select));
+    }),
+  );
+
+  return { page, loading, load, drop, forgetExcept, openFrom };
 }
+
+/** What a toast says of a download that ended. */
+export const downloadNote = ({ file, folder, success }: Downloaded) =>
+  success ? `Saved ${file} to ${folder}` : `The download of ${file} failed`;

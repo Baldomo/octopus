@@ -1,7 +1,7 @@
 import { createEffect, createSignal, onCleanup, onMount, Show, untrack } from "solid-js";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { backend } from "@octopus/shared/backend.ts";
-import { BACKGROUND_BROWSER_PANEL, NEW_BROWSER_PANEL } from "@octopus/shared/generated.ts";
+import { backend, on } from "@octopus/shared/backend.ts";
+import { EVENTS, NEW_BROWSER_PANEL, type Downloaded } from "@octopus/shared/generated.ts";
 import { Address } from "@octopus/shared/Address.tsx";
 import {
   createPanelSelection,
@@ -11,48 +11,31 @@ import {
   panelName,
   type Target,
 } from "@octopus/shared/browserPanels.ts";
-import { browserOpened, browserPages, createPlacing, serially } from "@octopus/shared/browserPages.ts";
+import { browserPages, createPlacing, downloadNote, serially } from "@octopus/shared/browserPages.ts";
 import { provideBrowser } from "@octopus/shared/commands.ts";
 import { FolderTabs, type FolderTab } from "@octopus/shared/FolderTabs.tsx";
 import type { BrowserId, BrowserPanel, Go, TaskView } from "@octopus/shared/generated.ts";
-import { act, model, openView, report, serverLabel, showSurface } from "@octopus/shared/state.ts";
+import { act, openView, report, serverLabel, showSurface } from "@octopus/shared/state.ts";
+import { toast } from "@octopus/shared/Toast.tsx";
 import type { OpenLink } from "@octopus/shared/Terminals.tsx";
 import { desktop } from "./backend";
 import { liftOnDrag } from "./lift";
-import { cycled, openedAt } from "./tabOrder";
+import { cycled } from "./tabOrder";
 
 const pages = browserPages({ load: desktop.browserLoad, forget: desktop.browserForget });
 export const forgetBrowsersExcept = pages.forgetExcept;
-/** Per task key, the panel whose page opened each panel a page opened on this client. */
-const openers = new Map<string, Map<BrowserId, BrowserId>>();
+act(
+  on<Downloaded>(EVENTS.browserDownloaded)((downloaded) =>
+    (downloaded.success ? toast : report)(downloadNote(downloaded)),
+  ),
+);
 /** Per task key, the tabs this client closed, the last closed last, each with its page and its index. */
 const closed = new Map<string, { url: string; at: number }[]>();
-const entryOf = <T,>(all: Map<string, T>, task: string, fresh: () => T) => {
-  if (!all.has(task)) all.set(task, fresh());
-  return all.get(task)!;
-};
 const [editing, setEditing] = createSignal(false);
 /** While finding, the address field takes the text to find in the page, which it keeps for the next find. */
 const [finding, setFinding] = createSignal(false);
 const [sought, setSought] = createSignal("");
 let address: HTMLInputElement | undefined;
-
-/**
- * Opens `url` in a new tab after the `opener`'s tab and the tabs it opened before. A tab opened behind loads on this
- * client at once, and no client selects it.
- */
-async function openFrom(task: TaskView, opener: BrowserId, url: string, select: boolean) {
-  const panel = await backend.browserOpen(task.at, select ? NEW_BROWSER_PANEL : BACKGROUND_BROWSER_PANEL, url);
-  const opened = entryOf(openers, task.key, () => new Map());
-  opened.set(panel, opener);
-  if (!select) pages.load(task, panel, url, 0);
-  const others = (model.tasks[task.key]?.task.browsers ?? []).map((known) => known.panel).filter((id) => id !== panel);
-  await backend.browserMove(
-    task.at,
-    panel,
-    openedAt(others, opener, (tab) => opened.get(tab)),
-  );
-}
 
 /** Opens the tab this client closed last in the task again, at its index, and selects it. */
 async function reopen(task: TaskView) {
@@ -81,12 +64,6 @@ export function Browser(props: { visible: boolean }) {
     return task === undefined || panel === undefined ? undefined : pages.page(task.key, panel.panel);
   };
   const shownUrl = () => shown()?.failed?.url || shown()?.url || current()?.url;
-
-  const unlisten = browserOpened(({ task, panel, url, select }) => {
-    const view = model.tasks[task];
-    if (view !== undefined) act(openFrom(view, panel, url, select));
-  });
-  onCleanup(() => unlisten.then((stop) => stop(), report));
 
   createEffect(() => {
     const [task, chosen] = [openView(), current()];
@@ -138,7 +115,7 @@ export function Browser(props: { visible: boolean }) {
       name: panelName(panel),
       where: undefined,
       title: panel.url,
-      loading: pages.page(openView()?.key ?? "", panel.panel)?.loading === true,
+      loading: pages.loading(openView()?.key ?? "", panel.panel),
       dirty: false,
     }));
 
@@ -147,7 +124,7 @@ export function Browser(props: { visible: boolean }) {
     if (task === undefined) return;
     const at = panels().findIndex((known) => known.panel === panel);
     const url = pages.page(task.key, panel)?.url || panels()[at]?.url;
-    if (url !== undefined) entryOf(closed, task.key, () => []).push({ url, at });
+    if (url !== undefined) closed.set(task.key, [...(closed.get(task.key) ?? []), { url, at }]);
     act(backend.browserClose(task.at, panel));
   };
 

@@ -5,7 +5,7 @@ use octopus_shell::types::constant;
 use serde_json::json;
 use ts_rs::Config;
 
-use crate::browser::{DOWNLOADED_EVENT, Downloaded, HOVERED_EVENT, Hovered};
+use crate::browser::{HOVERED_EVENT, Hovered};
 use crate::commands::Outside;
 use crate::layers::{FLOAT, title_bar_height};
 use crate::menu::{COMMAND_EVENT, MenuCommand, MenuGroup, MenuKey};
@@ -15,11 +15,9 @@ pub const PATH: &str = "ui/desktop/src/generated.ts";
 
 pub fn render() -> String {
     let config = Config::default().with_large_int("number");
-    let declarations =
-        octopus_shell::declarations!(&config, Hovered, Downloaded, Outside, MenuCommand, MenuGroup, MenuKey);
+    let declarations = octopus_shell::declarations!(&config, Hovered, Outside, MenuCommand, MenuGroup, MenuKey);
     let events = json!({
         "browserHovered": HOVERED_EVENT,
-        "browserDownloaded": DOWNLOADED_EVENT,
         "menuCommand": COMMAND_EVENT,
     });
     let constants = [

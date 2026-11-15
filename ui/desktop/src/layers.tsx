@@ -6,7 +6,7 @@ import { desktop, desktopEvents } from "./backend";
 import { Browser, forgetBrowsersExcept, openLink } from "./Browser";
 import { ClientMenu } from "@octopus/shared/ClientMenu.tsx";
 import { Files } from "@octopus/shared/Files.tsx";
-import { filesOf, forgetFilesExcept, nameOf, parentOf } from "@octopus/shared/taskFiles.ts";
+import { filesOf, forgetFilesExcept } from "@octopus/shared/taskFiles.ts";
 import { commands, hint } from "@octopus/shared/commands.ts";
 import { NewTask } from "@octopus/shared/NewTask.tsx";
 import { JoinAccount, PairServer } from "@octopus/shared/PairServer.tsx";
@@ -14,7 +14,7 @@ import { Palette } from "@octopus/shared/Palette.tsx";
 import { Shortcuts } from "@octopus/shared/Shortcuts.tsx";
 import { Sidebar } from "./Sidebar";
 import { holdsKeyboard } from "@octopus/shared/SidebarControls.tsx";
-import { Toast, toast, toasting } from "@octopus/shared/Toast.tsx";
+import { Toast, toasting } from "@octopus/shared/Toast.tsx";
 import { act, model, openView, report, serverView, showModal, showSidebar, ui, uiAct } from "@octopus/shared/state.ts";
 import { dormant } from "@octopus/shared/Glyph.tsx";
 import { windowShown } from "@octopus/shared/terminalSession.ts";
@@ -246,17 +246,6 @@ function Modal(props: { modal: ModalName }) {
  */
 export function Floating() {
   const sidebar = floating({ name: "sidebar", modal: holdsKeyboard, out: () => ui.sidebar });
-  const unlisten = desktopEvents.browserDownloaded(({ path, success }) => {
-    const [folder, name] = [parentOf(path), nameOf(path)];
-    if (success)
-      toast(
-        <>
-          Downloaded {name} to {folder}
-        </>,
-      );
-    else report(`The download of ${name} failed`);
-  });
-  onCleanup(() => unlisten.then((stop) => stop(), report));
   return (
     <div class="float-layer" style={{ width: `${ui.viewport.width}px`, height: `${ui.viewport.height}px` }}>
       <PageStatus />

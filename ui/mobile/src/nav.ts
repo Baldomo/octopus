@@ -1,6 +1,6 @@
 import { createEffect, createRoot, createSignal } from "solid-js";
 import type { FolderPicker } from "@octopus/shared/folderPath.ts";
-import type { EntryKind, PtyId } from "@octopus/shared/generated.ts";
+import type { BrowserId, EntryKind, PtyId } from "@octopus/shared/generated.ts";
 import type { Toward } from "@octopus/shared/motion.ts";
 import { act, openTask as markOpened } from "@octopus/shared/state.ts";
 import { phone } from "./phone";
@@ -25,6 +25,7 @@ export type Sheet =
   | { is: "task"; key: string; open: { panel: PtyId | null } | null }
   | { is: "reopen"; key: string }
   | { is: "entry"; key: string; path: string; kind: EntryKind }
+  | { is: "link"; key: string; panel: BrowserId; link: string }
   | { is: "section"; name: string }
   | { is: "addws" }
   | { is: "newtask"; section: string | null }

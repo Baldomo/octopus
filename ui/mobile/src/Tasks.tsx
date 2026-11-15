@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 import type { Column, Row, Section } from "@octopus/shared/generated.ts";
-import { isCollapsed, isOpen, report, scale, sections, servers, toggleCollapsed, ui } from "@octopus/shared/state.ts";
+import { isCollapsed, isOpen, report, sections, servers, toggleCollapsed } from "@octopus/shared/state.ts";
 import { backend } from "@octopus/shared/backend.ts";
 import { dropHint } from "@octopus/shared/drop.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
@@ -19,26 +19,18 @@ import {
   liftSection,
   liftsIn,
 } from "@octopus/shared/liftTasks.ts";
-import { type Point, type Start } from "@octopus/shared/lift.ts";
-import { feel } from "./feel";
+import type { Within } from "@octopus/shared/lift.ts";
 import { go, openSheet, openTask } from "./nav";
 import { statusWord } from "@octopus/shared/Glyph.tsx";
 import { Circle, Glyph, Id, looksReachable, ServerDot, Slot } from "./parts";
-import { pressed } from "./press";
+import { liftOnPhone, pressed } from "./press";
 import { pullToRefresh } from "./pull";
 
 const ITEMS = ".sech, .gl, .row, .empty, .addws";
 
 export const refreshServers = () => backend.serversRefresh().catch(report);
 
-/** Lifts a row through `start` with its ghost on the screen's content, over the list of Tasks or a board's cards. */
-export const liftOnPhone = (start: Start) => (element: HTMLElement, from: Point) => {
-  const stage = element.closest<HTMLElement>(".content");
-  const list = element.closest<HTMLElement>(".list, .cards");
-  if (stage === null || list === null) return null;
-  const free = list.classList.contains("cards");
-  return start(element, from, { stage, list, free, throws: true, covered: () => false, zoom: scale(ui.prefs), feel });
-};
+const IN_LIST: Within = { stage: ".content", list: ".list", free: false };
 
 function TaskRow(props: { row: Row; section: string; group: Column }) {
   return (
@@ -56,7 +48,7 @@ function TaskRow(props: { row: Row; section: string; group: Column }) {
       {...pressed(
         () => openTask(props.row.key),
         () => openSheet({ is: "task", key: props.row.key, open: null }),
-        liftOnPhone(lift(props.row, props.section)),
+        liftOnPhone(IN_LIST, lift(props.row, props.section)),
       )}
     >
       <Slot>
@@ -115,7 +107,7 @@ function SectionRows(props: { section: Section }) {
         {...pressed(
           () => {},
           () => openSheet({ is: "section", name: props.section.name }),
-          liftOnPhone(liftSection(props.section.name)),
+          liftOnPhone(IN_LIST, liftSection(props.section.name)),
         )}
       >
         <span

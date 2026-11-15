@@ -6,16 +6,19 @@ import { keepInView } from "@octopus/shared/keepInView.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
 import { animateList } from "@octopus/shared/flip.ts";
+import type { Within } from "@octopus/shared/lift.ts";
 import { dropTarget, isAway, isLanding, isLifted, isNesting, lift } from "@octopus/shared/liftTasks.ts";
 import { animate, FADE, give, play, PROJECT_S, reduced, type Running } from "@octopus/shared/motion.ts";
 import { PUSH } from "./motion";
 import { back, openSheet, openTask, screen } from "./nav";
 import { Circle, CrumbBar, Glyph, Gap, Id, Slot } from "./parts";
-import { pressed } from "./press";
+import { liftOnPhone, pressed } from "./press";
 import { pullToRefresh } from "./pull";
-import { liftOnPhone, refreshServers } from "./Tasks";
+import { refreshServers } from "./Tasks";
 import { slidingThumb } from "./thumb";
 import { owns } from "./touch";
+
+const IN_CARDS: Within = { stage: ".content", list: ".cards", free: true };
 
 function Card(props: { row: Row; section: string; column: Column }) {
   const meta = () =>
@@ -37,7 +40,7 @@ function Card(props: { row: Row; section: string; column: Column }) {
       {...pressed(
         () => openTask(props.row.key),
         () => openSheet({ is: "task", key: props.row.key, open: null }),
-        liftOnPhone(lift(props.row, props.section)),
+        liftOnPhone(IN_CARDS, lift(props.row, props.section)),
       )}
     >
       <Slot>

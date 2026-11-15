@@ -342,6 +342,10 @@ export type Failed = { task: string, panel: BrowserId, url: string, error: strin
 
 export type Opened = { task: string, panel: BrowserId, url: string, select: boolean, };
 
+export type Held = { task: string, panel: BrowserId, link: string, };
+
+export type Downloaded = { file: string, folder: string, success: boolean, };
+
 export const TASK_STATES = ["pinned","temporary","completed","cancelled"] as const;
 
 export const LIVE_STATES = ["pinned","temporary"] as const;
@@ -370,4 +374,4 @@ export const VERSION = "0.0.0" as const;
 
 export const COMMANDS = ["boot","ready","ui_act","quit","server_pair","server_offer","server_accounts","server_revoke","account_link","account_join","settings_set","account_remove","account_leave","account_start_over","servers_refresh","server_rename","server_forget","workspace_add","workspace_remove","section_rename","section_color","auto_color","task_focus","task_resume","task_move","task_set_parent","task_set_workspace","task_rename","task_archive","task_create","folder_get","term_attach","term_input","term_detach","term_open","term_close","term_claim","term_take_lock","term_resize","browser_open","browser_close","browser_move","file_list","file_root_url","file_write","file_create","file_move","file_copy","file_delete","file_upload","file_upload_content","file_search"] as const;
 
-export const EVENTS = {"account":"account","browserFailed":"browser_failed","browserOpened":"browser_opened","browserPaged":"browser_paged","fileDrag":"file-drag","filesChanged":"files_changed","microphoneDenied":"microphone_denied","model":"model","servers":"servers","ui":"ui","windowFocused":"window-focused","windowShown":"window-shown"} as const;
+export const EVENTS = {"account":"account","browserDownloaded":"browser_downloaded","browserFailed":"browser_failed","browserHeld":"browser_held","browserOpened":"browser_opened","browserPaged":"browser_paged","fileDrag":"file-drag","filesChanged":"files_changed","microphoneDenied":"microphone_denied","model":"model","servers":"servers","ui":"ui","windowFocused":"window-focused","windowShown":"window-shown"} as const;

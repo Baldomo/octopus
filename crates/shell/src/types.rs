@@ -12,7 +12,10 @@ use serde::Serialize;
 use serde_json::json;
 use ts_rs::Config;
 
-use crate::browsing::{FAILED_EVENT, Failed, OPENED_EVENT, OnScreen, Opened, PAGED_EVENT, Paged};
+use crate::browsing::{
+    DOWNLOADED_EVENT, Downloaded, FAILED_EVENT, Failed, HELD_EVENT, Held, OPENED_EVENT, OnScreen, Opened, PAGED_EVENT,
+    Paged,
+};
 use crate::client_menu::{Appearance, ZOOMS, Zoom, ZoomStep};
 use crate::commands::{Boot, NewTask, ShownLink, ShownOffer};
 use crate::hub::{
@@ -114,6 +117,8 @@ pub fn render() -> String {
         Paged,
         Failed,
         Opened,
+        Held,
+        Downloaded,
     );
     let constants = [
         constant("TASK_STATES", &TaskState::ALL),
@@ -145,6 +150,8 @@ pub fn render() -> String {
                 "browserPaged": PAGED_EVENT,
                 "browserFailed": FAILED_EVENT,
                 "browserOpened": OPENED_EVENT,
+                "browserHeld": HELD_EVENT,
+                "browserDownloaded": DOWNLOADED_EVENT,
             }),
         ),
     ];

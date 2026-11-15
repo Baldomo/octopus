@@ -1,10 +1,9 @@
-import { createSignal, For, Show } from "solid-js";
+import { For, Show } from "solid-js";
 import { animateList } from "./flip";
 import { Glyph } from "./Glyph";
 import { keepInView } from "./keepInView";
 import type { LiftOnDrag, Within } from "./lift";
-import { liftTab } from "./liftTab";
-import { inOrder } from "./sectionOrder";
+import { createArrangement, liftTab } from "./liftTab";
 
 export type FolderTab = {
   key: string;
@@ -30,12 +29,8 @@ export function FolderTabs(props: {
   add?: AddTab;
 }) {
   let bar!: HTMLDivElement;
-  const [arranged, arrange] = createSignal<string[] | null>(null);
   const keys = () => props.tabs.map((tab) => tab.key);
-  const shown = () => {
-    const order = arranged();
-    return order === null ? keys() : inOrder(keys(), order, (key) => key);
-  };
+  const { shown, arrange } = createArrangement(keys);
   const scrollSideways = (event: WheelEvent) => {
     if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
     bar.scrollLeft += event.deltaY;

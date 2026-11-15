@@ -4,9 +4,10 @@
 //! was not served from. A page root's name is its origin, so a page shares its origin with its own root's files alone.
 //! A task's files go to the UI's own webviews alone, which may read them across origins. Android's webviews give a
 //! custom scheme no origin, so there a page root is the `http` host `octopus-file-<root>.localhost`, a site of its own
-//! that shares no cookie with another root's, and a task's root a path under `octopus-file.localhost`. This client
-//! answers each request with the bytes its server reads at `<path>` under the root, which the server keeps the path
-//! inside: the range a `Range` header asks for, so a video plays and seeks, or else the whole file.
+//! that shares no cookie with another root's, and a task's root a path under `octopus-file.localhost`, which wry hands
+//! this client as `octopus-file://localhost/<root>/<path>`. This client answers each request with the bytes its
+//! server reads at `<path>` under the root, which the server keeps the path inside: the range a `Range` header asks
+//! for, so a video plays and seeks, or else the whole file.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -104,20 +105,7 @@ impl ServedFiles {
 
     /// The root `loaded` is a file of, and its path under the root.
     fn served(&self, loaded: &Url) -> Option<(Root, String)> {
-        let (name, path) = if ANDROID {
-            let (host, path) = (loaded.host_str()?, loaded.path().strip_prefix('/')?);
-            let page_root = host.strip_prefix(&format!("{SCHEME}-")).and_then(|root| root.strip_suffix(".localhost"));
-            match page_root {
-                Some(root) => (root, path),
-                None => {
-                    (host == format!("{SCHEME}.localhost")).then_some(())?;
-                    path.split_once('/')?
-                }
-            }
-        } else {
-            (loaded.scheme() == SCHEME).then_some(())?;
-            (loaded.host_str()?, loaded.path().strip_prefix('/')?)
-        };
+        let (name, path) = named(loaded, ANDROID)?;
         let root = lock(&self.0).get(name)?.clone();
         Some((root, percent_decode_str(path).decode_utf8().ok()?.into_owned()))
     }
@@ -139,6 +127,17 @@ impl ServedFiles {
             read(hub, &root, path, range).await
         };
         readable_by(&root.dir, reply)
+    }
+}
+
+/// The name of the root `loaded` is a file of, and its path under the root.
+fn named(loaded: &Url, android: bool) -> Option<(&str, &str)> {
+    let path = loaded.path().strip_prefix('/')?;
+    match (android, loaded.scheme(), loaded.host_str()?) {
+        (false, SCHEME, root) => Some((root, path)),
+        (true, SCHEME, "localhost") => path.split_once('/'),
+        (true, "http", host) => Some((host.strip_prefix(SCHEME)?.strip_prefix('-')?.strip_suffix(".localhost")?, path)),
+        _ => None,
     }
 }
 
@@ -361,5 +360,16 @@ mod tests {
         assert!(serves(&ReadDir::Task(TaskId("tsk_1".into())), BASE_WEBVIEW));
         assert!(!serves(&ReadDir::Task(TaskId("tsk_1".into())), "browser-0"), "a browser panel's webview");
         assert!(serves(&ReadDir::Page("/tmp/site".into()), "browser-0"));
+    }
+
+    #[test]
+    fn android_names_a_page_root_by_its_host_and_a_tasks_root_by_the_path_wry_hands_over() {
+        let on_android = |text: &str| named(&url(text), true).map(|(root, path)| format!("{root} {path}"));
+        assert_eq!(
+            on_android("http://octopus-file-ab12.localhost/sub/page.html").as_deref(),
+            Some("ab12 sub/page.html")
+        );
+        assert_eq!(on_android("octopus-file://localhost/ab12/docs/plan.md").as_deref(), Some("ab12 docs/plan.md"));
+        assert_eq!(on_android("http://example.com/ab12/plan.md"), None);
     }
 }

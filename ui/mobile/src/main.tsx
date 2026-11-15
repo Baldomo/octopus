@@ -21,7 +21,7 @@ import { applyFilesChanged, forgetFilesExcept } from "@octopus/shared/taskFiles.
 import { Board } from "./Board";
 import { followFront } from "./front";
 import { steadyCaret } from "./caret";
-import { Browser, forgetBrowsersExcept } from "./Browser";
+import { Browser, forgetBrowsersExcept, LinkMenu } from "./Browser";
 import { ClientMenu, ServerMenu } from "./ClientMenu";
 import { EditorScreen, Files } from "./Files";
 import { Sprite } from "./Icon";
@@ -97,6 +97,9 @@ function SheetPage(props: { sheet: Sheet }) {
       <Match when={shown.is === "reopen" && shown.key}>{(key) => <Reopen taskKey={key()} />}</Match>
       <Match when={shown.is === "entry" && shown}>
         {(entry) => <FileMenu taskKey={entry().key} path={entry().path} kind={entry().kind} />}
+      </Match>
+      <Match when={shown.is === "link" && shown}>
+        {(held) => <LinkMenu taskKey={held().key} panel={held().panel} link={held().link} />}
       </Match>
       <Match when={shown.is === "section" && shown.name}>{(name) => <SectionMenu name={name()} />}</Match>
       <Match when={shown.is === "addws"}>

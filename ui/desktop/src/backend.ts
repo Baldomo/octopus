@@ -2,15 +2,7 @@ import { invoke as invokeAny, type InvokeArgs } from "@tauri-apps/api/core";
 import { on } from "@octopus/shared/backend.ts";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { BrowserId, Go, OnScreen, TaskRef } from "@octopus/shared/generated.ts";
-import {
-  COMMANDS,
-  EVENTS,
-  type Downloaded,
-  type Hovered,
-  type MenuGroup,
-  type MenuKey,
-  type Outside,
-} from "./generated";
+import { COMMANDS, EVENTS, type Hovered, type MenuGroup, type MenuKey, type Outside } from "./generated";
 
 const invoke = <T>(command: (typeof COMMANDS)[number], args?: InvokeArgs) => invokeAny<T>(command, args);
 
@@ -34,6 +26,5 @@ export const desktop = {
 
 export const desktopEvents = {
   browserHovered: on<Hovered | null>(EVENTS.browserHovered),
-  browserDownloaded: on<Downloaded>(EVENTS.browserDownloaded),
   menuCommand: on<MenuKey>(EVENTS.menuCommand),
 };

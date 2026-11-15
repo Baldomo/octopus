@@ -11,7 +11,7 @@ use octopus_shell::hub::Hub;
 use octopus_shell::served_files::{SCHEME, ServedFiles};
 use octopus_shell::task_lists::TaskRef;
 use octopus_shell::ui::Bounds;
-use octopus_shell::webkit::{Change, Drag, Go};
+use octopus_shell::webkit::{Change, Drag, Go, PhoneChange, Told};
 use serde::Serialize;
 use tauri::http::{Method, Response, StatusCode};
 use tauri::{AppHandle, Manager, Url};
@@ -68,17 +68,19 @@ async fn heading(app: &AppHandle, key: &str, url: &str) -> bool {
     }
 }
 
-async fn changed(app: &AppHandle, key: &str, change: Change) {
-    match change {
-        Change::EdgeDragged { drag, x, velocity } => emit(app, EDGE_EVENT, EdgeDrag { phase: drag, x, velocity }),
-        Change::Ended => {
+async fn changed(app: &AppHandle, key: &str, told: Told<PhoneChange>) {
+    match told {
+        Told::Page(change) => app.state::<BrowserPages>().changed(key, change).await,
+        Told::Device(PhoneChange::EdgeDragged { drag, x, velocity }) => {
+            emit(app, EDGE_EVENT, EdgeDrag { phase: drag, x, velocity });
+        }
+        Told::Device(PhoneChange::Ended) => {
             let Some((at, panel)) = app.state::<BrowserPages>().panel_of(key) else { return };
             if let Err(error) = forget(app, key).await {
                 eprintln!("octopus app: let go of the ended page of {key}: {error}");
             }
             emit(app, ENDED_EVENT, Ended { task: at.key(), panel });
         }
-        change => app.state::<BrowserPages>().changed(key, change).await,
     }
 }
 

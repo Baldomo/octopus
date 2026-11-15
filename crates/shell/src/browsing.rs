@@ -10,7 +10,7 @@ use octopus_client::tunnel::Tunnel;
 use octopus_proto::ops::BrowserReport;
 use octopus_proto::types::{BrowserId, web_page};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, Url};
+use tauri::{AppHandle, Manager, Runtime, Url, Wry};
 use tokio::sync::mpsc;
 use ts_rs::TS;
 
@@ -24,6 +24,8 @@ use crate::{emit, lock};
 pub const PAGED_EVENT: &str = "browser_paged";
 pub const FAILED_EVENT: &str = "browser_failed";
 pub const OPENED_EVENT: &str = "browser_opened";
+pub const HELD_EVENT: &str = "browser_held";
+pub const DOWNLOADED_EVENT: &str = "browser_downloaded";
 
 /// The page a browser panel shows on this client, whenever it or its loading changes.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -56,6 +58,22 @@ pub struct Opened {
     pub select: bool,
 }
 
+/// A link a finger holds in a browser panel's page, on an engine that shows no menu of its own for it.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+pub struct Held {
+    pub task: String,
+    pub panel: BrowserId,
+    pub link: String,
+}
+
+/// A download a page started ended, as `file` in `folder`, named as the user finds them on this device.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+pub struct Downloaded {
+    pub file: String,
+    pub folder: String,
+    pub success: bool,
+}
+
 /// The browser panel the UI shows, at its rect.
 #[derive(Debug, Clone, PartialEq, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
@@ -77,22 +95,22 @@ struct Kept {
     title: String,
 }
 
-struct Held {
+struct HeldTunnel {
     server: String,
     panels: BTreeSet<String>,
     _tunnel: Tunnel,
 }
 
-pub struct BrowserPages {
-    app: AppHandle,
+pub struct BrowserPages<R: Runtime = Wry> {
+    app: AppHandle<R>,
     kept: Mutex<HashMap<String, Kept>>,
     /// Keyed by port: this client's `localhost:<port>` reaches one server at a time.
-    tunnels: tokio::sync::Mutex<HashMap<u16, Held>>,
+    tunnels: tokio::sync::Mutex<HashMap<u16, HeldTunnel>>,
     reports: mpsc::UnboundedSender<(TaskRef, BrowserReport)>,
 }
 
-impl BrowserPages {
-    pub fn new(app: AppHandle) -> Self {
+impl<R: Runtime> BrowserPages<R> {
+    pub fn new(app: AppHandle<R>) -> Self {
         let (reports, mut told) = mpsc::unbounded_channel::<(TaskRef, BrowserReport)>();
         let reporting = app.clone();
         tauri::async_runtime::spawn(async move {
@@ -110,6 +128,7 @@ impl BrowserPages {
         Arc::clone(self.app.state::<Arc<Hub>>().inner())
     }
 
+    /// The page a URL the engine loaded stands for: a file page's `file://` URL for a URL it loads files through.
     fn page_of(&self, loaded: &str) -> Option<Url> {
         Url::parse(loaded).ok().map(|loaded| self.app.state::<Arc<ServedFiles>>().page_of(&loaded))
     }
@@ -167,7 +186,7 @@ impl BrowserPages {
             None => {
                 let tunnel = hub.tunnel(server, port).await?;
                 let panels = BTreeSet::from([key.to_string()]);
-                tunnels.insert(port, Held { server: server.to_string(), panels, _tunnel: tunnel });
+                tunnels.insert(port, HeldTunnel { server: server.to_string(), panels, _tunnel: tunnel });
                 Ok(())
             }
         }
@@ -183,12 +202,16 @@ impl BrowserPages {
         tunnels.retain(|_, held| !held.panels.is_empty());
     }
 
-    /// What the engine tells of the panel's page, in the order it tells it; a change only one client draws is its own.
+    /// What the engine tells of the panel's page, in the order it tells it. A download outlives its panel, so its
+    /// note goes out once the panel is gone too.
     pub async fn changed(&self, key: &str, change: Change) {
-        let Some((at, panel)) = self.panel_of(key) else { return };
-        let (app, task) = (&self.app, at.key());
-        match change {
-            Change::Seen { url, loading, back, forward } => {
+        let app = &self.app;
+        match (change, self.panel_of(key)) {
+            (Change::Downloaded { file, folder, success }, _) => {
+                emit(app, DOWNLOADED_EVENT, Downloaded { file, folder, success });
+            }
+            (_, None) => {}
+            (Change::Seen { url, loading, back, forward }, Some((at, panel))) => {
                 let page = url.as_deref().and_then(|url| self.page_of(url)).filter(|page| page.scheme() != "about");
                 if let Some(kept) = lock(&self.kept).get_mut(key) {
                     kept.url.clone_from(&page);
@@ -199,24 +222,28 @@ impl BrowserPages {
                     self.report(key);
                 }
                 let url = page.map(String::from).unwrap_or_default();
-                emit(app, PAGED_EVENT, Paged { task, panel, url, loading, back, forward, tunnel });
+                emit(app, PAGED_EVENT, Paged { task: at.key(), panel, url, loading, back, forward, tunnel });
             }
-            Change::Titled(title) => {
+            (Change::Titled(title), Some(_)) => {
                 if let Some(kept) = lock(&self.kept).get_mut(key) {
                     kept.title = title;
                 }
                 self.report(key);
             }
-            Change::Failed { url, error } => {
+            (Change::Failed { url, error }, Some((at, panel))) => {
                 let url = self.page_of(&url).map_or(url, String::from);
-                emit(app, FAILED_EVENT, Failed { task, panel, url, error });
+                emit(app, FAILED_EVENT, Failed { task: at.key(), panel, url, error });
             }
-            Change::Opened { url, select } => {
+            (Change::Opened { url, select }, Some((at, panel))) => {
                 if let Some(url) = self.page_of(&url) {
-                    emit(app, OPENED_EVENT, Opened { task, panel, url: url.into(), select });
+                    emit(app, OPENED_EVENT, Opened { task: at.key(), panel, url: url.into(), select });
                 }
             }
-            Change::Hovered { .. } | Change::EdgeDragged { .. } | Change::Ended => {}
+            (Change::Held { link }, Some((at, panel))) => {
+                if let Some(link) = self.page_of(&link) {
+                    emit(app, HELD_EVENT, Held { task: at.key(), panel, link: link.into() });
+                }
+            }
         }
     }
 
@@ -233,5 +260,33 @@ impl BrowserPages {
             (at.clone(), report)
         };
         self.reports.send((at, report)).expect("the reporter runs for as long as the app");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use tauri::Listener;
+
+    use super::{BrowserPages, DOWNLOADED_EVENT, FAILED_EVENT};
+    use crate::lock;
+    use crate::webkit::Change;
+
+    #[test]
+    fn a_download_tells_of_itself_once_its_panel_is_gone_and_a_page_change_does_not() {
+        let app = tauri::test::mock_app();
+        let pages = BrowserPages::new(app.handle().clone());
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        for event in [DOWNLOADED_EVENT, FAILED_EVENT] {
+            let hearing = Arc::clone(&heard);
+            app.listen_any(event, move |told| lock(&hearing).push(told.payload().to_string()));
+        }
+        let gone = "server/tsk_gone/brw_gone";
+        let downloaded = Change::Downloaded { file: "a.zip".into(), folder: "Downloads".into(), success: true };
+        tauri::async_runtime::block_on(pages.changed(gone, downloaded));
+        let failed = Change::Failed { url: "https://a.test/".into(), error: "gone".into() };
+        tauri::async_runtime::block_on(pages.changed(gone, failed));
+        assert_eq!(*lock(&heard), [r#"{"file":"a.zip","folder":"Downloads","success":true}"#]);
     }
 }

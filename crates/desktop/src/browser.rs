@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -12,7 +13,7 @@ use octopus_shell::browsing::{BrowserPages, OnScreen, panel_key};
 use octopus_shell::served_files::ServedFiles;
 use octopus_shell::task_lists::TaskRef;
 use octopus_shell::ui::Bounds;
-use octopus_shell::webkit::{Change, Go};
+use octopus_shell::webkit::{Change, DesktopChange, Go, Told};
 use octopus_shell::{emit, lock};
 use serde::Serialize;
 use tauri::async_runtime::block_on;
@@ -22,7 +23,6 @@ use ts_rs::TS;
 
 use crate::layers::Layers;
 
-pub(crate) const DOWNLOADED_EVENT: &str = "browser_downloaded";
 pub(crate) const HOVERED_EVENT: &str = "browser_hovered";
 
 /// The link under the pointer in the page on screen, and the page's rect in the UI's CSS pixels.
@@ -30,13 +30,6 @@ pub(crate) const HOVERED_EVENT: &str = "browser_hovered";
 pub(crate) struct Hovered {
     pub link: String,
     pub page: Bounds,
-}
-
-/// A download a page started, finished in this machine's Downloads folder.
-#[derive(Debug, Clone, PartialEq, Serialize, TS)]
-pub(crate) struct Downloaded {
-    pub path: String,
-    pub success: bool,
 }
 
 pub(crate) struct Browsers {
@@ -48,6 +41,13 @@ pub(crate) struct Browsers {
 
 fn failed(error: tauri::Error) -> String {
     error.to_string()
+}
+
+/// A download that ended at `path`, as its file's name in the folder that holds it.
+fn downloaded(path: &Path, success: bool) -> Change {
+    let file = path.file_name().map(|file| file.to_string_lossy().into_owned()).unwrap_or_default();
+    let folder = path.parent().map(|folder| folder.display().to_string()).unwrap_or_default();
+    Change::Downloaded { file, folder, success }
 }
 
 impl Browsers {
@@ -87,7 +87,8 @@ impl Browsers {
         let blank = WebviewUrl::External(Url::parse("about:blank").expect("about:blank is a URL"));
         let (navigating, navigated) = (self.app.clone(), key.to_string());
         let (windowing, windowed) = (self.app.clone(), key.to_string());
-        let downloading = Mutex::new(HashMap::<Url, std::path::PathBuf>::new());
+        let (finishing, finished) = (self.app.clone(), key.to_string());
+        let downloading = Mutex::new(HashMap::<Url, PathBuf>::new());
         let builder = WebviewBuilder::new(label, blank)
             .on_navigation(move |url| block_on(navigating.state::<BrowserPages>().heading(&navigated, url)))
             .on_new_window(move |url, _| {
@@ -95,15 +96,15 @@ impl Browsers {
                 block_on(windowing.state::<BrowserPages>().changed(&windowed, opened));
                 NewWindowResponse::Deny
             })
-            .on_download(move |webview, event| {
+            .on_download(move |_, event| {
                 match event {
                     DownloadEvent::Requested { url, destination } => {
                         lock(&downloading).insert(url, destination.clone());
                     }
                     DownloadEvent::Finished { url, path, success } => {
                         let path = path.or_else(|| lock(&downloading).remove(&url)).unwrap_or_default();
-                        let path = path.display().to_string();
-                        emit(webview.app_handle(), DOWNLOADED_EVENT, Downloaded { path, success });
+                        let ended = downloaded(&path, success);
+                        block_on(finishing.state::<BrowserPages>().changed(&finished, ended));
                     }
                     _ => {}
                 }
@@ -111,14 +112,14 @@ impl Browsers {
             });
         let webview = self.layers.add_page(builder).map_err(failed)?;
         let (app, key, layers) = (self.app.clone(), key.to_string(), Arc::clone(&self.layers));
-        native::watch(&webview, move |change| match change {
-            Change::Hovered { link } => {
+        native::watch(&webview, move |told| match told {
+            Told::Device(DesktopChange::Hovered { link }) => {
                 let link = link.as_deref().and_then(|link| Url::parse(link).ok());
                 let link = link.map(|link| app.state::<Arc<ServedFiles>>().page_of(&link));
                 let hovered = link.zip(layers.page_bounds()).map(|(link, page)| Hovered { link: link.into(), page });
                 emit(&app, HOVERED_EVENT, hovered);
             }
-            change => block_on(app.state::<BrowserPages>().changed(&key, change)),
+            Told::Page(change) => block_on(app.state::<BrowserPages>().changed(&key, change)),
         })
         .map_err(failed)?;
         Ok(webview)
@@ -157,3 +158,19 @@ use octopus_shell::webkit as native;
 #[path = "browser/linux.rs"]
 mod native;
 pub(crate) use native::has_focus as page_has_focus;
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use octopus_shell::webkit::Change;
+
+    #[test]
+    fn a_download_tells_its_file_in_the_folder_that_holds_it() {
+        let ended = super::downloaded(Path::new("/Users/a/Downloads/report.pdf"), true);
+        assert!(matches!(
+            ended,
+            Change::Downloaded { file, folder, success: true } if file == "report.pdf" && folder == "/Users/a/Downloads"
+        ));
+    }
+}

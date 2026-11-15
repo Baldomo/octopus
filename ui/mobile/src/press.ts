@@ -1,5 +1,6 @@
 import { onCleanup } from "solid-js";
-import type { Lift, Point } from "@octopus/shared/lift.ts";
+import type { Lift, Point, Start, Within } from "@octopus/shared/lift.ts";
+import { scale, ui } from "@octopus/shared/state.ts";
 import { feel } from "./feel";
 import { COMMIT_PX, fingerIn, keepTouch, reaches } from "./touch";
 
@@ -16,6 +17,15 @@ const presses = new Set<() => void>();
 export const cancelPresses = () => {
   for (const cancel of presses) cancel();
   presses.clear();
+};
+
+/** Lifts an element through `start` with its ghost on its `within.stage` ancestor, within its `within.list` ancestor. */
+export const liftOnPhone = (within: Within, start: Start) => (element: HTMLElement, from: Point) => {
+  const stage = element.closest<HTMLElement>(within.stage);
+  const list = element.closest<HTMLElement>(within.list);
+  if (stage === null || list === null) return null;
+  const surface = { stage, list, free: within.free, throws: true, covered: () => false, zoom: scale(ui.prefs), feel };
+  return start(element, from, surface);
 };
 
 /**

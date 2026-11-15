@@ -4,11 +4,14 @@
 //! over from wry so a link clicked with ⌘ or the middle button opens a tab, and adds WebKit's private methods for the
 //! link under the pointer and the context menu to the UI delegate. WebKit notes which methods a delegate answers when
 //! it is set, so a view set its delegates before the methods existed has them set again. On iOS octopus makes the
-//! view, with one delegate of its own for every page.
+//! view, with one delegate of its own for every page, which also leads a link's menu with Open in New Tab and saves
+//! each download to the embedder's folder.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_void};
+#[cfg(any(target_os = "ios", test))]
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 #[cfg(target_os = "macos")]
@@ -18,9 +21,13 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2_foundation::NSString;
 
-use super::{Change, Go};
+#[cfg(target_os = "macos")]
+use super::DesktopChange as DeviceChange;
+#[cfg(target_os = "ios")]
+use super::PhoneChange as DeviceChange;
+use super::{Change, Go, Told};
 
-type Watcher = Rc<dyn Fn(Change)>;
+type Watcher = Rc<dyn Fn(Told<DeviceChange>)>;
 
 thread_local! {
     /// Each watched view's watcher, by the address of its `WKWebView`.
@@ -49,10 +56,10 @@ fn key(view: *const AnyObject) -> usize {
 }
 
 /// The watcher runs with no view borrowed, so it may watch or stop watching one.
-fn tell(view: *const AnyObject, change: Change) {
+fn tell(view: *const AnyObject, told: impl Into<Told<DeviceChange>>) {
     let watcher = WATCHERS.with_borrow(|watchers| watchers.get(&key(view)).cloned());
     if let Some(watcher) = watcher {
-        watcher(change);
+        watcher(told.into());
     }
 }
 
@@ -110,12 +117,25 @@ fn on_purpose(domain: &str, code: isize) -> bool {
     matches!((domain, code), ("NSURLErrorDomain", -999) | ("WebKitErrorDomain", 102 | 204))
 }
 
+/// `name` in `folder`, or, while `taken` says a file has it, the name with the lowest number from 2 after its stem.
+#[cfg(any(target_os = "ios", test))]
+fn unclaimed(folder: &Path, name: &str, taken: impl Fn(&Path) -> bool) -> PathBuf {
+    let named = Path::new(name);
+    let stem = named.file_stem().map_or_else(|| name.into(), |stem| stem.to_string_lossy());
+    let extension = named.extension().map(|extension| format!(".{}", extension.to_string_lossy()));
+    std::iter::once(name.to_string())
+        .chain((2..).map(|nth| format!("{stem} {nth}{}", extension.as_deref().unwrap_or_default())))
+        .map(|name| folder.join(name))
+        .find(|path| !taken(path))
+        .expect("some number is free")
+}
+
 /// A live `WKWebView`, on the main thread, which owns every view.
 pub struct View<'a>(&'a AnyObject);
 
 impl View<'_> {
     /// Tells `watcher` each change of the page the view shows.
-    pub fn watch(self, watcher: impl Fn(Change) + 'static) {
+    pub fn watch(self, watcher: impl Fn(Told<DeviceChange>) + 'static) {
         let view = self.0;
         // SAFETY: a WKWebView's navigation delegate, which outlives the watch: wry's for the view's lifetime on macOS,
         // and octopus's own for the app's on iOS.
@@ -197,7 +217,7 @@ mod mac {
     use objc2_foundation::NSString;
     use tauri::Webview;
 
-    use super::{Change, Go, View, WATCHERS, failed_load, key, observed, tell, text, url_text};
+    use super::{Change, DeviceChange, Go, Told, View, WATCHERS, failed_load, key, observed, tell, text, url_text};
 
     thread_local! {
         /// The link under the pointer in each watched view that has one.
@@ -278,7 +298,7 @@ mod mac {
             None => hovered.remove(&key(view)),
         });
         if before != link {
-            tell(view, Change::Hovered { link });
+            tell(view, Told::Device(DeviceChange::Hovered { link }));
         }
     }
 
@@ -393,7 +413,7 @@ mod mac {
         })
     }
 
-    pub fn watch(webview: &Webview, watcher: impl Fn(Change) + Send + 'static) -> tauri::Result<()> {
+    pub fn watch(webview: &Webview, watcher: impl Fn(Told<DeviceChange>) + Send + 'static) -> tauri::Result<()> {
         with_view(webview, move |view| view.watch(watcher))
     }
 
@@ -427,6 +447,7 @@ mod phone {
     use std::cell::{Cell, OnceCell, RefCell};
     use std::collections::HashMap;
     use std::ffi::c_void;
+    use std::path::{Path, PathBuf};
     use std::rc::Rc;
 
     use block2::{Block, DynBlock, RcBlock};
@@ -437,11 +458,12 @@ mod phone {
     use objc2_foundation::NSString;
     use tauri::http::Response;
 
-    use super::{Change, View, failed_load, key, observed, tell, text, url_text};
-    use crate::webkit::Drag;
+    use super::{Change, View, WATCHERS, Watcher, failed_load, key, observed, tell, text, url_text};
+    use crate::webkit::{Drag, PhoneChange, Told};
 
     const CANCEL: isize = 0;
     const ALLOW: isize = 1;
+    const DOWNLOAD: isize = 2;
     const LEFT_EDGE: usize = 1 << 1;
     /// The states of a `UIGestureRecognizer` that recognizes a drag.
     const BEGAN: isize = 1;
@@ -463,6 +485,19 @@ mod phone {
         /// Whether the page may navigate to a URL, asked before each navigation of its main frame goes on.
         pub allows: Box<dyn Fn(&str) -> bool>,
         pub serve: Box<dyn Fn(Asked)>,
+        /// The folder a download lands in, under a name no other file there has.
+        pub folder: PathBuf,
+        /// The folder's name as the user finds it.
+        pub folder_label: String,
+    }
+
+    /// A download under way: the embedder and the watcher of the page that started it, held so its end is told once
+    /// the page is gone, and the name of its file, its URL's last segment until WebKit asks where it goes.
+    struct Downloading {
+        _download: Retained<AnyObject>,
+        embedder: Rc<Embedder>,
+        watcher: Watcher,
+        file: String,
     }
 
     thread_local! {
@@ -471,7 +506,10 @@ mod phone {
         /// The scheme tasks WebKit waits on, by the id their request was asked under.
         static TASKS: RefCell<HashMap<u64, Retained<AnyObject>>> = RefCell::new(HashMap::new());
         static NEXT_TASK: Cell<u64> = const { Cell::new(0) };
-        /// The one object that is every page's navigation delegate, UI delegate, scheme handler and edge drag target.
+        /// Each download under way, by the address of its `WKDownload`.
+        static IN_FLIGHT: RefCell<HashMap<usize, Downloading>> = RefCell::new(HashMap::new());
+        /// The one object that is every page's navigation delegate, UI delegate, download delegate, scheme handler
+        /// and edge drag target.
         static DELEGATE: OnceCell<Retained<AnyObject>> = const { OnceCell::new() };
     }
 
@@ -487,20 +525,157 @@ mod phone {
         decided: &Block<dyn Fn(isize)>,
     ) {
         // SAFETY: WebKit passes the navigation action it asks about, whose request names its URL.
-        let (url, main) = unsafe {
+        let (url, main, download) = unsafe {
             let request: *mut AnyObject = msg_send![action, request];
             let frame: *mut AnyObject = msg_send![action, targetFrame];
             (
                 request.as_ref().and_then(|request| url_text(msg_send![request, URL])),
                 frame.as_ref().is_some_and(|frame| msg_send![frame, isMainFrame]),
+                msg_send![action, shouldPerformDownload],
             )
         };
-        let allowed = match (main, url, embedder(view)) {
-            (false, ..) => true,
-            (true, Some(url), Some(embedder)) => (embedder.allows)(&url),
-            (true, ..) => false,
+        // A download leaves the page where it is, so it goes on whatever its scheme, as a `blob:` export does.
+        let policy = match (download, main, url, embedder(view)) {
+            (true, ..) => DOWNLOAD,
+            (false, false, ..) => ALLOW,
+            (false, true, Some(url), Some(embedder)) if (embedder.allows)(&url) => ALLOW,
+            _ => CANCEL,
         };
-        decided.call((if allowed { ALLOW } else { CANCEL },));
+        decided.call((policy,));
+    }
+
+    /// A response WebKit cannot show, or one its server sends as an attachment, downloads.
+    unsafe extern "C-unwind" fn decide_response(
+        _: &AnyObject,
+        _: Sel,
+        _: *mut AnyObject,
+        navigation: *mut AnyObject,
+        decided: &Block<dyn Fn(isize)>,
+    ) {
+        // SAFETY: WebKit passes the navigation response it asks about, whose response is an NSURLResponse.
+        let download = unsafe {
+            let shows: bool = msg_send![navigation, canShowMIMEType];
+            let response: *mut AnyObject = msg_send![navigation, response];
+            let http: bool = msg_send![response, isKindOfClass: class!(NSHTTPURLResponse)];
+            let field = NSString::from_str("Content-Disposition");
+            let disposition = if http { text(msg_send![response, valueForHTTPHeaderField: &*field]) } else { None };
+            !shows || disposition.is_some_and(|disposition| disposition.trim().to_lowercase().starts_with("attachment"))
+        };
+        decided.call((if download { DOWNLOAD } else { ALLOW },));
+    }
+
+    unsafe extern "C-unwind" fn became_download(
+        delegate: &AnyObject,
+        _: Sel,
+        view: *mut AnyObject,
+        _: *mut AnyObject,
+        download: *mut AnyObject,
+    ) {
+        // SAFETY: WebKit passes the live download a navigation became, whose request names its URL.
+        let Some(retained) = (unsafe { Retained::retain(download) }) else { return };
+        let file = unsafe {
+            let () = msg_send![&*retained, setDelegate: delegate];
+            let request: *mut AnyObject = msg_send![&*retained, originalRequest];
+            let url: *mut AnyObject = msg_send![request, URL];
+            text(msg_send![url, lastPathComponent]).unwrap_or_default()
+        };
+        let watcher = WATCHERS.with_borrow(|watchers| watchers.get(&key(view)).cloned());
+        let (Some(embedder), Some(watcher)) = (embedder(view), watcher) else { return };
+        let downloading = Downloading { _download: retained, embedder, watcher, file };
+        IN_FLIGHT.with_borrow_mut(|in_flight| in_flight.insert(key(download), downloading));
+    }
+
+    /// WebKit saves a download to the embedder's folder, under the name it suggests unless a file there has it.
+    unsafe extern "C-unwind" fn download_destination(
+        _: &AnyObject,
+        _: Sel,
+        download: *mut AnyObject,
+        _: *mut AnyObject,
+        suggested: *mut AnyObject,
+        decided: &Block<dyn Fn(*mut AnyObject)>,
+    ) {
+        // SAFETY: WebKit passes the name it suggests as an NSString.
+        let suggested = unsafe { text(suggested) }.unwrap_or_default();
+        let path = IN_FLIGHT.with_borrow_mut(|in_flight| {
+            let downloading = in_flight.get_mut(&key(download))?;
+            let path = super::unclaimed(&downloading.embedder.folder, &suggested, Path::exists);
+            downloading.file = path.file_name()?.to_string_lossy().into_owned();
+            Some(path)
+        });
+        let Some(path) = path else { return decided.call((std::ptr::null_mut(),)) };
+        // SAFETY: a file URL for an absolute path, which the handler takes as the download's destination.
+        unsafe {
+            let path = NSString::from_str(&path.to_string_lossy());
+            let url: Retained<AnyObject> = msg_send![class!(NSURL), fileURLWithPath: &*path];
+            decided.call((Retained::as_ptr(&url).cast_mut(),));
+        }
+    }
+
+    unsafe extern "C-unwind" fn download_finished(_: &AnyObject, _: Sel, download: *mut AnyObject) {
+        download_ended(download, true);
+    }
+
+    unsafe extern "C-unwind" fn download_failed(
+        _: &AnyObject,
+        _: Sel,
+        download: *mut AnyObject,
+        _: *mut AnyObject,
+        _: *mut AnyObject,
+    ) {
+        download_ended(download, false);
+    }
+
+    fn download_ended(download: *mut AnyObject, success: bool) {
+        let ended = IN_FLIGHT.with_borrow_mut(|in_flight| in_flight.remove(&key(download)));
+        let Some(Downloading { embedder, watcher, file, .. }) = ended else { return };
+        watcher(Change::Downloaded { file, folder: embedder.folder_label.clone(), success }.into());
+    }
+
+    /// A held element's menu holds WebKit's own items, a link's led by Open in New Tab, which opens it behind the
+    /// selected tab.
+    unsafe extern "C-unwind" fn held_menu(
+        _: &AnyObject,
+        _: Sel,
+        view: *mut AnyObject,
+        element: *mut AnyObject,
+        decided: &Block<dyn Fn(*mut AnyObject)>,
+    ) {
+        // SAFETY: WebKit passes the `WKContextMenuElementInfo` the finger holds.
+        let link = unsafe { element.as_ref().and_then(|element| url_text(msg_send![element, linkURL])) };
+        let view = view.cast_const();
+        let items = RcBlock::new(move |suggested: *mut AnyObject| -> *mut AnyObject {
+            // SAFETY: UIKit's own menu of UIKit's actions, which the menu's caller takes autoreleased.
+            unsafe {
+                let children: Retained<AnyObject> = msg_send![class!(NSMutableArray), arrayWithArray: suggested];
+                if let Some(link) = link.clone() {
+                    let open = RcBlock::new(move |_: *mut AnyObject| {
+                        tell(view, Change::Opened { url: link.clone(), select: false })
+                    });
+                    let title = NSString::from_str("Open in New Tab");
+                    let symbol = NSString::from_str("plus.square.on.square");
+                    let image: *mut AnyObject = msg_send![class!(UIImage), systemImageNamed: &*symbol];
+                    let unnamed = std::ptr::null_mut::<AnyObject>();
+                    let action: *mut AnyObject = msg_send![class!(UIAction), actionWithTitle: &*title, image: image, identifier: unnamed, handler: &*open];
+                    let () = msg_send![&*children, insertObject: action, atIndex: 0_usize];
+                }
+                let untitled = NSString::from_str("");
+                let menu: Retained<AnyObject> =
+                    msg_send![class!(UIMenu), menuWithTitle: &*untitled, children: &*children];
+                Retained::autorelease_return(menu)
+            }
+        });
+        // SAFETY: a configuration whose preview is the held element itself, and whose menu `items` makes.
+        unsafe {
+            let unnamed = std::ptr::null_mut::<AnyObject>();
+            let preview: Option<&DynBlock<dyn Fn() -> *mut AnyObject>> = None;
+            let configuration: *mut AnyObject = msg_send![
+                class!(UIContextMenuConfiguration),
+                configurationWithIdentifier: unnamed,
+                previewProvider: preview,
+                actionProvider: &*items
+            ];
+            decided.call((configuration,));
+        }
     }
 
     /// A link that targets a new window, or `window.open`, opens a tab in place of the window.
@@ -524,7 +699,7 @@ mod phone {
     }
 
     unsafe extern "C-unwind" fn process_ended(_: &AnyObject, _: Sel, view: *mut AnyObject) {
-        tell(view, Change::Ended);
+        tell(view, Told::Device(PhoneChange::Ended));
     }
 
     unsafe extern "C-unwind" fn start_task(_: &AnyObject, _: Sel, view: *mut AnyObject, task: *mut AnyObject) {
@@ -609,7 +784,7 @@ mod phone {
             CANCELLED | FAILED => Drag::Cancel,
             _ => return,
         };
-        tell(view, Change::EdgeDragged { drag, x: moved.x, velocity: speed.x });
+        tell(view, Told::Device(PhoneChange::EdgeDragged { drag, x: moved.x, velocity: speed.x }));
     }
 
     fn delegate() -> Retained<AnyObject> {
@@ -630,6 +805,29 @@ mod phone {
                         class.add_method(
                             sel!(webView:decidePolicyForNavigationAction:decisionHandler:),
                             decide as unsafe extern "C-unwind" fn(_, _, _, _, _),
+                        );
+                        class.add_method(
+                            sel!(webView:decidePolicyForNavigationResponse:decisionHandler:),
+                            decide_response as unsafe extern "C-unwind" fn(_, _, _, _, _),
+                        );
+                        let became = became_download as unsafe extern "C-unwind" fn(_, _, _, _, _);
+                        class.add_method(sel!(webView:navigationAction:didBecomeDownload:), became);
+                        class.add_method(sel!(webView:navigationResponse:didBecomeDownload:), became);
+                        class.add_method(
+                            sel!(download:decideDestinationUsingResponse:suggestedFilename:completionHandler:),
+                            download_destination as unsafe extern "C-unwind" fn(_, _, _, _, _, _),
+                        );
+                        class.add_method(
+                            sel!(downloadDidFinish:),
+                            download_finished as unsafe extern "C-unwind" fn(_, _, _),
+                        );
+                        class.add_method(
+                            sel!(download:didFailWithError:resumeData:),
+                            download_failed as unsafe extern "C-unwind" fn(_, _, _, _, _),
+                        );
+                        class.add_method(
+                            sel!(webView:contextMenuConfigurationForElement:completionHandler:),
+                            held_menu as unsafe extern "C-unwind" fn(_, _, _, _, _),
                         );
                         class.add_method(
                             sel!(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:),
@@ -684,7 +882,7 @@ mod phone {
 
     impl Page {
         /// A page with no URL yet, whose every change `watcher` hears.
-        pub fn new(embedder: Embedder, watcher: impl Fn(Change) + 'static) -> Self {
+        pub fn new(embedder: Embedder, watcher: impl Fn(Told<PhoneChange>) + 'static) -> Self {
             let delegate = delegate();
             // SAFETY: each call is made as WebKit and UIKit document, on the main thread, with live objects.
             let view: Retained<AnyObject> = unsafe {
@@ -750,5 +948,14 @@ mod tests {
         assert!(on_purpose("WebKitErrorDomain", 204));
         assert!(!on_purpose("NSURLErrorDomain", -1100));
         assert!(!on_purpose("NSURLErrorDomain", 204));
+    }
+
+    #[test]
+    fn a_download_takes_the_lowest_free_number_after_its_stem() {
+        let folder = Path::new("/d");
+        let taken = |names: &'static [&str]| move |path: &Path| names.iter().any(|name| folder.join(name) == path);
+        assert_eq!(unclaimed(folder, "a.zip", taken(&[])), folder.join("a.zip"));
+        assert_eq!(unclaimed(folder, "a.zip", taken(&["a.zip", "a 2.zip"])), folder.join("a 3.zip"));
+        assert_eq!(unclaimed(folder, "notes", taken(&["notes"])), folder.join("notes 2"));
     }
 }

@@ -11,8 +11,8 @@ use objc2::runtime::AnyObject;
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_ui_kit::{UIColor, UIScrollView, UIView};
 use octopus_shell::webkit::{self, Asked, Embedder, Go, Page};
-use tauri::AppHandle;
 use tauri::async_runtime::block_on;
+use tauri::{AppHandle, Manager};
 
 use super::Placed;
 
@@ -52,13 +52,16 @@ pub(super) async fn draws(_: &AppHandle) -> Result<bool, String> {
     Ok(true)
 }
 
-/// A page with nothing loaded, hidden among the app's webview's siblings.
+/// A page with nothing loaded, hidden among the app's webview's siblings. Its downloads land in the app's Documents
+/// folder, which the Files app shows as the app's own.
 fn make(app: &AppHandle, app_view: &UIView, key: &str) -> Result<Page, String> {
     let (heading, asking, changing) = (app.clone(), app.clone(), app.clone());
     let (headed, changed) = (key.to_string(), key.to_string());
     let embedder = Embedder {
         allows: Box::new(move |url| block_on(super::heading(&heading, &headed, url))),
         serve: Box::new(move |asked| serve(&asking, asked)),
+        folder: app.path().document_dir().map_err(|error| error.to_string())?,
+        folder_label: "Files › octopus".to_string(),
     };
     let page = Page::new(embedder, move |change| block_on(super::changed(&changing, &changed, change)));
     let parent = app_view.superview().ok_or("the app's webview is in no window")?;

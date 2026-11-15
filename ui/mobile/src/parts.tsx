@@ -1,7 +1,10 @@
 import { For, onCleanup, Show, type JSX } from "solid-js";
+import { animateList } from "@octopus/shared/flip.ts";
 import type { Glyph as Status, ServerView } from "@octopus/shared/generated.ts";
 import { turning } from "@octopus/shared/Glyph.tsx";
 import { keepInView } from "@octopus/shared/keepInView.ts";
+import type { Within } from "@octopus/shared/lift.ts";
+import { createArrangement, liftTab } from "@octopus/shared/liftTab.ts";
 import { sectionView } from "@octopus/shared/state.ts";
 import type { Size } from "@octopus/shared/terminalSession.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
@@ -10,6 +13,7 @@ import { settles } from "./front";
 import { Icon, type IconName } from "./Icon";
 import { onPainted } from "./motion";
 import { back } from "./nav";
+import { liftOnPhone, pressed } from "./press";
 import { slidingThumb } from "./thumb";
 
 /** Calls `set` with `element`'s size each time it changes, for as long as the calling component lives. */
@@ -254,33 +258,62 @@ export const Trail = (props: { parts: string[] }) => (
   </For>
 );
 
-export type FolderTab = { key: string; name: string; hint?: string; dirty?: boolean };
+export type FolderTab = { key: string; name: string; hint?: string; dirty?: boolean; loading?: boolean };
+
+const IN_TABS: Within = { stage: ".tabs", list: ".tabrow", free: false };
 
 /**
- * A row of folder tabs under a screen's bar, the selected one kept in view: each tab's name, its unsaved dot and the
- * hint that tells it from a tab of the same name, and its × to close it, then the + `add` makes, when it is given.
+ * A row of folder tabs under a screen's bar, the selected one kept in view: each tab's spinner while its page loads,
+ * its name, its unsaved dot and the hint that tells it from a tab of the same name, and its × to close it, then the +
+ * `add` makes, when it is given. A tap chooses a tab, and a long press lifts it, and dragging it along the row, which
+ * scrolls at its edges, moves it there.
  */
 export function FolderTabs(props: {
   tabs: FolderTab[];
   selected: string;
   choose: (key: string) => void;
   close: (key: string) => void;
+  move: (key: string, to: number) => Promise<unknown>;
   add?: { label: string; selected: boolean; run: () => void };
 }) {
+  const keys = () => props.tabs.map((tab) => tab.key);
+  const { shown, arrange } = createArrangement(keys);
+  const lift = (key: string) =>
+    liftOnPhone(
+      IN_TABS,
+      liftTab(key, keys, arrange, (to) => props.move(key, to)),
+    );
+
   return (
     <div class="tabs folder">
-      <div class="tabrow" ref={slidingThumb}>
-        <For each={props.tabs.map((tab) => tab.key)}>
+      <div
+        class="tabrow"
+        ref={(row) => {
+          slidingThumb(row);
+          animateList(".tab")(row);
+        }}
+      >
+        <For each={shown()}>
           {(key) => (
             <Show when={props.tabs.find((tab) => tab.key === key)}>
               {(tab) => (
                 <span
-                  ref={keepInView(() => key === props.selected)}
+                  ref={(element) => {
+                    keepInView(() => key === props.selected)(element);
+                    pressed(
+                      () => props.choose(key),
+                      () => {},
+                      lift(key),
+                    ).ref(element);
+                  }}
                   class="tab"
                   classList={{ on: key === props.selected }}
+                  data-key={key}
                   role="button"
-                  onClick={() => props.choose(key)}
                 >
+                  <Show when={tab().loading}>
+                    <Glyph status="working" />
+                  </Show>
                   <span class="name">{tab().name}</span>
                   <Show when={tab().dirty}>
                     <i class="udot" />
@@ -290,7 +323,7 @@ export function FolderTabs(props: {
                     class="x"
                     role="button"
                     aria-label={`Close ${tab().name}`}
-                    onClick={(event) => {
+                    on:click={(event) => {
                       event.stopPropagation();
                       props.close(key);
                     }}
