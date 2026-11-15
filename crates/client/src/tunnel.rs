@@ -4,6 +4,7 @@
 
 use std::future::Future;
 use std::io;
+use std::net::Ipv4Addr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,6 +15,8 @@ use tokio::net::{TcpListener, TcpStream};
 use crate::{Connection, Task};
 
 const ACCEPT_RETRY: Duration = Duration::from_millis(100);
+/// How long a dial the server's machine accepted has to land on this client's probe.
+const LOOPBACK_WAIT: Duration = Duration::from_millis(500);
 
 /// Resolves to the server's connection at the moment a browser connects, which a reconnect may have replaced.
 pub(crate) type Dial =
@@ -27,6 +30,15 @@ pub fn loopback_port(page: &url::Url) -> Option<u16> {
         url::Host::Ipv6(address) => address.is_loopback(),
     };
     loopback.then(|| page.port_or_known_default()).flatten()
+}
+
+/// Whether the server's dial of a port only this client listens on lands here, as an iOS Simulator's lands on its Mac.
+pub async fn shares_loopback(connection: &Connection) -> io::Result<bool> {
+    let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let Ok(_dialed) = connection.open_data_stream(&Stream::Tunnel(probe.local_addr()?.port())).await else {
+        return Ok(false);
+    };
+    Ok(tokio::time::timeout(LOOPBACK_WAIT, probe.accept()).await.is_ok_and(|accepted| accepted.is_ok()))
 }
 
 /// Listens while it lives; connections already carried finish on their own.

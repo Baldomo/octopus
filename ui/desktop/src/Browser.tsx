@@ -1,5 +1,4 @@
-import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show, untrack } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createEffect, createSignal, onCleanup, onMount, Show, untrack } from "solid-js";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { backend } from "@octopus/shared/backend.ts";
 import { BACKGROUND_BROWSER_PANEL, NEW_BROWSER_PANEL } from "@octopus/shared/generated.ts";
@@ -12,29 +11,18 @@ import {
   panelName,
   type Target,
 } from "@octopus/shared/browserPanels.ts";
+import { browserOpened, browserPages, createPlacing, serially } from "@octopus/shared/browserPages.ts";
 import { provideBrowser } from "@octopus/shared/commands.ts";
 import { FolderTabs, type FolderTab } from "@octopus/shared/FolderTabs.tsx";
-import type { BrowserId, BrowserPanel, TaskRef, TaskView } from "@octopus/shared/generated.ts";
-import { act, model, openView, report, serverLabel, showSurface, ui } from "@octopus/shared/state.ts";
+import type { BrowserId, BrowserPanel, Go, TaskView } from "@octopus/shared/generated.ts";
+import { act, model, openView, report, serverLabel, showSurface } from "@octopus/shared/state.ts";
 import type { OpenLink } from "@octopus/shared/Terminals.tsx";
-import { desktop, desktopEvents } from "./backend";
+import { desktop } from "./backend";
 import { liftOnDrag } from "./lift";
 import { cycled, openedAt } from "./tabOrder";
-import type { Go, OnScreen } from "./generated";
 
-/** A rendered panel's page on this client, which moves off its server `url` as the user navigates. */
-type Page = {
-  url: string;
-  loading: boolean;
-  back: boolean;
-  forward: boolean;
-  tunnel: number | null;
-  failed: { url: string; error: string } | null;
-};
-
-/** Per task key, the task and the panels whose webview exists on this client. */
-const [rendered, setRendered] = createStore<Record<string, { at: TaskRef; panels: BrowserId[] }>>({});
-const [pages, setPages] = createStore<Record<string, Record<BrowserId, Page>>>({});
+const pages = browserPages({ load: desktop.browserLoad, forget: desktop.browserForget });
+export const forgetBrowsersExcept = pages.forgetExcept;
 /** Per task key, the panel whose page opened each panel a page opened on this client. */
 const openers = new Map<string, Map<BrowserId, BrowserId>>();
 /** Per task key, the tabs this client closed, the last closed last, each with its page and its index. */
@@ -49,65 +37,6 @@ const [finding, setFinding] = createSignal(false);
 const [sought, setSought] = createSignal("");
 let address: HTMLInputElement | undefined;
 
-const blank: Page = { url: "", loading: false, back: false, forward: false, tunnel: null, failed: null };
-const page = (task: string, panel: BrowserId): Page | undefined => pages[task]?.[panel];
-const setPage = (task: string, panel: BrowserId, change: Partial<Page>) =>
-  setPages(produce((all) => ((all[task] ??= {})[panel] = { ...blank, ...all[task]?.[panel], ...change })));
-
-act(
-  desktopEvents.browserPaged(({ task, panel, url, loading, back, forward, tunnel }) =>
-    setPage(task, panel, { url, loading, back, forward, tunnel, ...(loading ? { failed: null } : {}) }),
-  ),
-);
-act(
-  desktopEvents.browserFailed(({ task, panel, url, error }) =>
-    setPage(task, panel, { failed: { url, error }, loading: false }),
-  ),
-);
-
-/** Native webview calls run in the order the UI makes them, so a page exists before it is placed or closed. */
-let queue: Promise<unknown> = Promise.resolve();
-const serially = <T,>(call: () => Promise<T>): Promise<T> => {
-  const next = queue.then(call);
-  queue = next.catch(() => undefined);
-  return next;
-};
-
-function forget(task: string, at: TaskRef, panel: BrowserId) {
-  setRendered(
-    produce((tasks) => {
-      const entry = tasks[task];
-      if (entry !== undefined) entry.panels = entry.panels.filter((known) => known !== panel);
-    }),
-  );
-  setPages(produce((all) => delete all[task]?.[panel]));
-  act(serially(() => desktop.browserForget(at, panel)));
-}
-
-/** Closes the webviews of the tasks no longer among `keep`, and of every panel its server closed. */
-export function forgetBrowsersExcept(keep: string[]) {
-  for (const [task, { at, panels }] of Object.entries(rendered)) {
-    const open = keep.includes(task) ? (model.tasks[task]?.task.browsers ?? []) : [];
-    for (const panel of panels.filter((panel) => !open.some((known) => known.panel === panel))) {
-      forget(task, at, panel);
-    }
-  }
-}
-
-/** Loads the panel's page on this client unless it already did, and keeps its webview while the task is recent. */
-function loadPanel(task: TaskView, panel: BrowserId, url: string, load: number) {
-  const at = task.at;
-  return serially(() => desktop.browserLoad(at, panel, url, load)).then(() => {
-    if (!ui.recent.includes(task.key)) return act(serially(() => desktop.browserForget(at, panel)));
-    setRendered(
-      produce((tasks) => {
-        const entry = (tasks[task.key] ??= { at, panels: [] });
-        if (!entry.panels.includes(panel)) entry.panels.push(panel);
-      }),
-    );
-  }, report);
-}
-
 /**
  * Opens `url` in a new tab after the `opener`'s tab and the tabs it opened before. A tab opened behind loads on this
  * client at once, and no client selects it.
@@ -116,7 +45,7 @@ async function openFrom(task: TaskView, opener: BrowserId, url: string, select: 
   const panel = await backend.browserOpen(task.at, select ? NEW_BROWSER_PANEL : BACKGROUND_BROWSER_PANEL, url);
   const opened = entryOf(openers, task.key, () => new Map());
   opened.set(panel, opener);
-  if (!select) loadPanel(task, panel, url, 0);
+  if (!select) pages.load(task, panel, url, 0);
   const others = (model.tasks[task.key]?.task.browsers ?? []).map((known) => known.panel).filter((id) => id !== panel);
   await backend.browserMove(
     task.at,
@@ -149,55 +78,42 @@ export function Browser(props: { visible: boolean }) {
   const shown = () => {
     const task = openView();
     const panel = current();
-    return task === undefined || panel === undefined ? undefined : page(task.key, panel.panel);
+    return task === undefined || panel === undefined ? undefined : pages.page(task.key, panel.panel);
   };
   const shownUrl = () => shown()?.failed?.url || shown()?.url || current()?.url;
 
-  const unlisten = desktopEvents.browserOpened(({ task, panel, url, select }) => {
+  const unlisten = browserOpened(({ task, panel, url, select }) => {
     const view = model.tasks[task];
     if (view !== undefined) act(openFrom(view, panel, url, select));
   });
   onCleanup(() => unlisten.then((stop) => stop(), report));
 
-  /** Each time the chosen panel's `load` moves, this client loads its `url`. */
-  const loading = createMemo(() => {
-    const task = openView();
-    const panel = current();
-    return task === undefined || panel === undefined ? undefined : `${task.key}\n${panel.panel}\n${panel.load}`;
+  createEffect(() => {
+    const [task, chosen] = [openView(), current()];
+    if (task !== undefined && chosen !== undefined && shown()?.load !== chosen.load)
+      untrack(() => pages.load(task, chosen.panel, chosen.url, chosen.load));
   });
-  createEffect(
-    on(loading, (key) => {
-      if (key === undefined) return;
-      const [task, panel] = untrack(() => [openView()!, current()!]);
-      loadPanel(task, panel.panel, panel.url, panel.load);
-    }),
-  );
 
-  const onScreen = (): Omit<OnScreen, "bounds"> | null => {
+  const onScreen = () => {
     const task = openView();
     const panel = current();
-    if (!props.visible || task === undefined || panel === undefined || shown()?.failed) return null;
-    return rendered[task.key]?.panels.includes(panel.panel) ? { at: task.at, panel: panel.panel } : null;
+    if (!props.visible || task === undefined || panel === undefined || shown() === undefined || shown()?.failed)
+      return null;
+    return { at: task.at, panel: panel.panel };
   };
 
   /**
    * A page arrives as this layer paints the frame it is laid out in, and leaves only once this layer has painted what
    * it uncovers: two processes paint the window, so a page may outstay its frame, but never leaves a hole.
    */
-  let latest = 0;
-  const showPage = (onscreen: Omit<OnScreen, "bounds"> | null) => {
-    const placing = ++latest;
-    const send = () => {
-      if (placing !== latest) return;
-      const { left, top, width, height } = surface.getBoundingClientRect();
-      const bounds = { x: left, y: top, width, height };
-      act(serially(() => desktop.browserShowPage(onscreen === null ? null : { ...onscreen, bounds })));
-    };
-    requestAnimationFrame(onscreen === null ? () => setTimeout(send) : send);
-  };
-  createEffect(() => showPage(onScreen()));
+  const placing = createPlacing(() => {
+    const { left, top, width, height } = surface.getBoundingClientRect();
+    const shownNow = onScreen();
+    return desktop.browserShowPage(shownNow && { ...shownNow, bounds: { x: left, y: top, width, height } });
+  });
+  createEffect(() => placing(onScreen() === null));
   onMount(() => {
-    const observer = new ResizeObserver(() => showPage(onScreen()));
+    const observer = new ResizeObserver(() => placing(untrack(onScreen) === null));
     observer.observe(surface);
     onCleanup(() => observer.disconnect());
   });
@@ -222,7 +138,7 @@ export function Browser(props: { visible: boolean }) {
       name: panelName(panel),
       where: undefined,
       title: panel.url,
-      loading: page(openView()?.key ?? "", panel.panel)?.loading === true,
+      loading: pages.page(openView()?.key ?? "", panel.panel)?.loading === true,
       dirty: false,
     }));
 
@@ -230,7 +146,7 @@ export function Browser(props: { visible: boolean }) {
     const task = openView();
     if (task === undefined) return;
     const at = panels().findIndex((known) => known.panel === panel);
-    const url = page(task.key, panel)?.url || panels()[at]?.url;
+    const url = pages.page(task.key, panel)?.url || panels()[at]?.url;
     if (url !== undefined) entryOf(closed, task.key, () => []).push({ url, at });
     act(backend.browserClose(task.at, panel));
   };

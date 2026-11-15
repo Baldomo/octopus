@@ -14,6 +14,8 @@ const THROW_PX = 400;
 const UP_GIVE = 4;
 
 const [said, setSaid] = createSignal<{ text: string; nth: number } | null>(null);
+const [shown, setShown] = createSignal<{ text: string; problem: boolean } | null>(null);
+export const toasting = () => shown() !== null;
 
 /** Confirms what an action did, briefly, with the OS's success feel. */
 export function notify(text: string) {
@@ -33,7 +35,6 @@ export async function copy(text: string, what: string) {
  * sides. It rises in, its text changes in place, and it sinks away when it ends or a finger swipes it down.
  */
 export function Toast() {
-  const [shown, setShown] = createSignal<{ text: string; problem: boolean } | null>(null);
   /** A problem swiped away stays away until another takes its place. */
   const [dismissed, setDismissed] = createSignal<string | null>(null);
   let toast: HTMLDivElement | undefined;

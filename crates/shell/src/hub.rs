@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use octopus_client::cache::{Cache, PushEffect};
 use octopus_client::servers::{self, Address, Config, Server, Servers};
-use octopus_client::tunnel::{Tunnel, listen_on_localhost, loopback_port};
+use octopus_client::tunnel::{Tunnel, listen_on_localhost, loopback_port, shares_loopback};
 use octopus_client::{CallError, Connection, Identity};
 use octopus_proto::account::{Account, Change, Link as AccountLink};
 use octopus_proto::device::PublicKey;
@@ -94,6 +94,8 @@ pub(crate) struct FilesChanged {
 struct Link {
     address: Address,
     connection: Option<Arc<Connection>>,
+    /// Whether the server's machine shares this client's loopback, as the last session's probe found.
+    shares_loopback: bool,
     problem: Option<String>,
     since: i64,
     /// When the link last lost a connection it held, on a clock that only moves forward.
@@ -325,7 +327,16 @@ impl Hub {
         });
         state.links.insert(
             name,
-            Link { address, connection: None, problem: None, since: now(), dropped: None, resyncs, supervisor },
+            Link {
+                address,
+                connection: None,
+                shares_loopback: false,
+                problem: None,
+                since: now(),
+                dropped: None,
+                resyncs,
+                supervisor,
+            },
         );
         self.servers_changed.notify_one();
     }
@@ -359,9 +370,17 @@ impl Hub {
             }
         };
         let mut refresh = tokio::time::interval(RTT_REFRESH);
+        let mut probe = std::pin::pin!(shares_loopback(&connection));
+        let mut probed = false;
         loop {
             tokio::select! {
                 closed = connection.closed() => return Ok(closed),
+                shared = &mut probe, if !probed => {
+                    probed = true;
+                    if let Some(link) = lock(&self.state).links.get_mut(&server.name) {
+                        link.shares_loopback = shared.unwrap_or(false);
+                    }
+                }
                 push = pushes.recv() => match push {
                     Ok(Push { event: Event::AccountUpdated { account }, .. })
                         if account == self.me.account.account().id() =>
@@ -603,9 +622,10 @@ impl Hub {
         lock(&self.state).links.get(server).is_some_and(|link| matches!(link.address, Address::Remote { .. }))
     }
 
-    /// The port a page reaches through a tunnel: a loopback port of a server on another machine.
+    /// The port a page reaches through a tunnel: a loopback port of a server whose loopback is not this client's.
     pub fn tunneled_port(&self, server: &str, page: &Url) -> Option<u16> {
-        loopback_port(page).filter(|_| self.is_another_machine(server))
+        let shared = lock(&self.state).links.get(server).is_some_and(|link| link.shares_loopback);
+        loopback_port(page).filter(|_| self.is_another_machine(server) && !shared)
     }
 
     /// Carries this client's `localhost:<port>` to the same port on `server`'s machine.

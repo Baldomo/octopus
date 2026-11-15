@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { on } from "@octopus/shared/backend.ts";
+import type { BrowserId, Go, OnScreen, TaskRef } from "@octopus/shared/generated.ts";
 import { cancel, Format, requestPermissions, scan } from "@tauri-apps/plugin-barcode-scanner";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Feel } from "./feel";
@@ -22,9 +24,14 @@ export const phone = {
   /** The status bar's, the display cutout's and the navigation bar's reach, where the webview leaves them out of the
    * safe area. */
   insets: () => invoke<Insets | null>("phone_insets"),
-  /** Shows a page of `server`'s task, holding the tunnel to its port while it is a loopback page. */
-  browse: (server: string, url: string) => invoke<Page>("phone_browse", { server, url }),
-  unbrowse: () => invoke<void>("phone_unbrowse"),
+  browserEngine: () => invoke<boolean>("phone_browser_engine"),
+  browserLoad: (at: TaskRef, panel: BrowserId, url: string) => invoke<void>("phone_browser_load", { at, panel, url }),
+  browserPlace: (onScreen: OnScreen | null, covered: boolean) =>
+    invoke<void>("phone_browser_place", { onScreen, covered }),
+  browserGo: (at: TaskRef, panel: BrowserId, go: Go) => invoke<void>("phone_browser_go", { at, panel, go }),
+  browserFind: (at: TaskRef, panel: BrowserId, text: string, backwards: boolean) =>
+    invoke<void>("phone_browser_find", { at, panel, text, backwards }),
+  browserForget: (at: TaskRef, panel: BrowserId) => invoke<void>("phone_browser_forget", { at, panel }),
   /** Whether the system back pops the page's top screen or sheet, which Android then hands to the page. */
   backPops: (pops: boolean) => invoke<void>("phone_back_pops", { pops }),
   feel: (feel: Feel) => invoke<void>("phone_feel", { feel }),
@@ -42,7 +49,10 @@ export const phone = {
   open: openUrl,
 };
 
-type Page = { url: string; tunneled: boolean };
+export const phoneEvents = {
+  browserEnded: on<{ task: string; panel: BrowserId }>("browser_ended"),
+  browserEdge: on<{ phase: "start" | "move" | "end" | "cancel"; x: number; velocity: number }>("browser_edge"),
+};
 
 /** About a box in the OS's points: Copy while there is a selection, whose text it copies, and Paste while `paste`. */
 export type EditMenu = {

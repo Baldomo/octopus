@@ -4184,7 +4184,6 @@ name = "octopus-desktop"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "block2",
  "gtk",
  "objc2",
  "objc2-app-kit",
@@ -4221,6 +4220,7 @@ dependencies = [
  "octopus-shell",
  "security-framework",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-barcode-scanner",
@@ -4273,8 +4273,12 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "block2",
  "cpal",
  "getrandom 0.3.4",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-foundation",
  "octopus-client",
  "octopus-proto",
  "percent-encoding",

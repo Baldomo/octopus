@@ -1,5 +1,6 @@
 //! The client app's core every client app adds as its `octopus` plugin.
 
+pub mod browsing;
 pub mod client_menu;
 mod commands;
 pub mod hub;
@@ -10,6 +11,7 @@ mod task_view;
 mod terminal;
 pub mod types;
 pub mod ui;
+pub mod webkit;
 
 use std::sync::Arc;
 use std::time::Instant;

@@ -7,7 +7,7 @@ use webkit2gtk::{
     Error, FindControllerExt, FindOptions, HitTestResultExt, NetworkError, PluginError, PolicyError, WebViewExt,
 };
 
-use super::{Change, Go};
+use octopus_shell::webkit::{Change, Go};
 
 /// Whether WebKit ended the load on purpose: a navigation another replaced, a load its policy stopped, such as a
 /// download, or a media file it plays in a media document of its own.
@@ -33,6 +33,10 @@ pub fn watch(webview: &Webview, watcher: impl Fn(Change) + Send + 'static) -> ta
         };
         view.connect_uri_notify(seen(Rc::clone(&watcher)));
         view.connect_is_loading_notify(seen(Rc::clone(&watcher)));
+        let titled = Rc::clone(&watcher);
+        view.connect_title_notify(move |view| {
+            titled(Change::Titled(view.title().map(|title| title.to_string()).unwrap_or_default()));
+        });
         let hovering = Rc::clone(&watcher);
         view.connect_mouse_target_changed(move |_, hit, _| {
             hovering(Change::Hovered { link: hit.link_uri().map(|link| link.to_string()) });

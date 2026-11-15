@@ -350,8 +350,18 @@ mod os {
 
     static WEBKIT: OnceLock<(CanPerform, TargetFor)> = OnceLock::new();
 
+    /// The terminal's menu, when `content` is the content view of the app's own webview, which the menu lies over. A
+    /// browser page's WKWebView is another, whose content view keeps WebKit's own edit actions.
+    fn menu_over(content: *mut AnyObject) -> Option<Retained<MenuView>> {
+        MENU.with(|menu| menu.get().cloned()).filter(|menu| {
+            // SAFETY: WebKit asks with its live content view, a UIView.
+            menu.superview().is_some_and(|webview| unsafe { msg_send![content, isDescendantOfView: &*webview] })
+        })
+    }
+
     /// While the keyboard is up, WebKit's content view is the first responder the edit menu asks for its actions and
-    /// sends them to. While the page has a menu open, it offers the menu's actions alone and hands them to the menu.
+    /// sends them to. While the page has a menu open, the app's webview offers the menu's actions alone and hands them
+    /// to the menu.
     fn route_through_menu() -> anyhow::Result<()> {
         unsafe extern "C-unwind" fn can_perform(
             this: *mut AnyObject,
@@ -359,7 +369,7 @@ mod os {
             action: Sel,
             sender: *mut AnyObject,
         ) -> Bool {
-            match MENU.with(|menu| menu.get().and_then(|menu| menu.offers(action))) {
+            match menu_over(this).and_then(|menu| menu.offers(action)) {
                 Some(offered) => Bool::new(offered),
                 // SAFETY: WebKit's own implementation, called with the arguments it was sent.
                 None => unsafe { (WEBKIT.get().expect("stored before replacing").0)(this, cmd, action, sender) },
@@ -371,11 +381,9 @@ mod os {
             action: Sel,
             sender: *mut AnyObject,
         ) -> *mut AnyObject {
-            let menu = MENU.with(|menu| {
-                menu.get()
-                    .filter(|menu| menu.offers(action) == Some(true))
-                    .map(|menu| Retained::as_ptr(menu).cast_mut())
-            });
+            let menu = menu_over(this)
+                .filter(|menu| menu.offers(action) == Some(true))
+                .map(|menu| Retained::as_ptr(&menu).cast_mut());
             // SAFETY: WebKit's own implementation, called with the arguments it was sent.
             menu.map_or_else(
                 || unsafe { (WEBKIT.get().expect("stored before replacing").1)(this, cmd, action, sender) },

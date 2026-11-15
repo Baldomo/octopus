@@ -749,17 +749,13 @@ body {
   max-width: 100%;
 }
 
-.web {
-  display: block;
-  width: 100%;
-  border: 0;
-  background: #fff;
-  color-scheme: light;
-}
-
 .bar .cancel {
   font: var(--t-sub);
   color: var(--dim);
+}
+
+.urlrow .circle:disabled {
+  color: var(--faint);
 }
 
 .url input {
@@ -797,6 +793,43 @@ body {
 
 .address b {
   flex: none;
+}
+
+.url .stepper {
+  background: none;
+}
+
+/*
+ * Browser's page draws in a native view over the hole, or under it while a sheet covers the page; the app is clear
+ * there and paints its background up to each of the hole's edges. A toast keeps its room under the view.
+ */
+.page > .hole {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.page > .toastroom {
+  height: calc(var(--h-row) + var(--g2) * 2);
+}
+
+:root:has(.hole.clear),
+:root:has(.hole.clear) body {
+  background: transparent;
+}
+
+.app:has(.hole.clear) {
+  --paint: linear-gradient(var(--bg), var(--bg));
+  background:
+    var(--paint) top / 100% var(--hole-top) no-repeat,
+    var(--paint) bottom / 100% var(--hole-bottom) no-repeat,
+    var(--paint) left / var(--hole-left) 100% no-repeat,
+    var(--paint) right / var(--hole-right) 100% no-repeat;
+}
+
+.failed-url {
+  font: var(--t-id);
+  color: var(--faint);
+  overflow-wrap: anywhere;
 }
 
 .pick {

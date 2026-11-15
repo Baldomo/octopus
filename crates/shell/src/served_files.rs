@@ -1,12 +1,12 @@
 //! Every file a webview loads from a server comes from `octopus-file://<root>/<path>`. A root is a directory on one
 //! server: a browser panel's page root, the directory of the file a page loads from, or a task's directory, which the
 //! Files tab reads. Each root gets a random name this client keeps for as long as it runs, so no page names a root it
-//! was not served from. A page root's name is its origin, so a page shares its origin with its own root's files alone;
-//! Android, whose webview serves a custom scheme as one `http` host, shows no file page. A task's files go to the
-//! UI's own webviews alone, which may read them across origins; on iOS a page shows in a frame of the UI's webview, so
-//! there the root's unguessable name is what keeps a page from it. This client answers each request with the bytes
-//! its server reads at `<path>` under the root, which the server keeps the path inside: the range a `Range` header
-//! asks for, so a video plays and seeks, or else the whole file.
+//! was not served from. A page root's name is its origin, so a page shares its origin with its own root's files alone.
+//! A task's files go to the UI's own webviews alone, which may read them across origins. Android's webviews give a
+//! custom scheme no origin, so there a page root is the `http` host `octopus-file-<root>.localhost`, a site of its own
+//! that shares no cookie with another root's, and a task's root a path under `octopus-file.localhost`. This client
+//! answers each request with the bytes its server reads at `<path>` under the root, which the server keeps the path
+//! inside: the range a `Range` header asks for, so a video plays and seeks, or else the whole file.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -24,10 +24,9 @@ use crate::hub::Hub;
 use crate::lock;
 use crate::task_lists::TaskRef;
 
-const SCHEME: &str = "octopus-file";
+pub const SCHEME: &str = "octopus-file";
 const ROOT_BYTES: usize = 16;
 
-/// Android's webview serves a custom scheme as one `http` host, so there a root is a path under it, not an origin.
 const ANDROID: bool = cfg!(target_os = "android");
 
 /// The origin the app's own UI loads from.
@@ -55,11 +54,6 @@ impl ServedFiles {
         if page.scheme() != "file" {
             return Ok(page.clone());
         }
-        if ANDROID {
-            return Err(format!(
-                "{page}: Android's webview serves no page an origin of its own, so it shows no file page"
-            ));
-        }
         let file = page.to_file_path().map_err(|()| format!("{page} names no absolute path"))?;
         let dir = file.parent().ok_or_else(|| format!("{page} names no file"))?.display().to_string();
         let name = page.path_segments().and_then(Iterator::last).unwrap_or_default();
@@ -76,6 +70,7 @@ impl ServedFiles {
     }
 
     fn base(&self, root: Root) -> String {
+        let page = matches!(root.dir, ReadDir::Page(_));
         let mut roots = lock(&self.0);
         let name = match roots.iter().find(|(_, known)| **known == root) {
             Some((name, _)) => name.clone(),
@@ -87,7 +82,11 @@ impl ServedFiles {
                 name
             }
         };
-        if ANDROID { format!("http://{SCHEME}.localhost/{name}") } else { format!("{SCHEME}://{name}") }
+        match (ANDROID, page) {
+            (false, _) => format!("{SCHEME}://{name}"),
+            (true, true) => format!("http://{SCHEME}-{name}.localhost"),
+            (true, false) => format!("http://{SCHEME}.localhost/{name}"),
+        }
     }
 
     /// The page a webview shows at `loaded`, a file page as its `file://` URL.
@@ -106,8 +105,15 @@ impl ServedFiles {
     /// The root `loaded` is a file of, and its path under the root.
     fn served(&self, loaded: &Url) -> Option<(Root, String)> {
         let (name, path) = if ANDROID {
-            (loaded.host_str()? == format!("{SCHEME}.localhost")).then_some(())?;
-            loaded.path().strip_prefix('/')?.split_once('/')?
+            let (host, path) = (loaded.host_str()?, loaded.path().strip_prefix('/')?);
+            let page_root = host.strip_prefix(&format!("{SCHEME}-")).and_then(|root| root.strip_suffix(".localhost"));
+            match page_root {
+                Some(root) => (root, path),
+                None => {
+                    (host == format!("{SCHEME}.localhost")).then_some(())?;
+                    path.split_once('/')?
+                }
+            }
         } else {
             (loaded.scheme() == SCHEME).then_some(())?;
             (loaded.host_str()?, loaded.path().strip_prefix('/')?)
@@ -116,7 +122,7 @@ impl ServedFiles {
         Some((root, percent_decode_str(path).decode_utf8().ok()?.into_owned()))
     }
 
-    async fn answer(
+    pub async fn answer(
         &self,
         hub: &Hub,
         asker: &str,

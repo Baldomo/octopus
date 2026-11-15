@@ -3,6 +3,7 @@ import { For } from "solid-js";
 /** The design's icons, each drawn in currentColor at the stroke `.ic` sets. */
 const SYMBOLS = {
   back: ["0 0 20 20", `<path d="M12.5 4.5 7 10l5.5 5.5"/>`],
+  fwd: ["0 0 20 20", `<path d="M7.5 4.5 13 10l-5.5 5.5"/>`],
   more: [
     "0 0 20 20",
     `<circle cx="4.5" cy="10" r="1.1" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.1" fill="currentColor" stroke="none"/><circle cx="15.5" cy="10" r="1.1" fill="currentColor" stroke="none"/>`,
@@ -20,6 +21,7 @@ const SYMBOLS = {
   ],
   plus: ["0 0 20 20", `<path d="M10 4v12M4 10h12"/>`],
   car: ["0 0 16 16", `<path d="m4 6 4 4 4-4"/>`],
+  up: ["0 0 16 16", `<path d="m4 10 4-4 4 4"/>`],
   x: ["0 0 16 16", `<path d="m5 5 6 6M11 5l-6 6"/>`],
   branch: [
     "0 0 16 16",

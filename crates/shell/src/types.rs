@@ -12,6 +12,7 @@ use serde::Serialize;
 use serde_json::json;
 use ts_rs::Config;
 
+use crate::browsing::{FAILED_EVENT, Failed, OPENED_EVENT, OnScreen, Opened, PAGED_EVENT, Paged};
 use crate::client_menu::{Appearance, ZOOMS, Zoom, ZoomStep};
 use crate::commands::{Boot, NewTask, ShownLink, ShownOffer};
 use crate::hub::{
@@ -26,6 +27,7 @@ use crate::ui::{
     Bounds, FILE_DRAG_EVENT, FOCUSED_EVENT, FileDrag, Floated, Modal, Prefs, Reveal, SHOWN_EVENT, Split, Surface,
     UI_EVENT, Ui, UiAct, View, Viewport,
 };
+use crate::webkit::Go;
 
 /// Where the rendered file lives, relative to the workspace root.
 pub const PATH: &str = "ui/shared/src/generated.ts";
@@ -107,6 +109,11 @@ pub fn render() -> String {
         Bounds,
         Floated,
         FileDrag,
+        OnScreen,
+        Go,
+        Paged,
+        Failed,
+        Opened,
     );
     let constants = [
         constant("TASK_STATES", &TaskState::ALL),
@@ -135,6 +142,9 @@ pub fn render() -> String {
                 "windowFocused": FOCUSED_EVENT,
                 "fileDrag": FILE_DRAG_EVENT,
                 "microphoneDenied": MICROPHONE_DENIED_EVENT,
+                "browserPaged": PAGED_EVENT,
+                "browserFailed": FAILED_EVENT,
+                "browserOpened": OPENED_EVENT,
             }),
         ),
     ];

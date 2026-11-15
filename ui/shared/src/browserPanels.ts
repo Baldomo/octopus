@@ -86,11 +86,22 @@ export function createPanelSelection(view: () => TaskView | undefined) {
 export const openPage = (task: TaskView, url: string) =>
   backend.browserOpen(task.at, targetOf(task), url).then((panel) => setSelected(task.key, panel), report);
 
+function isLocal(address: string) {
+  if (!URL.canParse(`http://${address}`)) return false;
+  const host = new URL(`http://${address}`).hostname;
+  return (
+    !host.includes(".") ||
+    host.startsWith("[") ||
+    /^[\d.]+$/.test(host) ||
+    /\.(localhost|local|test|internal|lan)$/.test(host)
+  );
+}
+
 /** What the user typed as a page: a URL with its scheme, a file's absolute path, or a web address. */
-const typedPage = (typed: string) => {
+export const typedPage = (typed: string) => {
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(typed)) return typed;
   if (typed.startsWith("/")) return new URL(`file://${typed}`).href;
-  return `http://${typed}`;
+  return `${isLocal(typed) ? "http" : "https"}://${typed}`;
 };
 
 /** Opens what the user typed as a page in the task's target panel, unless it is blank. */

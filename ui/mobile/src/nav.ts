@@ -73,6 +73,17 @@ createRoot(() => createEffect(() => act(phone.backPops(entries().length > 1))));
 
 export const back = () => history.back();
 
+const [claim, setClaim] = createSignal<(() => void) | null>(null);
+
+/** Lets the top screen answer back itself, with `run`, until the returned release is called. */
+export function claimBack(run: () => void) {
+  setClaim(() => run);
+  return () => setClaim((held) => (held === run ? null : held));
+}
+
+/** The top screen's own answer to back, which the OS's back and the edge drag run, popping nothing, while no sheet is up. */
+export const claimedBack = () => (sheet() === null ? claim() : null);
+
 /** The screen a screen sits on: a task's Files and Browser on its Task screen, its editor on its Files. */
 function parentOf(screen: Screen): Screen | undefined {
   if (screen.at === "editor") return { at: "files", key: screen.key };

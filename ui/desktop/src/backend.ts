@@ -1,29 +1,22 @@
 import { invoke as invokeAny, type InvokeArgs } from "@tauri-apps/api/core";
 import { on } from "@octopus/shared/backend.ts";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { BrowserId, TaskRef } from "@octopus/shared/generated.ts";
+import type { BrowserId, Go, OnScreen, TaskRef } from "@octopus/shared/generated.ts";
 import {
   COMMANDS,
   EVENTS,
   type Downloaded,
-  type Failed,
-  type Go,
   type Hovered,
   type MenuGroup,
   type MenuKey,
-  type OnScreen,
-  type Opened,
   type Outside,
-  type Paged,
 } from "./generated";
 
 const invoke = <T>(command: (typeof COMMANDS)[number], args?: InvokeArgs) => invokeAny<T>(command, args);
 
 export const desktop = {
   titleBarDoubleClick: () => invoke<void>("title_bar_double_click"),
-  /** Loads the panel's `url` on this client, unless its webview already loaded this `load`. */
-  browserLoad: (at: TaskRef, panel: BrowserId, url: string, load: number) =>
-    invoke<void>("browser_load", { at, panel, url, load }),
+  browserLoad: (at: TaskRef, panel: BrowserId, url: string) => invoke<void>("browser_load", { at, panel, url }),
   browserShowPage: (onScreen: OnScreen | null) => invoke<void>("browser_show_page", { onScreen }),
   browserGo: (at: TaskRef, panel: BrowserId, go: Go) => invoke<void>("browser_go", { at, panel, go }),
   browserFind: (at: TaskRef, panel: BrowserId, text: string, backwards: boolean) =>
@@ -40,9 +33,6 @@ export const desktop = {
 };
 
 export const desktopEvents = {
-  browserPaged: on<Paged>(EVENTS.browserPaged),
-  browserFailed: on<Failed>(EVENTS.browserFailed),
-  browserOpened: on<Opened>(EVENTS.browserOpened),
   browserHovered: on<Hovered | null>(EVENTS.browserHovered),
   browserDownloaded: on<Downloaded>(EVENTS.browserDownloaded),
   menuCommand: on<MenuKey>(EVENTS.menuCommand),

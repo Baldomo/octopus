@@ -10,6 +10,7 @@ use anyhow::Context;
 use octopus_client::Identity;
 use octopus_client::servers::{Config, Servers};
 use octopus_shell::Client;
+use octopus_shell::browsing::BrowserPages;
 use octopus_shell::microphone::Access;
 use octopus_shell::ui::UiStore;
 use tauri::{Manager, Runtime};
@@ -63,6 +64,7 @@ pub fn run(launch_problem: Option<String>) -> anyhow::Result<()> {
             octopus_shell::start(app.handle(), client, launch_problem);
             menu::relay(app.handle());
             let ui = Arc::clone(app.state::<Arc<UiStore>>().inner());
+            app.manage(BrowserPages::new(app.handle().clone()));
             app.manage(Browsers::new(app.handle().clone(), Layers::open(app, ui)?));
             Ok(())
         })

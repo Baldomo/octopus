@@ -2,28 +2,28 @@ use std::path::{Component, Path};
 use std::sync::Arc;
 
 use octopus_proto::types::BrowserId;
+use octopus_shell::browsing::OnScreen;
 use octopus_shell::hub::Hub;
 use octopus_shell::task_lists::TaskRef;
+use octopus_shell::webkit::Go;
 use serde::Deserialize;
 use tauri::{AppHandle, State};
 use ts_rs::TS;
 
-use crate::browser::{Browsers, Go, OnScreen};
+use crate::browser::Browsers;
 use crate::menu::MenuGroup;
 
 type Hubbed<'a> = State<'a, Arc<Hub>>;
 type Browsing<'a> = State<'a, Browsers>;
 
-/// Loads the panel's `url` on this client unless its webview already loaded this `load` of the panel.
 #[tauri::command]
 pub(crate) async fn browser_load(
     browsers: Browsing<'_>,
     at: TaskRef,
     panel: BrowserId,
     url: String,
-    load: u64,
 ) -> Result<(), String> {
-    browsers.load(&at, &panel, &url, load).await
+    browsers.load(&at, &panel, &url).await
 }
 
 #[tauri::command]

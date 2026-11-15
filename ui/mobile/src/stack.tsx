@@ -1,8 +1,9 @@
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show, type JSX } from "solid-js";
-import { back, screens, sheet, type Screen } from "./nav";
+import { back, claimedBack, screens, sheet, type Screen } from "./nav";
 import { FADE, reduced } from "@octopus/shared/motion.ts";
+import { act } from "@octopus/shared/state.ts";
 import { afterFrame, draw, glide, POP, PUSH, type Look } from "./motion";
-import { android } from "./phone";
+import { android, phoneEvents } from "./phone";
 import { ownsScreenEdge } from "./touch";
 import { releaseFocus } from "./viewport";
 
@@ -166,40 +167,64 @@ export function Stack(props: { children: (screen: Screen) => JSX.Element; sheetB
 
 type Grab = () => { move: (at: number) => void; release: (pops: boolean, velocity?: number) => void } | null;
 
-/** iOS's edge swipe: a finger from the left edge moving right drags the top screen, and letting go pops or settles. */
+/**
+ * iOS's edge swipe, from a finger over the app or over a page whose history has nowhere to go back to: moving right
+ * carries the top screen, and letting go pops or settles it; over a screen that claims back it carries nothing, and
+ * letting go as a pop would runs the claim.
+ */
 function followEdgeSwipe(grab: Grab) {
   if (android) return;
-  ownsScreenEdge(({ from, axis, way }) => {
-    if (axis !== "x" || way < 0 || from.x > EDGE_PX) return null;
-    const held = grab();
-    if (held === null) return null;
+  const edgeDrag = () => {
+    const claimed = claimedBack();
+    const held = claimed ? null : grab();
+    if (claimed === null && held === null) return null;
     let at = 0;
     return {
-      move: (to) => {
-        at = (to.x - from.x) / innerWidth;
-        held.move(at);
+      move: (x: number) => {
+        at = x / innerWidth;
+        held?.move(at);
       },
-      end: (thrown) => {
-        const velocity = (thrown?.x ?? 0) / innerWidth;
-        held.release(thrown !== null && velocity > -THROW && (at > 0.5 || velocity > THROW), velocity);
+      end: (thrown: number | null) => {
+        const velocity = (thrown ?? 0) / innerWidth;
+        const pops = thrown !== null && velocity > -THROW && (at > 0.5 || velocity > THROW);
+        if (held) held.release(pops, velocity);
+        else if (pops) claimed?.();
       },
     };
+  };
+  ownsScreenEdge(({ from, axis, way }) => {
+    if (axis !== "x" || way < 0 || from.x > EDGE_PX) return null;
+    const drag = edgeDrag();
+    return drag && { move: (to) => drag.move(to.x - from.x), end: (thrown) => drag.end(thrown && thrown.x) };
   });
+  let dragged: ReturnType<typeof edgeDrag> = null;
+  act(
+    phoneEvents.browserEdge(({ phase, x, velocity }) => {
+      if (phase === "start") dragged = edgeDrag();
+      else if (phase === "move") dragged?.move(x);
+      else {
+        dragged?.end(phase === "end" ? velocity : null);
+        dragged = null;
+      }
+    }),
+  );
 }
 
 /**
  * Android hands the page the system back gesture's progress while the page has something to pop: it carries the top
- * sheet or screen, letting go settles it back, and committing pops it from where it stands.
+ * sheet or screen, letting go settles it back, and committing pops it from where it stands. Over a screen that
+ * claims back it carries nothing, and committing runs the claim.
  */
 function followPredictiveBack(grab: Grab, sheetBack: () => BackDrive | null) {
   let held: ReturnType<Grab> = null;
   let drive: BackDrive | null = null;
   addEventListener("octopus-back", (event) => {
     const { phase, progress } = (event as CustomEvent<{ phase: string; progress: number }>).detail;
+    const claimed = claimedBack();
     if (phase === "start") {
       drive = sheetBack();
       if (drive) drive.start();
-      else held = grab();
+      else if (claimed === null) held = grab();
     } else if (phase === "move") {
       if (drive) drive.move(progress);
       else held?.move(progress * PREDICTIVE_REACH);
@@ -209,6 +234,7 @@ function followPredictiveBack(grab: Grab, sheetBack: () => BackDrive | null) {
       [drive, held] = [null, null];
     } else {
       if (held) held.release(true);
+      else if (claimed) claimed();
       else back();
       [drive, held] = [null, null];
     }

@@ -21,7 +21,6 @@ tokio = { workspace = true, features = ["full"] }
 ts-rs.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-block2.workspace = true
 objc2.workspace = true
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSEvent", "NSHapticFeedback", "NSResponder", "NSTrackingArea", "NSView", "NSWindow"] }
 objc2-core-foundation.workspace = true

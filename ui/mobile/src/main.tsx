@@ -21,7 +21,7 @@ import { applyFilesChanged, forgetFilesExcept } from "@octopus/shared/taskFiles.
 import { Board } from "./Board";
 import { followFront } from "./front";
 import { steadyCaret } from "./caret";
-import { Browser } from "./Browser";
+import { Browser, forgetBrowsersExcept } from "./Browser";
 import { ClientMenu, ServerMenu } from "./ClientMenu";
 import { EditorScreen, Files } from "./Files";
 import { Sprite } from "./Icon";
@@ -44,6 +44,8 @@ import { followViewport } from "./viewport";
 import { followTouches } from "./touch";
 import { followMotion } from "./motion";
 import { AddWorkspace, SectionMenu } from "./Workspaces";
+
+const KEPT_BROWSER_TASKS = 4;
 
 const SCHEMES: Record<Appearance, string> = { system: "light dark", light: "light", dark: "dark" };
 
@@ -202,6 +204,7 @@ function App() {
   createEffect(() => document.documentElement.style.setProperty("color-scheme", SCHEMES[ui.prefs.appearance]));
   createEffect(() => document.documentElement.toggleAttribute("data-scanning", scanning() && !sliding()));
   createEffect(on(() => [...ui.recent], forgetFilesExcept));
+  createEffect(() => forgetBrowsersExcept(ui.recent.slice(0, KEPT_BROWSER_TASKS)));
   return (
     <>
       <Sprite />

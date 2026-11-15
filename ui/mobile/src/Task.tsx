@@ -1,11 +1,13 @@
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { Portal } from "solid-js/web";
 import { backend } from "@octopus/shared/backend.ts";
+import { openPage } from "@octopus/shared/browserPanels.ts";
 import { AGENT_PANEL, type PanelView, type PtyId, type TaskView } from "@octopus/shared/generated.ts";
 import { ago, clock, ticking } from "@octopus/shared/time.ts";
 import { act, model, report, scale, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
 import { clickReport, type ScreenCell, wheelReport } from "@octopus/shared/mouseReports.ts";
 import { type Incoming, pastedPaths } from "@octopus/shared/taskFiles.ts";
+import { onLoopback } from "@octopus/shared/terminalUrls.ts";
 import { cellSize, type Size, terminalSession } from "@octopus/shared/terminalSession.ts";
 import { colors, scheme } from "@octopus/shared/tokens.ts";
 import { dormant } from "@octopus/shared/Glyph.tsx";
@@ -15,7 +17,7 @@ import { chooseShell, EachPanel, openShell, taskPanels } from "@octopus/shared/p
 import { Icon } from "./Icon";
 import { caretMove, cursorKey, cursorKeys, ESC, pasteKeys } from "./keys";
 import { onPainted } from "./motion";
-import { micDenied, openSheet, screen as topScreen } from "./nav";
+import { go, micDenied, openSheet, screen as topScreen } from "./nav";
 import { Circle, CrumbBar, Gap, Glyph, Id, observeSize, Para, sectionColor, ServerDot, Slot, Trail } from "./parts";
 import { present } from "./front";
 import { phone } from "./phone";
@@ -345,6 +347,12 @@ function PhoneTerm(props: {
     shown: () => props.visible && onTop(),
     canPaste,
     paste,
+    open: (url) => {
+      if (onLoopback(url)) {
+        openPage(props.task, url);
+        go({ at: "browser", key: props.task.key });
+      } else act(phone.open(url));
+    },
   });
 
   onMount(() => {

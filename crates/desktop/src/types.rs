@@ -5,10 +5,7 @@ use octopus_shell::types::constant;
 use serde_json::json;
 use ts_rs::Config;
 
-use crate::browser::{
-    DOWNLOADED_EVENT, Downloaded, FAILED_EVENT, Failed, Go, HOVERED_EVENT, Hovered, OPENED_EVENT, OnScreen, Opened,
-    PAGED_EVENT, Paged,
-};
+use crate::browser::{DOWNLOADED_EVENT, Downloaded, HOVERED_EVENT, Hovered};
 use crate::commands::Outside;
 use crate::layers::{FLOAT, title_bar_height};
 use crate::menu::{COMMAND_EVENT, MenuCommand, MenuGroup, MenuKey};
@@ -18,24 +15,9 @@ pub const PATH: &str = "ui/desktop/src/generated.ts";
 
 pub fn render() -> String {
     let config = Config::default().with_large_int("number");
-    let declarations = octopus_shell::declarations!(
-        &config,
-        OnScreen,
-        Go,
-        Paged,
-        Failed,
-        Opened,
-        Hovered,
-        Downloaded,
-        Outside,
-        MenuCommand,
-        MenuGroup,
-        MenuKey
-    );
+    let declarations =
+        octopus_shell::declarations!(&config, Hovered, Downloaded, Outside, MenuCommand, MenuGroup, MenuKey);
     let events = json!({
-        "browserPaged": PAGED_EVENT,
-        "browserFailed": FAILED_EVENT,
-        "browserOpened": OPENED_EVENT,
         "browserHovered": HOVERED_EVENT,
         "browserDownloaded": DOWNLOADED_EVENT,
         "menuCommand": COMMAND_EVENT,
@@ -48,7 +30,7 @@ pub fn render() -> String {
     ];
     let header = concat!(
         "// Rendered from the Rust types by `cargo run -p octopus-desktop --example types`. Edit those, not this.\n",
-        "import type { BrowserId, Bounds, TaskRef } from \"@octopus/shared/generated.ts\";\n",
+        "import type { Bounds } from \"@octopus/shared/generated.ts\";\n",
     );
     std::iter::once(header.to_string()).chain(declarations).chain(constants).collect::<Vec<_>>().join("\n")
 }

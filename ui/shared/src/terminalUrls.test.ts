@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { urlsIn } from "./terminalUrls.ts";
+import { onLoopback, urlsIn } from "./terminalUrls.ts";
 
 const urls = (text: string) => urlsIn(text).map(({ url }) => url);
 
@@ -30,4 +30,11 @@ test("only http and https URLs are found, each at the index it starts", () => {
     { url: "https://b.test", at: 14 },
   ]);
   assert.deepEqual(urls("ftp://a.test file:///etc/hosts mailto:me@a.test httpx://a.test"), []);
+});
+
+test("a URL is on a loopback host when its host is localhost or a loopback address", () => {
+  for (const url of ["http://localhost:5173/a", "http://127.0.0.1:8080", "https://127.3.2.1/", "http://[::1]:3000/x"])
+    assert.ok(onLoopback(url), url);
+  for (const url of ["https://example.com", "http://localhost.example.com", "http://192.168.1.2:3000", "localhost"])
+    assert.ok(!onLoopback(url), url);
 });

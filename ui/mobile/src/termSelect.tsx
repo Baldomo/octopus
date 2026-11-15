@@ -1,10 +1,10 @@
 import type { Terminal } from "@xterm/xterm";
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
-import { act, scale, ui } from "@octopus/shared/state.ts";
+import { scale, ui } from "@octopus/shared/state.ts";
 import { urlsIn } from "@octopus/shared/terminalUrls.ts";
 import { px } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
-import { type Pasted, phone } from "./phone";
+import type { Pasted } from "./phone";
 import { LONG_PRESS_MS, type Point } from "./press";
 import { type Box, SelectionMenu } from "./selectionMenu";
 import { COMMIT_PX, fingerIn, keepTouch } from "./touch";
@@ -101,6 +101,8 @@ export function termSelection(props: {
   /** Whether the menu offers Paste, and what to do with what it pastes. */
   canPaste: () => boolean;
   paste: (pasted: Pasted) => void;
+  /** Opens a URL the finger taps. */
+  open: (url: string) => void;
 }) {
   const { xterm } = props;
   /** Read again on every frame xterm draws, since scrolling and trimmed scrollback move it without a change event. */
@@ -353,7 +355,7 @@ export function termSelection(props: {
       const cell = cellAt(point, false);
       const url = cell === null ? null : linkAt(xterm, cell);
       if (url === null) return false;
-      act(phone.open(url));
+      props.open(url);
       return true;
     },
   };

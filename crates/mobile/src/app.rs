@@ -7,10 +7,11 @@ use anyhow::Context;
 use octopus_client::Identity;
 use octopus_client::servers::{Config, Servers};
 use octopus_shell::Client;
+use octopus_shell::browsing::BrowserPages;
 use octopus_shell::hub::Hub;
 use tauri::{Manager, WebviewWindowBuilder};
 
-use crate::browser::{self, Shown};
+use crate::browser;
 use crate::client_menu::{self, Phone};
 use crate::{device, feel, paste};
 
@@ -24,11 +25,15 @@ pub fn run() {
         .plugin(tauri_plugin_barcode_scanner::init())
         .plugin(tauri_plugin_opener::init());
     #[cfg(target_os = "android")]
-    let builder = builder.plugin(device::plugin());
+    let builder = builder.plugin(device::plugin()).plugin(browser::plugin());
     builder
         .invoke_handler(tauri::generate_handler![
-            browser::phone_browse,
-            browser::phone_unbrowse,
+            browser::phone_browser_engine,
+            browser::phone_browser_load,
+            browser::phone_browser_place,
+            browser::phone_browser_go,
+            browser::phone_browser_find,
+            browser::phone_browser_forget,
             client_menu::phone_named,
             client_menu::phone_invite_key,
             client_menu::phone_link_account,
@@ -61,10 +66,12 @@ pub fn run() {
                 microphone_access: Box::new(move || device::microphone(&asking)),
             };
             app.manage(phone);
-            app.manage(Shown::default());
+            app.manage(BrowserPages::new(handle.clone()));
             octopus_shell::start(handle, client, None);
             let window = app.config().app.windows.first().context("tauri.conf.json declares the window")?;
             WebviewWindowBuilder::from_config(handle, window)?.build()?;
+            #[cfg(target_os = "android")]
+            browser::set_up(app)?;
             #[cfg(target_os = "ios")]
             crate::webview::set_up(app)?;
             #[cfg(target_os = "ios")]
