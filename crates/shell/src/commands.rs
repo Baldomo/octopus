@@ -8,14 +8,16 @@ use octopus_proto::Error;
 use octopus_proto::account::{AccountId, Link};
 use octopus_proto::device::PublicKey;
 use octopus_proto::ops::{
-    Entry, EntryKind, FileCopy, FileCreate, FileDelete, FileList, FileMove, FileSearch, FileWrite, Folder, FolderGet,
-    Match, Offer, PairedAccount, PairingForget, PairingList, PairingOffer, TaskArchive, TaskCreate, TaskMove,
-    TaskRename, TaskSetParent, TaskSetWorkspace, TermClaim, TermClose, TermOpen, TermResize, TermTakeLock,
-    WorkspaceAdd, WorkspaceRemove,
+    BrowserClose, BrowserMove, BrowserOpen, Entry, EntryKind, FileCopy, FileCreate, FileDelete, FileList, FileMove,
+    FileSearch, FileWrite, Folder, FolderGet, Match, Offer, PairedAccount, PairingForget, PairingList, PairingOffer,
+    TaskArchive, TaskCreate, TaskMove, TaskRename, TaskSetParent, TaskSetWorkspace, TermClaim, TermClose, TermOpen,
+    TermResize, TermTakeLock, WorkspaceAdd, WorkspaceRemove,
 };
 use octopus_proto::pairing::Invite;
 use octopus_proto::settings::Setting;
-use octopus_proto::types::{Color, Mode, PtyId, SessionStart, Swatch, TaskId, TaskState, WorkspaceId};
+use octopus_proto::types::{
+    BrowserId, BrowserTarget, Color, Mode, PtyId, SessionStart, Swatch, TaskId, TaskState, WorkspaceId,
+};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Runtime, State};
@@ -280,7 +282,7 @@ pub async fn term_attach(
     pty: PtyId,
     output: Channel<InvokeResponseBody>,
 ) -> Result<u64, String> {
-    let connection = hub.connection(&at.server)?;
+    let connection = hub.connected(&at.server).await?;
     terminals.attach(&connection, pty, output).await.map_err(|error| hub.failure(&at.server, error))
 }
 
@@ -309,7 +311,7 @@ pub async fn term_close(hub: Hubbed<'_>, at: TaskRef, panel: PtyId) -> Result<()
 /// it cropped.
 #[tauri::command]
 pub async fn term_claim(hub: Hubbed<'_>, at: TaskRef, panel: PtyId, cols: u16, rows: u16) -> Result<(), String> {
-    let connection = hub.connection(&at.server)?;
+    let connection = hub.connected(&at.server).await?;
     match connection.call(&TermClaim { task: at.task, panel: panel.0, cols, rows }).await {
         Ok(_) | Err(CallError::Server(Error::PtyLocked { .. })) => Ok(()),
         Err(error) => Err(hub.failure(&at.server, error)),
@@ -324,6 +326,30 @@ pub async fn term_take_lock(hub: Hubbed<'_>, at: TaskRef, panel: PtyId, cols: u1
 #[tauri::command]
 pub async fn term_resize(hub: Hubbed<'_>, at: TaskRef, panel: PtyId, cols: u16, rows: u16) -> Result<(), String> {
     hub.call(&at.server, &TermResize { task: at.task, panel: panel.0, cols, rows }).await.map(drop)
+}
+
+/// Shows `url` in a browser panel of the task on its server, which pushes the panel to every client; resolves to
+/// the panel's id.
+#[tauri::command]
+pub async fn browser_open(
+    hub: Hubbed<'_>,
+    at: TaskRef,
+    panel: BrowserTarget,
+    url: String,
+) -> Result<BrowserId, String> {
+    Ok(hub.call(&at.server, &BrowserOpen { task: at.task, url, panel }).await?.panel)
+}
+
+/// Removes a browser panel of the task on its server, which every client then stops rendering.
+#[tauri::command]
+pub async fn browser_close(hub: Hubbed<'_>, at: TaskRef, panel: BrowserId) -> Result<(), String> {
+    hub.call(&at.server, &BrowserClose { task: at.task, panel }).await.map(drop)
+}
+
+/// Moves a browser panel of the task on its server to index `to` among the task's panels, on every client.
+#[tauri::command]
+pub async fn browser_move(hub: Hubbed<'_>, at: TaskRef, panel: BrowserId, to: u16) -> Result<(), String> {
+    hub.call(&at.server, &BrowserMove { task: at.task, panel, to }).await.map(drop)
 }
 
 #[tauri::command]
@@ -361,30 +387,31 @@ pub async fn file_delete(hub: Hubbed<'_>, at: TaskRef, path: String, trash: bool
     hub.call(&at.server, &FileDelete { task: at.task, path, trash }).await.map(drop)
 }
 
-/// The files and folders dropped onto the window, the only ones on this machine a client copies to a server.
+/// The files and folders the user handed the window by drop or paste, the only ones on this machine a client copies to
+/// a server.
 #[derive(Default)]
-pub struct Dropped(Mutex<HashSet<PathBuf>>);
+pub struct Offered(Mutex<HashSet<PathBuf>>);
 
-impl Dropped {
+impl Offered {
     pub fn add(&self, paths: &[PathBuf]) {
         lock(&self.0).extend(paths.iter().cloned());
     }
 }
 
-/// Copies `local`, a dropped file or folder, to the new `path` of the task's directory, a folder with every file and
-/// folder in it.
+/// Copies `local`, a dropped or pasted file or folder, to the new `path` of the task's directory, a folder with every
+/// file and folder in it.
 #[tauri::command]
 pub async fn file_upload(
     hub: Hubbed<'_>,
-    dropped: State<'_, Dropped>,
+    offered: State<'_, Offered>,
     at: TaskRef,
     path: String,
     local: PathBuf,
 ) -> Result<(), String> {
-    if !lock(&dropped.0).contains(&local) {
-        return Err(format!("{} was not dropped onto the window", local.display()));
+    if !lock(&offered.0).contains(&local) {
+        return Err(format!("{} was neither dropped nor pasted", local.display()));
     }
-    let connection = hub.connection(&at.server)?;
+    let connection = hub.connected(&at.server).await?;
     let mut pending = vec![(path, local, true)];
     while let Some((path, local, top)) = pending.pop() {
         let read = |error: std::io::Error| format!("{}: {error}", local.display());
@@ -409,10 +436,15 @@ pub async fn file_upload(
     Ok(())
 }
 
-/// Sends `content`, a file this client holds rather than one on its disk, as the new `path` of the task's directory.
+/// Sends `content`, the base64 of a file this client holds rather than one on its disk, as the new `path` of the task's
+/// directory.
 #[tauri::command]
-pub async fn file_upload_content(hub: Hubbed<'_>, at: TaskRef, path: String, content: Vec<u8>) -> Result<(), String> {
-    let connection = hub.connection(&at.server)?;
+pub async fn file_upload_content(hub: Hubbed<'_>, at: TaskRef, path: String, content: String) -> Result<(), String> {
+    use base64::Engine;
+    let content = base64::engine::general_purpose::STANDARD
+        .decode(content)
+        .map_err(|error| format!("decode the uploaded content: {error}"))?;
+    let connection = hub.connected(&at.server).await?;
     let upload = connection.upload(at.task, path, content.len() as u64, content.as_slice()).await;
     upload.map_err(|error| hub.failure(&at.server, error))
 }

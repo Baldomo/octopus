@@ -29,7 +29,7 @@ use octopus_shell::client_menu::{Appearance, Zoom};
 use octopus_shell::ui::{
     Bounds, FILE_DRAG_EVENT, FOCUSED_EVENT, FileDrag, Floated, Native, SHOWN_EVENT, UiStore, Viewport,
 };
-use octopus_shell::{Dropped, lock};
+use octopus_shell::{Offered, lock};
 
 pub(crate) const BASE: &str = octopus_shell::served_files::BASE_WEBVIEW;
 /// How often the window is asked whether it is minimized or hidden; macOS sends no event for either.
@@ -76,7 +76,7 @@ fn the_ui(url: &tauri::Url) -> bool {
 
 /// A drag over the base layer, which reports its point in points despite the type, as the UI sees it: a drag
 /// carrying no files, as of text or a link, is none of its business.
-fn file_drag(event: &DragDropEvent, zoom: Zoom, carrying_files: &AtomicBool, dropped: &Dropped) -> Option<FileDrag> {
+fn file_drag(event: &DragDropEvent, zoom: Zoom, carrying_files: &AtomicBool, offered: &Offered) -> Option<FileDrag> {
     let at = |position: &PhysicalPosition<f64>| (position.x / zoom.scale(), position.y / zoom.scale());
     let (x, y) = match event {
         DragDropEvent::Enter { paths, position } => {
@@ -91,7 +91,7 @@ fn file_drag(event: &DragDropEvent, zoom: Zoom, carrying_files: &AtomicBool, dro
     }
     Some(match event {
         DragDropEvent::Drop { paths, .. } => {
-            dropped.add(paths);
+            offered.add(paths);
             FileDrag::Drop { paths: paths.iter().map(|path| path.to_string_lossy().into_owned()).collect(), x, y }
         }
         _ => FileDrag::Over { x, y },
@@ -200,8 +200,8 @@ impl Layers {
         let carrying_files = AtomicBool::new(false);
         layers.base.on_webview_event(move |event| {
             if let WebviewEvent::DragDrop(drag) = event {
-                let dropped = dragged.window.state::<Dropped>();
-                if let Some(drag) = file_drag(drag, dragged.ui.native().zoom, &carrying_files, &dropped) {
+                let offered = dragged.window.state::<Offered>();
+                if let Some(drag) = file_drag(drag, dragged.ui.native().zoom, &carrying_files, &offered) {
                     octopus_shell::emit(dragged.window.app_handle(), FILE_DRAG_EVENT, drag);
                 }
             }

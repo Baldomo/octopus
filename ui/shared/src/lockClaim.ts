@@ -4,7 +4,7 @@ import { createSignal } from "solid-js";
  * Whether a terminal's next stream claims its free lock, and whether a claim is under way. A look claims: the client
  * starting to show the terminal while its server is reachable. So does a stream that reopens on its own, after a drop
  * or a reconnect, for a client that held the lock when its stream ended. A lock another client frees stays free until
- * someone looks. A claim is under way from the look, or the reopening, until it settles.
+ * someone looks. A claim is under way from the look, the reopening, or a take over, until it settles.
  */
 export function lockClaim() {
   let looked = false;
@@ -27,6 +27,7 @@ export function lockClaim() {
       if (claims) setPending(true);
       return claims;
     },
+    took: () => setPending(true),
     settled: () => setPending(false),
   };
 }

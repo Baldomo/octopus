@@ -1,7 +1,8 @@
-import { createEffect, createSignal, For, on, onCleanup, type JSX } from "solid-js";
+import { createEffect, createMemo, createSignal, For, on, onCleanup, Show, type JSX } from "solid-js";
 import { back, screens, sheet, type Screen } from "./nav";
 import { FADE, reduced } from "@octopus/shared/motion.ts";
 import { afterFrame, draw, glide, POP, PUSH, type Look } from "./motion";
+import { android } from "./phone";
 import { ownsScreenEdge } from "./touch";
 import { releaseFocus } from "./viewport";
 
@@ -25,7 +26,8 @@ export const sliding = () => moving().length > 0;
 /**
  * Every pushed screen, root first, each a layer the one above slides over: a push slides the new one in from the
  * right edge over the one it covers, which shifts left under a shade, and a pop reverses it from wherever the screen
- * stands. A screen shows only while it is the top one or moving. Android's back gesture carries the top sheet through
+ * stands. A screen shows only while it is the top one or moving, and mounts the first time it shows, so the parents a
+ * push lays under a screen wait for the user to come back to them. Android's back gesture carries the top sheet through
  * `sheetBack` while one is up.
  */
 export function Stack(props: { children: (screen: Screen) => JSX.Element; sheetBack: () => BackDrive | null }) {
@@ -140,19 +142,24 @@ export function Stack(props: { children: (screen: Screen) => JSX.Element; sheetB
 
   return (
     <For each={layers()}>
-      {(screen) => (
-        <div
-          ref={(element) => {
-            elements.set(screen, element);
-            onCleanup(() => elements.delete(screen));
-          }}
-          class="app"
-          classList={{ cam: screen.at === "scan", shown: shown(screen), over: !reduced() && moving()[1] === screen }}
-        >
-          <div class="content">{props.children(screen)}</div>
-          <div class="shade" />
-        </div>
-      )}
+      {(screen) => {
+        const mounted = createMemo((was: boolean) => was || shown(screen), false);
+        return (
+          <div
+            ref={(element) => {
+              elements.set(screen, element);
+              onCleanup(() => elements.delete(screen));
+            }}
+            class="app"
+            classList={{ cam: screen.at === "scan", shown: shown(screen), over: !reduced() && moving()[1] === screen }}
+          >
+            <div class="content">
+              <Show when={mounted()}>{props.children(screen)}</Show>
+            </div>
+            <div class="shade" />
+          </div>
+        );
+      }}
     </For>
   );
 }
@@ -161,7 +168,7 @@ type Grab = () => { move: (at: number) => void; release: (pops: boolean, velocit
 
 /** iOS's edge swipe: a finger from the left edge moving right drags the top screen, and letting go pops or settles. */
 function followEdgeSwipe(grab: Grab) {
-  if (/Android/.test(navigator.userAgent)) return;
+  if (android) return;
   ownsScreenEdge(({ from, axis, way }) => {
     if (axis !== "x" || way < 0 || from.x > EDGE_PX) return null;
     const held = grab();

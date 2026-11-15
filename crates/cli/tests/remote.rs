@@ -296,7 +296,14 @@ async fn a_browser_panel_is_task_state_and_its_localhost_page_tunnels_to_the_ser
     });
     let client_side = TcpListener::bind("127.0.0.1:0").await.expect("bind the client side");
     let browser_port = client_side.local_addr().expect("its port");
-    let _tunnel = Tunnel::new(port, vec![client_side], Arc::new(move || Ok(Arc::clone(&laptop))));
+    let _tunnel = Tunnel::new(
+        port,
+        vec![client_side],
+        Arc::new(move || {
+            let laptop = Arc::clone(&laptop);
+            Box::pin(async move { Ok(laptop) })
+        }),
+    );
     let mut browser = TcpStream::connect(browser_port).await.expect("connect through the tunnel");
     browser.write_all(b"GET / HTTP/1.1").await.expect("send");
     browser.shutdown().await.expect("end the request");

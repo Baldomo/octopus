@@ -35,9 +35,6 @@ macro_rules! app_commands {
 
 app_commands![
     title_bar_double_click,
-    browser_open,
-    browser_close,
-    browser_move,
     browser_load,
     browser_show_page,
     browser_go,

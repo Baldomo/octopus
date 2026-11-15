@@ -12,7 +12,6 @@
     "@octopus/shared": "*",
     "@tauri-apps/api": "2.12.4",
     "@tauri-apps/plugin-barcode-scanner": "2.5.3",
-    "@tauri-apps/plugin-clipboard-manager": "2.5.0",
     "@tauri-apps/plugin-opener": "2.7.2",
     "@xterm/xterm": "6.0.0",
     "monaco-editor": "0.57.0",

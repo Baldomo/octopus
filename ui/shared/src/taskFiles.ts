@@ -1,10 +1,10 @@
 import { createStore, produce, type SetStoreFunction } from "solid-js/store";
-import { backend } from "./backend";
-import type { Entry, EntryKind, FilesChanged, TaskRef, TaskView } from "./generated";
-import { fetched, openingOf, renderingOf, SNIFF_BYTES, textOf, type MediaKind } from "./opening";
-import { moveTo } from "./sectionOrder";
-import { isLocal, report } from "./state";
-import { each } from "./Toast";
+import { backend } from "./backend.ts";
+import { each } from "./errors.ts";
+import type { Entry, EntryKind, FilesChanged, TaskRef, TaskView } from "./generated.ts";
+import { fetched, openingOf, renderingOf, SNIFF_BYTES, textOf, type MediaKind } from "./opening.ts";
+import { moveTo } from "./sectionOrder.ts";
+import { isLocal, report } from "./state.ts";
 
 type Monaco = typeof import("./monaco");
 type Model = import("monaco-editor").editor.ITextModel;
@@ -84,8 +84,10 @@ const ancestorsOf = (path: string) =>
     .slice(0, -1)
     .map((_, at, dirs) => dirs.slice(0, at + 1).join("/"));
 
-/** A file or folder dropped from this machine, by its path, or a file this client holds, as a paste brings it. */
+/** A file or folder on this machine, by its path, or a file the page holds. */
 export type Incoming = string | File;
+
+const incomingName = (item: Incoming) => (typeof item === "string" ? nameOf(item) : item.name);
 
 export class TaskFiles {
   readonly state: Tree;
@@ -96,10 +98,12 @@ export class TaskFiles {
   /** Counts the reads of each file, so a read that a newer read or a save overtook shows nothing. */
   private readonly reads = new Map<string, number>();
 
-  constructor(
-    readonly key: string,
-    readonly at: TaskRef,
-  ) {
+  readonly key: string;
+  readonly at: TaskRef;
+
+  constructor(key: string, at: TaskRef) {
+    this.key = key;
+    this.at = at;
     [this.state, this.set] = createStore<Tree>({
       listings: {},
       expanded: {},
@@ -124,6 +128,12 @@ export class TaskFiles {
 
   setClip(clip: Tree["clip"]) {
     this.set("clip", clip);
+  }
+
+  /** Whether the entry is cut, or lies in a cut folder. */
+  isCut(path: string) {
+    const clip = this.state.clip;
+    return clip?.cut === true && clip.paths.some((held) => within(path, held));
   }
 
   /** Lists again the folders holding `paths` that the tree shows, ahead of the server's change events. */
@@ -188,27 +198,31 @@ export class TaskFiles {
     this.set("selected", (selected) => selected.filter((selected) => !within(selected, path)));
   }
 
-  /** Copies files and folders into `dir`, each under a name `dir` lacks; resolves to the copies, and says why each
-   * other one failed. */
-  async bringIn(incoming: Incoming[], dir: string) {
+  /** Copies files and folders into `dir`, each under a name `dir` lacks; resolves to the copies, and tells `problem` why
+   * each other one failed. */
+  async bringIn(incoming: Incoming[], dir: string, problem: (text: string) => void) {
     const taken = await this.names(dir);
     const copies: string[] = [];
-    await each(incoming, async (item) => {
-      const name = freeName(typeof item === "string" ? nameOf(item) : item.name, taken);
-      taken.add(name);
-      const copy = join(dir, name);
-      const sent =
-        typeof item === "string"
-          ? backend.fileUpload(this.at, copy, item)
-          : item.arrayBuffer().then((content) => backend.fileUploadContent(this.at, copy, new Uint8Array(content)));
-      await sent.finally(() => this.relist(copy));
-      copies.push(copy);
-    });
+    await each(
+      incoming,
+      async (item) => {
+        const name = freeName(incomingName(item), taken);
+        taken.add(name);
+        const copy = join(dir, name);
+        const sent =
+          typeof item === "string"
+            ? backend.fileUpload(this.at, copy, item)
+            : backend.fileUploadContent(this.at, copy, item);
+        await sent.finally(() => this.relist(copy));
+        copies.push(copy);
+      },
+      problem,
+    );
     return copies;
   }
 
   collapseAll() {
-    this.set("expanded", {});
+    this.set({ expanded: {} });
   }
 
   list(dir: string) {
@@ -232,6 +246,13 @@ export class TaskFiles {
 
   revealed() {
     this.set("revealing", null);
+  }
+
+  /** Whether the tree shows the entry: its folder lists it, and is the task's directory or an expanded folder it shows. */
+  shows(path: string): boolean {
+    const dir = parentOf(path);
+    const listed = this.state.listings[dir]?.some((entry) => join(dir, entry.name) === path) === true;
+    return listed && (dir === "." || (this.state.expanded[dir] === true && this.shows(dir)));
   }
 
   /** Whether the file shows as code or rendered, as a text file with a rendering does. */
@@ -396,12 +417,28 @@ export function filesOf(task: TaskView) {
   return found;
 }
 
-/** Where files are on the task's server: dropped ones are there already when it runs here; anything else is first
- * copied into the task's directory. */
-export async function onServer(task: TaskView, incoming: Incoming[]) {
-  if (isLocal(task.at.server) && incoming.every((item) => typeof item === "string")) return incoming;
-  const copies = await filesOf(task).bringIn(incoming, ".");
-  return copies.map((copy) => `${task.task.directory}/${copy}`);
+const SHELL_SAFE = /^[\w@%+=:,./-]+$/;
+const CONTROL = /[\x00-\x1f\x7f]/;
+
+/** `path` as a shell reads it back: as it is when it holds no character the shell treats specially, else quoted. */
+const shellQuoted = (path: string) => (SHELL_SAFE.test(path) ? path : `'${path.replaceAll("'", `'\\''`)}'`);
+
+/**
+ * What pasting `incoming` into a terminal of `task` types: each file's path on the task's server, quoted when the shell
+ * would read it otherwise, separated by spaces. Files named by path are there already when the server runs here;
+ * anything else is first copied into the task's directory. A line break or another control character in a path could
+ * run a command, so such a paste types nothing; null when nothing pastes, after telling `problem` why.
+ */
+export async function pastedPaths(task: TaskView, incoming: Incoming[], problem: (text: string) => void) {
+  const there = isLocal(task.at.server) && incoming.every((item) => typeof item === "string");
+  const onServer = (name: string) => `${task.task.directory}/${name}`;
+  const typed = incoming.map((item) => (typeof item === "string" && there ? item : onServer(incomingName(item))));
+  if (typed.some((path) => CONTROL.test(path))) {
+    problem("A path with a line break or a control character can't be pasted");
+    return null;
+  }
+  const paths = there ? typed : (await filesOf(task).bringIn(incoming, ".", problem)).map(onServer);
+  return paths.length === 0 ? null : paths.map(shellQuoted).join(" ");
 }
 
 /** Unsaved edits outlive their task leaving the recent ones. */

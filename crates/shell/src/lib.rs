@@ -23,8 +23,8 @@ use crate::microphone::AskAccess;
 use tauri::plugin::TauriPlugin;
 use tauri::{AppHandle, Emitter, Manager, Runtime, Wry};
 
-pub use crate::commands::Dropped;
 use crate::commands::Launched;
+pub use crate::commands::Offered;
 use crate::hub::Hub;
 use crate::terminal::Terminals;
 use crate::ui::UiStore;
@@ -63,7 +63,7 @@ pub fn plugin() -> TauriPlugin<Wry> {
         .setup(move |app, _| {
             app.manage(Launched(launched));
             app.manage(Terminals::default());
-            app.manage(Dropped::default());
+            app.manage(Offered::default());
             app.manage(Arc::new(served_files::ServedFiles::default()));
             Ok(())
         })

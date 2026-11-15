@@ -6,8 +6,8 @@ import { act, model, report, serverLabel, serverView } from "@octopus/shared/sta
 import { feel } from "./feel";
 import { Icon } from "./Icon";
 import { back, go } from "./nav";
-import { Chev, Gap, Id, Mi, Para, Sep, ServerDot, Why } from "./parts";
-import { RenameItem } from "./Rename";
+import { Chev, Gap, Id, looksReachable, Mi, Para, Sep, ServerDot, Why } from "./parts";
+import { NameItem } from "./NameField";
 import { Sheet, SheetHead } from "./Sheet";
 import { reachOf } from "./reach";
 import { copy } from "./Toast";
@@ -29,13 +29,7 @@ function Facts(props: { view: TaskView; panel: PtyId | null }) {
       <span class="chip">
         <ServerDot server={server()} reconnecting={reach().is === "reconnecting"} />
         {serverLabel(props.view.at.server)}
-        <Id>
-          {
-            { reachable: `${server()?.rtt_ms ?? "–"} ms`, reconnecting: "reconnecting", unreachable: "unreachable" }[
-              reach().is
-            ]
-          }
-        </Id>
+        <Id>{looksReachable(server()) ? `${server()?.rtt_ms ?? "–"} ms` : reach().is}</Id>
       </span>
       <Show when={props.view.task.branch}>
         {(branch) => (
@@ -84,7 +78,12 @@ export function TaskMenu(props: { taskKey: string; open: { panel: PtyId | null }
                 </>
               )}
             </Show>
-            <RenameItem value={view().task.title} apply={(title) => backend.taskRename(view().at, title)} />
+            <NameItem
+              icon="pen"
+              label="Rename…"
+              value={view().task.title}
+              apply={(title) => backend.taskRename(view().at, title)}
+            />
             <Sep />
             <For each={TASK_STATES}>
               {(state) => (

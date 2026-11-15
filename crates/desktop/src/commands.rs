@@ -1,8 +1,7 @@
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-use octopus_proto::ops::{BrowserClose, BrowserMove, BrowserOpen};
-use octopus_proto::types::{BrowserId, BrowserTarget};
+use octopus_proto::types::BrowserId;
 use octopus_shell::hub::Hub;
 use octopus_shell::task_lists::TaskRef;
 use serde::Deserialize;
@@ -14,30 +13,6 @@ use crate::menu::MenuGroup;
 
 type Hubbed<'a> = State<'a, Arc<Hub>>;
 type Browsing<'a> = State<'a, Browsers>;
-
-/// Shows `url` in a browser panel of the task on its server, which pushes the panel to every client; resolves to
-/// the panel's id.
-#[tauri::command]
-pub(crate) async fn browser_open(
-    hub: Hubbed<'_>,
-    at: TaskRef,
-    panel: BrowserTarget,
-    url: String,
-) -> Result<BrowserId, String> {
-    Ok(hub.call(&at.server, &BrowserOpen { task: at.task, url, panel }).await?.panel)
-}
-
-/// Removes a browser panel of the task on its server, which every client then stops rendering.
-#[tauri::command]
-pub(crate) async fn browser_close(hub: Hubbed<'_>, at: TaskRef, panel: BrowserId) -> Result<(), String> {
-    hub.call(&at.server, &BrowserClose { task: at.task, panel }).await.map(drop)
-}
-
-/// Moves a browser panel of the task on its server to index `to` among the task's panels, on every client.
-#[tauri::command]
-pub(crate) async fn browser_move(hub: Hubbed<'_>, at: TaskRef, panel: BrowserId, to: u16) -> Result<(), String> {
-    hub.call(&at.server, &BrowserMove { task: at.task, panel, to }).await.map(drop)
-}
 
 /// Loads the panel's `url` on this client unless its webview already loaded this `load` of the panel.
 #[tauri::command]

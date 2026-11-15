@@ -23,7 +23,7 @@ import { type Point, type Start } from "@octopus/shared/lift.ts";
 import { feel } from "./feel";
 import { go, openSheet, openTask } from "./nav";
 import { statusWord } from "@octopus/shared/Glyph.tsx";
-import { Circle, Glyph, Id, ServerDot, Slot } from "./parts";
+import { Circle, Glyph, Id, looksReachable, ServerDot, Slot } from "./parts";
 import { pressed } from "./press";
 import { pullToRefresh } from "./pull";
 
@@ -182,7 +182,7 @@ export function Tasks() {
         <For each={servers()}>
           {(server) => (
             <span
-              classList={{ off: !server.reachable }}
+              classList={{ off: !looksReachable(server) }}
               role="button"
               onClick={() => openSheet({ is: "server", name: server.name })}
             >

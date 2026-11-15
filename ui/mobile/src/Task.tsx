@@ -1,23 +1,23 @@
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { Portal } from "solid-js/web";
 import { backend } from "@octopus/shared/backend.ts";
-import { AGENT_PANEL, type PanelView, type PtyId, type TaskRef, type TaskView } from "@octopus/shared/generated.ts";
+import { AGENT_PANEL, type PanelView, type PtyId, type TaskView } from "@octopus/shared/generated.ts";
 import { ago, clock, ticking } from "@octopus/shared/time.ts";
-import { act, model, scale, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
+import { act, model, report, scale, serverLabel, serverView, ui } from "@octopus/shared/state.ts";
 import { clickReport, type ScreenCell, wheelReport } from "@octopus/shared/mouseReports.ts";
-import { pastesSafely, shellQuoted } from "@octopus/shared/fileDrag.ts";
-import { onServer } from "@octopus/shared/taskFiles.ts";
-import { cellSize, type Size, terminalSession, windowShown } from "@octopus/shared/terminalSession.ts";
+import { type Incoming, pastedPaths } from "@octopus/shared/taskFiles.ts";
+import { cellSize, type Size, terminalSession } from "@octopus/shared/terminalSession.ts";
 import { colors, scheme } from "@octopus/shared/tokens.ts";
 import { dormant } from "@octopus/shared/Glyph.tsx";
 import { feel } from "./feel";
 import { animateList } from "@octopus/shared/flip.ts";
-import { EachPanel, taskPanels } from "@octopus/shared/panels.ts";
+import { chooseShell, EachPanel, openShell, taskPanels } from "@octopus/shared/panels.ts";
 import { Icon } from "./Icon";
 import { caretMove, cursorKey, cursorKeys, ESC, pasteKeys } from "./keys";
 import { onPainted } from "./motion";
-import { micDenied, openSheet } from "./nav";
-import { Circle, CrumbBar, Gap, Glyph, Id, Para, sectionColor, ServerDot, Slot, Trail } from "./parts";
+import { micDenied, openSheet, screen as topScreen } from "./nav";
+import { Circle, CrumbBar, Gap, Glyph, Id, observeSize, Para, sectionColor, ServerDot, Slot, Trail } from "./parts";
+import { present } from "./front";
 import { phone } from "./phone";
 import { repeats, type Point } from "./press";
 import { type Reach, reachOf } from "./reach";
@@ -59,12 +59,6 @@ const ARROWS: [string, string][] = [
   ["→", "C"],
 ];
 
-function observeSize(element: HTMLElement, set: (size: Size) => void) {
-  const observer = new ResizeObserver(() => set({ width: element.clientWidth, height: element.clientHeight }));
-  observer.observe(element);
-  onCleanup(() => observer.disconnect());
-}
-
 /**
  * One terminal panel. The holder types into it through the keyboard and the key bar and sizes it to the pane; everyone
  * else sees it at the holder's size, cropped to the pane at its last line, panned by dragging.
@@ -96,6 +90,13 @@ function PhoneTerm(props: {
   /** The phone shows its own thumbs, so the terminal's text runs to the pane's right edge. */
   xterm.options.overviewRuler = {};
   const live = () => props.reach.is === "reachable";
+  const onTop = () => {
+    const top = topScreen();
+    return top.at === "task" && top.key === props.task.key;
+  };
+  const canPaste = () => mine() && live();
+  /** Whether "Take over", or a tap on the terminal, moves its lock here. */
+  const takeable = () => live() && props.panel.running && !claimed() && !props.ended && !props.resumable;
   const [view, setView] = createSignal<Size>({ width: 0, height: 0 });
   const [screen, setScreen] = createSignal<Size>({ width: 0, height: 0 });
   const [pan, setPan] = createSignal({ x: 0, y: 0 });
@@ -122,40 +123,17 @@ function PhoneTerm(props: {
   const arrows = (steps: number, backward: string, forward: string) =>
     cursorKeys(steps, backward, forward, xterm.modes);
   /** Writes a paste: its files' paths on the server once they are copied there, else its text. */
-  const paste = (files: File[], text: string) => {
+  const paste = ({ files, text }: { files: Incoming[]; text: string }) => {
     if (files.length === 0) {
       if (text !== "") write(pasteKeys(text, xterm.modes));
       return;
     }
-    if (!files.every((file) => pastesSafely(file.name))) {
-      notify("A name with a line break or a control character can't be pasted");
-      return;
-    }
-    const pastePaths = (paths: string[]) => {
-      if (paths.length === 0) return;
-      if (mine()) write(pasteKeys(paths.map(shellQuoted).join(" "), xterm.modes));
+    const typePaths = (typed: string | null) => {
+      if (typed === null) return;
+      if (mine()) write(pasteKeys(typed, xterm.modes));
       else notify("The terminal moved to another client before the paste landed");
     };
-    act(onServer(props.task, files).then(pastePaths));
-  };
-  /** The OS confirms each read of its clipboard with its own Paste, and dismissing that pastes nothing. */
-  const pasteClipboard = () => {
-    const read = navigator.clipboard.read().then(async (items) => {
-      const files: File[] = [];
-      let text = "";
-      for (const item of items) {
-        const image = item.types.find((type) => type.startsWith("image/"));
-        if (image !== undefined)
-          files.push(new File([await item.getType(image)], `image.${image.slice("image/".length)}`, { type: image }));
-        else if (item.types.includes("text/plain")) text += await (await item.getType("text/plain")).text();
-      }
-      paste(files, text);
-    });
-    act(
-      read.catch((error: unknown) => {
-        if (!(error instanceof DOMException && error.name === "NotAllowedError")) throw error;
-      }),
-    );
+    act(pastedPaths(props.task, files, report).then(typePaths));
   };
   const latch = () => {
     feel("select");
@@ -171,7 +149,7 @@ function PhoneTerm(props: {
     write(keys);
   };
   createEffect(() => {
-    if (!props.visible || !mine() || !live() || props.ended || props.resumable) sink.blur();
+    if (!props.visible || !claimed() || !live() || props.ended || props.resumable) sink.blur();
   });
   onCleanup(() => {
     if (document.activeElement === sink) props.typing(false);
@@ -342,8 +320,8 @@ function PhoneTerm(props: {
   };
   let from: Point | null = null;
   let scrolling = false;
-  /** A touch that stops a program's own scroll only stops it, so lifting it clicks nothing. */
-  let stoppedTurning = false;
+  /** A touch that stops a scroll in motion only stops it, so lifting it clicks nothing and takes nothing over. */
+  let stoppedScroll = false;
   /** A touch the terminal's drag didn't scroll stopped any coast where it stood, so lifting it settles on a line. */
   const settle = () => {
     if (scrolling) return;
@@ -364,8 +342,9 @@ function PhoneTerm(props: {
     size: screen,
     view,
     pan,
-    canPaste: () => mine() && live(),
-    paste: pasteClipboard,
+    shown: () => props.visible && onTop(),
+    canPaste,
+    paste,
   });
 
   onMount(() => {
@@ -436,29 +415,37 @@ function PhoneTerm(props: {
       <div
         ref={pane}
         class="term"
-        classList={{ held: !claimed(), stale: !live() }}
+        classList={{ held: !claimed(), stale: !live() && props.reach.is !== "settling" }}
         onTouchStart={(event) => {
           const touch = event.touches[0];
           from = touch === undefined ? null : { x: touch.clientX, y: touch.clientY };
           scrolling = false;
-          stoppedTurning = performance.now() - lastTurnAt < TURNING_MS;
+          stoppedScroll = performance.now() - lastTurnAt < TURNING_MS || down.coasting() || across.coasting();
           down.stop();
           across.stop();
           turns.stop();
         }}
         onTouchCancel={settle}
+        onDragEnter={(event) => canPaste() && event.preventDefault()}
+        onDragOver={(event) => canPaste() && event.preventDefault()}
+        onDrop={(event) => {
+          if (!canPaste()) return;
+          event.preventDefault();
+          paste({ files: [...event.dataTransfer!.files], text: event.dataTransfer!.getData("text/plain") });
+        }}
         onTouchEnd={(event) => {
           settle();
           if (selection.onControls(event)) return;
-          const handled = event.defaultPrevented || stoppedTurning;
+          const handled = event.defaultPrevented || stoppedScroll;
           // The click a tap synthesizes would move the keyboard's caret, or take the focus back from the keyboard.
           event.preventDefault();
           const touch = event.changedTouches[0];
           if (handled || !from || !touch || Math.hypot(touch.clientX - from.x, touch.clientY - from.y) >= COMMIT_PX)
             return;
           const point = { x: touch.clientX, y: touch.clientY };
-          if (selection.tap(point) || !mine() || !live()) return;
-          placeCursor(point);
+          if (selection.tap(point) || !live()) return;
+          if (mine()) placeCursor(point);
+          else if (!takeable() || !session.take()) return;
           sink.focus();
         }}
       >
@@ -493,7 +480,7 @@ function PhoneTerm(props: {
           }}
           onPaste={(event) => {
             event.preventDefault();
-            if (event.clipboardData) paste([...event.clipboardData.files], event.clipboardData.getData("text/plain"));
+            paste({ files: [...event.clipboardData!.files], text: event.clipboardData!.getData("text/plain") });
           }}
           onKeyDown={(event) => {
             if (event.key !== "Enter") return;
@@ -538,13 +525,25 @@ function PhoneTerm(props: {
                         </button>
                       )}
                     </For>
+                    <label class="key" role="button" aria-label="Attach">
+                      <Icon name="attach" />
+                      <input
+                        type="file"
+                        multiple
+                        hidden
+                        onChange={(event) => {
+                          paste({ files: [...event.currentTarget.files!], text: "" });
+                          event.currentTarget.value = "";
+                        }}
+                      />
+                    </label>
                   </Show>
                   <button class="key" aria-label="Keyboard" onClick={toggleKeyboard}>
                     <Icon name="kbd" />
                   </button>
                 </Match>
                 <Match when={claimed()}>{null}</Match>
-                <Match when={props.panel.running}>
+                <Match when={takeable()}>
                   <Id>{props.panel.lock_holder?.name ?? "lock free"}</Id>
                   <button class="btn" onClick={session.take}>
                     Take over
@@ -559,7 +558,7 @@ function PhoneTerm(props: {
   );
 }
 
-function Mic(props: { at: TaskRef; panel: PanelView }) {
+function Mic(props: { panel: PanelView }) {
   const hearing = () => props.panel.running && props.panel.held_here && props.panel.listening;
   return (
     <Show when={hearing()}>
@@ -619,11 +618,10 @@ function Missing(props: { open: TaskView }) {
 
 function TaskScreen(props: { open: TaskView }) {
   const now = ticking();
-  const [chosen, setChosen] = createSignal<PtyId | null>(null);
-  const { panels, agent, shells, selected, agentOn } = taskPanels(() => props.open, chosen);
+  const { panels, agent, shells, selected, agentOn } = taskPanels(() => props.open);
   const choose = (panel: PtyId | null) => {
-    if (panel !== chosen()) feel("select");
-    setChosen(panel);
+    if (panel !== (agentOn() ? null : selected()?.id)) feel("select");
+    chooseShell(props.open.key, panel);
   };
 
   const missing = () => ["harness_unknown", "harness_not_installed"].includes(props.open.task.agent.kind);
@@ -637,7 +635,7 @@ function TaskScreen(props: { open: TaskView }) {
   };
   const [typing, setTyping] = createSignal(false);
   const [tail, setTail] = createSignal<HTMLElement>();
-  const looking = createMemo(() => windowShown() && server()?.reachable === true);
+  const looking = createMemo(() => present() && server()?.reachable === true);
   const asleep = createMemo(() => dormant(props.open.glyph));
   createEffect(
     on([looking, asleep], ([looking, asleep], before) => {
@@ -664,9 +662,7 @@ function TaskScreen(props: { open: TaskView }) {
         title={props.open.task.title}
         end={
           <>
-            <Show when={reach().is !== "unreachable" && selected()}>
-              {(panel) => <Mic at={props.open.at} panel={panel()} />}
-            </Show>
+            <Show when={reach().is !== "unreachable" && selected()}>{(panel) => <Mic panel={panel()} />}</Show>
             <Circle
               icon="more"
               label="Task menu"
@@ -751,7 +747,7 @@ function TaskScreen(props: { open: TaskView }) {
                 data-key="plus"
                 role="button"
                 aria-label="New shell"
-                onClick={() => live() && act(backend.termOpen(props.open.at, ".").then(setChosen))}
+                onClick={() => live() && act(openShell(props.open.at, props.open.key, "."))}
               >
                 <Icon name="plus" />
               </span>

@@ -12,12 +12,12 @@ use octopus_proto::device::PublicKey;
 use octopus_proto::ops::{Revised, SessionSync, TaskFocus, WorkspaceRename, WorkspaceSetColor};
 use octopus_proto::pairing::Invite;
 use octopus_proto::settings::{AgentFlags, Current, Settings};
-use octopus_proto::types::{Color, LockHolder, Task, WorkspaceId};
+use octopus_proto::types::{Color, LockHolder, Task, Workspace, WorkspaceId};
 use octopus_proto::{Event, Op, Push, now};
 use serde::Serialize;
 use tauri::{AppHandle, Url};
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot, watch};
 use ts_rs::TS;
 
 use crate::microphone::{AskAccess, Capture, Listener, MICROPHONE_DENIED_EVENT, Microphone};
@@ -30,7 +30,11 @@ pub(crate) const SERVERS_EVENT: &str = "servers";
 pub(crate) const FILES_CHANGED_EVENT: &str = "files_changed";
 pub(crate) const ACCOUNT_EVENT: &str = "account";
 
+/// A server is dialled again no sooner than this after its last dial began, unless a resume or redial asks now.
 const RECONNECT: Duration = Duration::from_secs(1);
+const RESUME_PATIENCE: Duration = Duration::from_secs(2);
+/// How long a resume, or a call made while its server reconnects, waits for the connection.
+const RECONNECT_PATIENCE: Duration = Duration::from_secs(3);
 /// How often a server's chip and status bar pick up its connection's newest round trip.
 const RTT_REFRESH: Duration = Duration::from_secs(2);
 const MODEL_FRAME: Duration = Duration::from_millis(16);
@@ -92,8 +96,22 @@ struct Link {
     connection: Option<Arc<Connection>>,
     problem: Option<String>,
     since: i64,
+    /// When the link last lost a connection it held, on a clock that only moves forward.
+    dropped: Option<tokio::time::Instant>,
     resyncs: mpsc::UnboundedSender<oneshot::Sender<Result<(), String>>>,
     supervisor: tauri::async_runtime::JoinHandle<()>,
+}
+
+impl Link {
+    fn reachable(&self) -> bool {
+        self.connection.as_ref().is_some_and(|connection| !connection.is_closed())
+    }
+
+    /// Unreachable through a connection that has just closed or dropped, which the client may reach again shortly.
+    fn dropped_lately(&self) -> bool {
+        !self.reachable()
+            && (self.connection.is_some() || self.dropped.is_some_and(|at| at.elapsed() < RECONNECT_PATIENCE))
+    }
 }
 
 impl Drop for Link {
@@ -136,7 +154,10 @@ pub struct Hub {
     model_changed: Notify,
     servers_changed: Notify,
     files_changed: Notify,
-    redials: Notify,
+    /// Bumped to dial every unconnected server again now, ending the dials under way.
+    dials: watch::Sender<u64>,
+    /// Counts the connections made, so a wait for one misses none; bumped with the state unlocked, which its waits read.
+    connections: watch::Sender<u64>,
     microphone: Arc<Microphone>,
 }
 
@@ -173,7 +194,8 @@ impl Hub {
             model_changed: Notify::new(),
             servers_changed: Notify::new(),
             files_changed: Notify::new(),
-            redials: Notify::new(),
+            dials: watch::Sender::new(0),
+            connections: watch::Sender::new(0),
         });
         tauri::async_runtime::spawn(Arc::clone(&hub).emit_models());
         tauri::async_runtime::spawn(Arc::clone(&hub).emit_servers());
@@ -231,7 +253,37 @@ impl Hub {
     /// changes under it, as when a phone moves off Wi-Fi with the app in the background.
     pub async fn redial(&self) {
         self.me.forget_dialer().await;
-        self.redials.notify_waiters();
+        self.dials.send_modify(|dials| *dials += 1);
+    }
+
+    /// For a client the OS lets run again after freezing it or cutting its network: ends the dials under way and dials
+    /// every unconnected server now, closes each connection whose server misses a ping within `RESUME_PATIENCE`, and
+    /// resolves once each of `servers` is reachable. When one is still unreachable `RECONNECT_PATIENCE` after the call,
+    /// every server is redialled from a new endpoint, since the network may have changed meanwhile.
+    pub async fn resume(&self, servers: &[String]) {
+        let deadline = tokio::time::Instant::now() + RECONNECT_PATIENCE;
+        self.dials.send_modify(|dials| *dials += 1);
+        let connections: Vec<_> = lock(&self.state).links.values().filter_map(|link| link.connection.clone()).collect();
+        let mut checks = tokio::task::JoinSet::new();
+        for connection in connections {
+            checks.spawn(async move { connection.check(RESUME_PATIENCE).await });
+        }
+        checks.join_all().await;
+        if !self.until_reachable(servers, deadline).await {
+            self.redial().await;
+        }
+    }
+
+    /// Resolves to whether each of `servers` is reachable by `deadline`.
+    async fn until_reachable(&self, servers: &[String], deadline: tokio::time::Instant) -> bool {
+        let mut made = self.connections.subscribe();
+        let reached = made.wait_for(|_| servers.iter().all(|server| self.reachable(server)));
+        tokio::time::timeout_at(deadline, reached).await.is_ok_and(|reached| reached.is_ok())
+    }
+
+    /// Whether the server is connected, or not on the list at all.
+    fn reachable(&self, server: &str) -> bool {
+        lock(&self.state).links.get(server).is_none_or(Link::reachable)
     }
 
     pub(crate) fn account(&self) -> AccountView {
@@ -252,9 +304,12 @@ impl Hub {
         let mut state = lock(&self.state);
         let (hub, name, address) = (Arc::clone(self), server.name.clone(), server.address.clone());
         let (resyncs, mut asked) = mpsc::unbounded_channel();
+        let mut dials = self.dials.subscribe();
         let supervisor = tauri::async_runtime::spawn(async move {
             loop {
-                let problem = match hub.session(&server, &mut asked).await {
+                dials.borrow_and_update();
+                let dialled = tokio::time::Instant::now();
+                let problem = match hub.session(&server, &mut asked, &mut dials).await {
                     Ok(closed) => closed,
                     Err(error) => format!("{error:#}"),
                 };
@@ -263,12 +318,15 @@ impl Hub {
                 }
                 hub.lost(&server.name, problem);
                 tokio::select! {
-                    () = tokio::time::sleep(RECONNECT) => {}
-                    () = hub.redials.notified() => {}
+                    () = tokio::time::sleep_until(dialled + RECONNECT) => {}
+                    _ = dials.changed() => {}
                 }
             }
         });
-        state.links.insert(name, Link { address, connection: None, problem: None, since: now(), resyncs, supervisor });
+        state.links.insert(
+            name,
+            Link { address, connection: None, problem: None, since: now(), dropped: None, resyncs, supervisor },
+        );
         self.servers_changed.notify_one();
     }
 
@@ -286,16 +344,19 @@ impl Hub {
         &self,
         server: &Server,
         asked: &mut mpsc::UnboundedReceiver<oneshot::Sender<Result<(), String>>>,
+        dials: &mut watch::Receiver<u64>,
     ) -> anyhow::Result<String> {
-        let reached = async {
+        let reach = || async {
             let connection = Arc::new(Connection::connect(&server.address, &self.me).await?);
             let pushes = connection.pushes();
             self.resync(&server.name, &connection).await?;
             anyhow::Ok((connection, pushes))
         };
-        let (connection, mut pushes) = tokio::select! {
-            reached = reached => reached?,
-            () = self.redials.notified() => anyhow::bail!("redialling"),
+        let (connection, mut pushes) = loop {
+            tokio::select! {
+                reached = reach() => break reached?,
+                _ = dials.changed() => {}
+            }
         };
         let mut refresh = tokio::time::interval(RTT_REFRESH);
         loop {
@@ -335,6 +396,8 @@ impl Hub {
         state.caches.insert(server.to_string(), Cache::from_snapshot(snapshot));
         self.model_changed.notify_one();
         self.servers_changed.notify_one();
+        drop(state);
+        self.connections.send_modify(|made| *made += 1);
         Ok(())
     }
 
@@ -378,6 +441,7 @@ impl Hub {
         let Some(link) = state.links.get_mut(server) else { return };
         if link.connection.take().is_some() {
             link.since = now();
+            link.dropped = Some(tokio::time::Instant::now());
         }
         link.problem = Some(problem);
         state.waking.retain(|at, _| at.server != server);
@@ -470,15 +534,19 @@ impl Hub {
         refuses: impl Fn(&str, &Cache) -> Option<String>,
         op: impl Fn(WorkspaceId) -> O,
     ) -> Result<(), String> {
+        let servers: Vec<String> = {
+            let state = lock(&self.state);
+            let holds = |(_, cache): &(&String, &Cache)| workspace_named(cache, section).is_some();
+            state.caches.iter().filter(holds).map(|(server, _)| server.clone()).collect()
+        };
+        self.wait_out_drops(&servers).await;
         let ops = {
             let state = lock(&self.state);
             let mut ops = Vec::new();
             for (server, cache) in &state.caches {
-                let Some(workspace) = cache.workspaces.values().find(|workspace| workspace.name == section) else {
-                    continue;
-                };
+                let Some(workspace) = workspace_named(cache, section) else { continue };
                 let label = state.label(server);
-                if state.links.get(server).is_none_or(|link| link.connection.is_none()) {
+                if state.links.get(server).is_none_or(|link| !link.reachable()) {
                     return Err(format!(
                         "{label} is unreachable, so {section} would change on only some of its servers"
                     ));
@@ -510,7 +578,24 @@ impl Hub {
     }
 
     pub async fn call<O: Op>(&self, server: &str, op: &O) -> Result<O::Ok, String> {
-        self.connection(server)?.call(op).await.map_err(|error| self.failure(server, error))
+        self.connected(server).await?.call(op).await.map_err(|error| self.failure(server, error))
+    }
+
+    /// The server's connection, waiting up to `RECONNECT_PATIENCE` for the next one when it has just dropped, so a call
+    /// made as a connection drops goes out on the next one.
+    pub async fn connected(&self, server: &str) -> Result<Arc<Connection>, String> {
+        self.wait_out_drops(&[server.to_string()]).await;
+        self.connection(server)
+    }
+
+    /// Waits, until at most `RECONNECT_PATIENCE` from now, for each of `servers` whose connection has just dropped.
+    async fn wait_out_drops(&self, servers: &[String]) {
+        let dropped: Vec<String> = {
+            let state = lock(&self.state);
+            let dropped_lately = |server: &&String| state.links.get(*server).is_some_and(Link::dropped_lately);
+            servers.iter().filter(dropped_lately).cloned().collect()
+        };
+        self.until_reachable(&dropped, tokio::time::Instant::now() + RECONNECT_PATIENCE).await;
     }
 
     /// Whether the server runs on another machine, where its ports are reached through a tunnel.
@@ -527,13 +612,20 @@ impl Hub {
     pub async fn tunnel(self: &Arc<Self>, server: &str, port: u16) -> Result<Tunnel, String> {
         let listeners = listen_on_localhost(port).await.map_err(|error| error.to_string())?;
         let (hub, dialed) = (Arc::clone(self), server.to_string());
-        Ok(Tunnel::new(port, listeners, Arc::new(move || hub.connection(&dialed))))
+        Ok(Tunnel::new(
+            port,
+            listeners,
+            Arc::new(move || {
+                let (hub, dialed) = (Arc::clone(&hub), dialed.clone());
+                Box::pin(async move { hub.connected(&dialed).await })
+            }),
+        ))
     }
 
-    pub fn connection(&self, server: &str) -> Result<Arc<Connection>, String> {
+    fn connection(&self, server: &str) -> Result<Arc<Connection>, String> {
         let state = lock(&self.state);
         match state.links.get(server) {
-            Some(Link { connection: Some(connection), .. }) => Ok(Arc::clone(connection)),
+            Some(link @ Link { connection: Some(connection), .. }) if link.reachable() => Ok(Arc::clone(connection)),
             Some(Link { problem, .. }) => {
                 Err(format!("{} is unreachable: {}", state.label(server), problem.as_deref().unwrap_or("connecting")))
             }
@@ -584,7 +676,7 @@ impl Hub {
                     label: state.label(name).to_string(),
                     relay,
                     key,
-                    reachable: link.connection.is_some(),
+                    reachable: link.reachable(),
                     since: link.since,
                     rtt_ms: link
                         .connection
@@ -641,4 +733,8 @@ impl Hub {
             emit(&self.app, FILES_CHANGED_EVENT, changed);
         }
     }
+}
+
+fn workspace_named<'c>(cache: &'c Cache, name: &str) -> Option<&'c Workspace> {
+    cache.workspaces.values().find(|workspace| workspace.name == name)
 }

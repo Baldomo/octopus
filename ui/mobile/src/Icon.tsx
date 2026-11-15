@@ -1,6 +1,6 @@
 import { For } from "solid-js";
 
-/** The design's icons, each drawn in currentColor at the 1.75 stroke `.ic` sets. */
+/** The design's icons, each drawn in currentColor at the stroke `.ic` sets. */
 const SYMBOLS = {
   back: ["0 0 20 20", `<path d="M12.5 4.5 7 10l5.5 5.5"/>`],
   more: [
@@ -27,8 +27,8 @@ const SYMBOLS = {
   ],
   pen: ["0 0 16 16", `<path d="M10.5 3.5 12.5 5.5 6 12H4v-2z"/>`],
   kbd: [
-    "0 0 20 20",
-    `<rect x="2.5" y="5" width="15" height="10" rx="2"/><path d="M6 8.5h.01M9 8.5h.01M12 8.5h.01M15 8.5h-.99M6.5 11.5h7"/>`,
+    "0 0 16 16",
+    `<rect x="2.5" y="4.5" width="11" height="7.5" rx="1.5"/><path d="M5 6.75h.01M7 6.75h.01M9 6.75h.01M11 6.75h.01M5.5 9.5h5"/>`,
   ],
   check: ["0 0 16 16", `<path d="m3.5 8.5 3 3 6-7"/>`],
   close: ["0 0 20 20", `<path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/>`],
@@ -74,6 +74,10 @@ const SYMBOLS = {
   ],
   code: ["0 0 20 20", `<path d="m7 6-4 4 4 4M13 6l4 4-4 4"/>`],
   paste: ["0 0 16 16", `<rect x="3.5" y="3" width="9" height="10.5" rx="1.5"/><path d="M6 3V2.5h4V3M6 7h4M6 10h3"/>`],
+  attach: [
+    "0 0 16 16",
+    `<path d="M10 5.6 6.4 9.2a1.12 1.12 0 0 0 1.6 1.6L12 6.8a2.24 2.24 0 0 0-3.2-3.2L4.8 7.6a3.36 3.36 0 0 0 4.8 4.8l2.8-2.8"/>`,
+  ],
   cam: [
     "0 0 16 16",
     `<path d="M2.5 5.5a1 1 0 0 1 1-1h1.5l1-1.5h4l1 1.5h1.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z"/><circle cx="8" cy="8.5" r="2.2"/>`,

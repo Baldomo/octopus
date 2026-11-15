@@ -152,6 +152,26 @@ impl Control {
         lock(&self.pending).clear();
     }
 
+    /// Records the round trip of a ping the server answers within `patience`, and closes the connection otherwise;
+    /// resolves to whether it answered.
+    async fn ping(&self, patience: Duration) -> bool {
+        let sent = Instant::now();
+        match tokio::time::timeout(patience, self.call(&SessionPing {})).await {
+            Ok(Ok(_)) => {
+                *lock(&self.rtt) = Some(sent.elapsed());
+                true
+            }
+            Ok(Err(error)) => {
+                self.close(format!("a ping failed: {error}"));
+                false
+            }
+            Err(_) => {
+                self.close(format!("no ping answer within {patience:?}"));
+                false
+            }
+        }
+    }
+
     async fn call<O: Op>(&self, op: &O) -> Result<O::Ok, CallError> {
         let args = serde_json::to_value(op).context("encode args")?;
         match self.call_raw(O::NAME, args).await? {
@@ -218,11 +238,8 @@ async fn heartbeat(control: Weak<Control>) {
     loop {
         ticks.tick().await;
         let Some(control) = control.upgrade() else { return };
-        let sent = Instant::now();
-        match tokio::time::timeout(HEARTBEAT_PATIENCE, control.call(&SessionPing {})).await {
-            Ok(Ok(_)) => *lock(&control.rtt) = Some(sent.elapsed()),
-            Ok(Err(error)) => return control.close(format!("a heartbeat failed: {error}")),
-            Err(_) => return control.close(format!("no heartbeat answer within {HEARTBEAT_PATIENCE:?}")),
+        if !control.ping(HEARTBEAT_PATIENCE).await {
+            return;
         }
     }
 }
@@ -297,6 +314,15 @@ impl Connection {
 
     pub fn pushes(&self) -> broadcast::Receiver<Push> {
         self.pushes.subscribe()
+    }
+
+    /// Closes the connection unless the server answers a ping within `patience`.
+    pub async fn check(&self, patience: Duration) {
+        self.control.ping(patience).await;
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.control.closed.borrow().is_some()
     }
 
     /// The round trip of the newest heartbeat.

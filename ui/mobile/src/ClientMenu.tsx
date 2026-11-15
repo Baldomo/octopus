@@ -38,8 +38,8 @@ import { shortKey } from "./format";
 import { feel } from "./feel";
 import { Icon } from "./Icon";
 import { go, showInSheet } from "./nav";
-import { Chev, Field, Flab, Gap, Gl, Id, Mi, Note, Seg, Sep, ServerDot, Why } from "./parts";
-import { Rename } from "./Rename";
+import { Chev, Confirm, Field, Flab, Gap, Gl, Id, Mi, Note, Seg, Sep, ServerDot, Why } from "./parts";
+import { NameField } from "./NameField";
 import { Sheet, SheetHead } from "./Sheet";
 import { copy } from "./Toast";
 
@@ -105,22 +105,6 @@ function Shared(props: { qr: string; text: string; what: string; copy: string; c
       </div>
       <Gap n={2} />
     </>
-  );
-}
-
-function Confirm(props: { text: string; act: string; run: () => void; cancel: () => void }) {
-  return (
-    <div class="confirm">
-      <span>{props.text}</span>
-      <div class="row2">
-        <button class="btn quiet" onClick={props.cancel}>
-          Cancel
-        </button>
-        <button class="btn danger" onClick={props.run}>
-          {props.act}
-        </button>
-      </div>
-    </div>
   );
 }
 
@@ -383,7 +367,7 @@ export function ServerMenu(props: { name: string }) {
               </Mi>
             }
           >
-            <Rename value={props.name} apply={rename} done={() => setMode("main")} />
+            <NameField value={props.name} apply={rename} done={() => setMode("main")} />
           </Show>
           <Show
             when={mode() === "forget"}

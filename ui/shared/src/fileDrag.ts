@@ -15,13 +15,3 @@ export function onFileDrag(handle: Handle) {
   handles.add(handle);
   onCleanup(() => handles.delete(handle));
 }
-
-const SHELL_SAFE = /^[\w@%+=:,./-]+$/;
-
-/** `path` as a shell reads it back: as it is when it holds no character the shell treats specially, else quoted. */
-export const shellQuoted = (path: string) => (SHELL_SAFE.test(path) ? path : `'${path.replaceAll("'", `'\\''`)}'`);
-
-const CONTROL = /[\x00-\x1f\x7f]/;
-
-/** Whether pasting `path` types only the path: a line break or other control character could run a command. */
-export const pastesSafely = (path: string) => !CONTROL.test(path);

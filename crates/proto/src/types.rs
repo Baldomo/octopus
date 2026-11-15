@@ -37,7 +37,8 @@ arg_shape!(Shape::Text => TaskId, BrowserId, BrowserTarget, SessionId);
 arg_shape!(choice(&Self::ALL) => TaskState, Mode);
 
 /// The browser panel `browser.open` shows a page in: `new`, `background`, or an existing panel's id.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, TS)]
+#[ts(type = "BrowserId | typeof NEW_BROWSER_PANEL | typeof BACKGROUND_BROWSER_PANEL")]
 pub enum BrowserTarget {
     New,
     /// A new browser panel that no client selects or loads until it is chosen.

@@ -1,16 +1,15 @@
 import { createEffect, createMemo, For, Match, on, onCleanup, Show, Switch } from "solid-js";
-import { keepInView } from "@octopus/shared/keepInView.ts";
 import { Media } from "@octopus/shared/Media.tsx";
 import { Rendered } from "@octopus/shared/Rendered.tsx";
 import { act, scale, model, ui } from "@octopus/shared/state.ts";
 import { filesOf, join, loadMonaco, nameOf, tabHints, type TaskFiles } from "@octopus/shared/taskFiles.ts";
 import { token } from "@octopus/shared/tokens.ts";
 import { animateList } from "@octopus/shared/flip.ts";
-import { slidingThumb } from "./thumb";
 import { Icon } from "./Icon";
 import { onPainted } from "./motion";
-import { back, go } from "./nav";
-import { Circle, CrumbBar, Id, sectionColor, Slot, Trail } from "./parts";
+import { back, go, openSheet, screen, up } from "./nav";
+import { pressed } from "./press";
+import { Circle, CrumbBar, FolderTabs, sectionColor, Slot, Trail } from "./parts";
 
 type Editor = import("monaco-editor").editor.IStandaloneCodeEditor;
 
@@ -19,21 +18,32 @@ const FONT_PX = 13;
 const ROW_PX = 20;
 
 function Tree(props: { files: TaskFiles; taskKey: string; dir: string; depth: number }) {
+  const state = props.files.state;
   return (
-    <For each={props.files.state.listings[props.dir] ?? []}>
+    <For each={state.listings[props.dir] ?? []}>
       {(entry) => {
         const path = join(props.dir, entry.name);
+        const cut = () => props.files.isCut(path);
+        const bindRow = (element: HTMLElement) =>
+          pressed(
+            () => {
+              if (entry.kind === "directory") return props.files.toggle(path);
+              act(props.files.open(path));
+              go({ at: "editor", key: props.taskKey });
+            },
+            () => openSheet({ is: "entry", key: props.taskKey, path, kind: entry.kind }),
+          ).ref(element);
         if (entry.kind === "directory") {
-          const expanded = () => props.files.state.expanded[path] === true;
+          const expanded = () => state.expanded[path] === true;
           return (
             <>
               <div
+                ref={bindRow}
                 class="tree dir"
                 data-key={path}
-                classList={{ closed: !expanded() }}
+                classList={{ closed: !expanded(), cut: cut() }}
                 style={{ "--d": props.depth }}
                 role="button"
-                onClick={() => props.files.toggle(path)}
               >
                 <Slot>
                   <Icon name="car" class="car" />
@@ -46,18 +56,15 @@ function Tree(props: { files: TaskFiles; taskKey: string; dir: string; depth: nu
             </>
           );
         }
-        const dirty = () => props.files.state.dirty[path] === true;
+        const dirty = () => state.dirty[path] === true;
         return (
           <div
+            ref={bindRow}
             class="tree file"
             data-key={path}
-            classList={{ unsaved: dirty() }}
+            classList={{ unsaved: dirty(), cut: cut() }}
             style={{ "--d": props.depth }}
             role="button"
-            onClick={() => {
-              act(props.files.open(path));
-              go({ at: "editor", key: props.taskKey });
-            }}
           >
             <Slot>
               <Icon name="file" />
@@ -80,6 +87,15 @@ export function Files(props: { taskKey: string }) {
     <Show when={model.tasks[props.taskKey]}>
       {(view) => {
         const files = filesOf(view());
+        let cards!: HTMLDivElement;
+        createEffect(() => {
+          const path = files.state.revealing;
+          const top = screen();
+          if (path === null || !files.shows(path) || top.at !== "files" || top.key !== props.taskKey) return;
+          const row = cards.querySelector(`[data-key="${CSS.escape(path)}"]`);
+          requestAnimationFrame(() => row?.scrollIntoView({ block: "nearest" }));
+          files.revealed();
+        });
         return (
           <>
             <CrumbBar
@@ -87,9 +103,24 @@ export function Files(props: { taskKey: string }) {
               color={sectionColor(view().section)}
               crumb={<span class="name">{view().task.title}</span>}
               title="Files"
-              end={<Circle icon="search" label="Search" tap={() => go({ at: "search" })} />}
+              end={
+                <div class="capsule">
+                  <Circle icon="search" label="Search" tap={() => go({ at: "search" })} />
+                  <Circle
+                    icon="more"
+                    label="Task directory"
+                    tap={() => openSheet({ is: "entry", key: props.taskKey, path: ".", kind: "directory" })}
+                  />
+                </div>
+              }
             />
-            <div class="cards" ref={animateList(".tree")}>
+            <div
+              class="cards"
+              ref={(element) => {
+                cards = element;
+                animateList(".tree")(element);
+              }}
+            >
               <Tree files={files} taskKey={props.taskKey} dir="." depth={0} />
             </div>
           </>
@@ -165,13 +196,21 @@ export function EditorScreen(props: { taskKey: string }) {
         const files = filesOf(view());
         const path = () => files.state.active;
         const hints = createMemo(() => tabHints(files.state.tabs));
+        const close = (tab: string) => {
+          files.close(tab);
+          if (files.state.tabs.length === 0) back();
+        };
+        const reveal = (file: string) => {
+          files.reveal(file, false);
+          up();
+        };
         return (
           <Show when={path()} keyed>
             {(shown) => (
               <>
                 <div class="bar">
                   <Circle icon="back" label="Files" tap={back} />
-                  <div class="ttl">
+                  <div class="ttl" role="button" onClick={() => reveal(shown)}>
                     <span class="crumb">
                       <Trail parts={shown.split("/").slice(0, -1)} />
                     </span>
@@ -199,25 +238,17 @@ export function EditorScreen(props: { taskKey: string }) {
                     </button>
                   </Show>
                 </div>
-                <div class="tabs scroll" ref={slidingThumb}>
-                  <For each={files.state.tabs}>
-                    {(tab) => (
-                      <span
-                        ref={keepInView(() => tab === shown)}
-                        class="tab"
-                        classList={{ on: tab === shown }}
-                        role="button"
-                        onClick={() => act(files.open(tab))}
-                      >
-                        {nameOf(tab)}
-                        <Show when={files.state.dirty[tab]}>
-                          <i class="udot" />
-                        </Show>
-                        <Show when={hints()[tab]}>{(hint) => <Id>{hint()}</Id>}</Show>
-                      </span>
-                    )}
-                  </For>
-                </div>
+                <FolderTabs
+                  tabs={files.state.tabs.map((tab) => ({
+                    key: tab,
+                    name: nameOf(tab),
+                    hint: hints()[tab],
+                    dirty: files.state.dirty[tab],
+                  }))}
+                  selected={shown}
+                  choose={(tab) => act(files.open(tab))}
+                  close={close}
+                />
                 <Show when={files.state.unreadable[shown]}>{(problem) => <div class="empty">{problem()}</div>}</Show>
                 <Switch fallback={<Code files={files} path={shown} />}>
                   <Match when={files.media(shown)} keyed>

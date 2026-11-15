@@ -159,7 +159,7 @@ fn readable_by(dir: &ReadDir, mut reply: Response<Vec<u8>>) -> Response<Vec<u8>>
 async fn read(hub: &Hub, root: &Root, path: String, range: Option<&str>) -> Response<Vec<u8>> {
     let wanted = wanted(range);
     let (start, len) = wanted.unwrap_or((0, Stream::TO_END));
-    let read = match hub.connection(&root.server) {
+    let read = match hub.connected(&root.server).await {
         Ok(connection) => connection.read(root.dir.clone(), path.clone(), start, len).await.map_err(|error| {
             let status = match &error {
                 CallError::Server(Error::NotFound { .. }) => StatusCode::NOT_FOUND,

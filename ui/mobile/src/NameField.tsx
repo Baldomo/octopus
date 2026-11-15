@@ -1,13 +1,14 @@
 import { createSignal, Show } from "solid-js";
+import { said } from "@octopus/shared/errors.ts";
 import { feel } from "./feel";
-import { Icon } from "./Icon";
+import { Icon, type IconName } from "./Icon";
 import { Mi, Note } from "./parts";
 
 /**
  * Edits a name in place in a focused field: return applies a changed, non-empty name, and leaving the field keeps the
  * old one. A refusal shows under the field, which stays for another try.
  */
-export function Rename(props: { value: string; apply: (name: string) => Promise<unknown>; done: () => void }) {
+export function NameField(props: { value: string; apply: (name: string) => Promise<unknown>; done: () => void }) {
   const [problem, setProblem] = createSignal<string | null>(null);
   let applying = false;
   return (
@@ -40,7 +41,7 @@ export function Rename(props: { value: string; apply: (name: string) => Promise<
               (error) => {
                 feel("error");
                 applying = false;
-                setProblem(String(error));
+                setProblem(said(error));
               },
             );
           }}
@@ -52,18 +53,23 @@ export function Rename(props: { value: string; apply: (name: string) => Promise<
   );
 }
 
-export function RenameItem(props: { value: string; apply: (name: string) => Promise<unknown> }) {
-  const [renaming, setRenaming] = createSignal(false);
+export function NameItem(props: {
+  icon: IconName;
+  label: string;
+  value: string;
+  apply: (name: string) => Promise<unknown>;
+}) {
+  const [naming, setNaming] = createSignal(false);
   return (
     <Show
-      when={renaming()}
+      when={naming()}
       fallback={
-        <Mi slot={<Icon name="pen" />} tap={() => setRenaming(true)}>
-          Rename…
+        <Mi slot={<Icon name={props.icon} />} tap={() => setNaming(true)}>
+          {props.label}
         </Mi>
       }
     >
-      <Rename value={props.value} apply={props.apply} done={() => setRenaming(false)} />
+      <NameField value={props.value} apply={props.apply} done={() => setNaming(false)} />
     </Show>
   );
 }

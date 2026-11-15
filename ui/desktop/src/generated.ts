@@ -65,4 +65,4 @@ export const FLOAT_TOP = 38.0 as const;
 
 export const EVENTS = {"browserDownloaded":"browser_downloaded","browserFailed":"browser_failed","browserHovered":"browser_hovered","browserOpened":"browser_opened","browserPaged":"browser_paged","menuCommand":"menu_command"} as const;
 
-export const COMMANDS = ["title_bar_double_click","browser_open","browser_close","browser_move","browser_load","browser_show_page","browser_go","browser_find","browser_forget","app_menu","file_outside","haptic_alignment"] as const;
+export const COMMANDS = ["title_bar_double_click","browser_load","browser_show_page","browser_go","browser_find","browser_forget","app_menu","file_outside","haptic_alignment"] as const;

@@ -8,7 +8,7 @@
   <br>
   <a href="#quick-start">Quick start</a>
   ·
-  <a href="CONTRIBUTING.md">Contributing</a>
+  <a href="docs/CONTRIBUTING.md">Contributing</a>
 </p>
 
 <img src="https://github.com/zabealbe/octopus/raw/assets/readme/hero.png" alt="One task on three devices: the tablet holds the agent's terminal and fills its screen, the laptop shows the same terminal read-only beside a k6 load-test report in its browser with Take over, and the phone lists the live tasks with each agent's status" width="100%">
@@ -53,4 +53,4 @@ octopus pairing offer --server mac-mini
 
 Paste the invite into **Pair a server** (the `+` after the server names in the sidebar), or scan its QR code with the phone app. The phone app builds from source.
 
-Developers start at [CONTRIBUTING.md](CONTRIBUTING.md).
+Developers start at [CONTRIBUTING.md](docs/CONTRIBUTING.md).

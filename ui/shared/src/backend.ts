@@ -1,9 +1,11 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { COMMANDS, EVENTS } from "./generated";
+import { COMMANDS, EVENTS } from "./generated.ts";
 import type {
   AccountView,
   Boot,
+  BrowserId,
+  BrowserTarget,
   Entry,
   EntryKind,
   FileDrag,
@@ -25,9 +27,22 @@ import type {
   Ui,
   UiAct,
   WorkspaceId,
-} from "./generated";
+} from "./generated.ts";
 
 const octopus = (command: (typeof COMMANDS)[number]) => `plugin:octopus|${command}`;
+
+/** The IPC carries bytes as a JSON array, a number each that both ends handle one by one; as base64 they travel as
+ * one string a third longer than they are. */
+const base64 = (content: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = reader.result as string;
+      resolve(url.slice(url.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(content);
+  });
 
 export const backend = {
   boot: () => invoke<Boot>(octopus("boot")),
@@ -92,6 +107,13 @@ export const backend = {
     invoke<void>(octopus("term_take_lock"), { at, panel, cols, rows }),
   termResize: (at: TaskRef, panel: PtyId, cols: number, rows: number) =>
     invoke<void>(octopus("term_resize"), { at, panel, cols, rows }),
+  /** Resolves to the id of the panel that shows `url` on the task's server. */
+  browserOpen: (at: TaskRef, panel: BrowserTarget, url: string) =>
+    invoke<BrowserId>(octopus("browser_open"), { at, panel, url }),
+  /** Removes the panel on the task's server, and so from every client. */
+  browserClose: (at: TaskRef, panel: BrowserId) => invoke<void>(octopus("browser_close"), { at, panel }),
+  /** Moves the panel to index `to` among the task's panels on its server, and so on every client. */
+  browserMove: (at: TaskRef, panel: BrowserId, to: number) => invoke<void>(octopus("browser_move"), { at, panel, to }),
   fileList: (at: TaskRef, path: string) => invoke<Entry[]>(octopus("file_list"), { at, path }),
   /** The URL each file of the task's directory loads under, at its path with each part percent-encoded. */
   fileRootUrl: (at: TaskRef) => invoke<string>(octopus("file_root_url"), { at }),
@@ -103,9 +125,9 @@ export const backend = {
   fileDelete: (at: TaskRef, path: string, trash: boolean) => invoke<void>(octopus("file_delete"), { at, path, trash }),
   /** Copies `local`, a file or folder on this machine, to the new `path`. */
   fileUpload: (at: TaskRef, path: string, local: string) => invoke<void>(octopus("file_upload"), { at, path, local }),
-  /** Sends `content`, a file this client holds, as the new `path`; the IPC carries the bytes as a JSON array. */
-  fileUploadContent: (at: TaskRef, path: string, content: Uint8Array) =>
-    invoke<void>(octopus("file_upload_content"), { at, path, content }),
+  /** Sends `content`, a file this client holds, as the new `path`. */
+  fileUploadContent: async (at: TaskRef, path: string, content: Blob) =>
+    invoke<void>(octopus("file_upload_content"), { at, path, content: await base64(content) }),
   fileSearch: (at: TaskRef, pattern: string) => invoke<Match[]>(octopus("file_search"), { at, pattern }),
 };
 

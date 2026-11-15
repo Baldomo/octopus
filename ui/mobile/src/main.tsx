@@ -17,15 +17,16 @@ import {
   setServers,
   ui,
 } from "@octopus/shared/state.ts";
-import { setWindowShown, windowShown } from "@octopus/shared/terminalSession.ts";
 import { applyFilesChanged, forgetFilesExcept } from "@octopus/shared/taskFiles.ts";
 import { Board } from "./Board";
+import { followFront } from "./front";
 import { steadyCaret } from "./caret";
 import { Browser } from "./Browser";
 import { ClientMenu, ServerMenu } from "./ClientMenu";
 import { EditorScreen, Files } from "./Files";
 import { Sprite } from "./Icon";
 import { loadSymbols } from "./symbols";
+import { FileMenu } from "./FileMenu";
 import { FolderSheet } from "./FolderSheet";
 import type { Toward } from "@octopus/shared/motion.ts";
 import { setMicDenied, sheetEntries, type Screen, type Sheet, type SheetEntry } from "./nav";
@@ -92,6 +93,9 @@ function SheetPage(props: { sheet: Sheet }) {
         {(menu) => <TaskMenu taskKey={menu().key} open={menu().open} />}
       </Match>
       <Match when={shown.is === "reopen" && shown.key}>{(key) => <Reopen taskKey={key()} />}</Match>
+      <Match when={shown.is === "entry" && shown}>
+        {(entry) => <FileMenu taskKey={entry().key} path={entry().path} kind={entry().kind} />}
+      </Match>
       <Match when={shown.is === "section" && shown.name}>{(name) => <SectionMenu name={name()} />}</Match>
       <Match when={shown.is === "addws"}>
         <AddWorkspace />
@@ -198,7 +202,6 @@ function App() {
   createEffect(() => document.documentElement.style.setProperty("color-scheme", SCHEMES[ui.prefs.appearance]));
   createEffect(() => document.documentElement.toggleAttribute("data-scanning", scanning() && !sliding()));
   createEffect(on(() => [...ui.recent], forgetFilesExcept));
-  createEffect(on(windowShown, (shown) => shown && redial(), { defer: true }));
   return (
     <>
       <Sprite />
@@ -208,20 +211,6 @@ function App() {
     </>
   );
 }
-
-/**
- * The app is in front while its window is visible, overlays and its own permission prompts included. On iOS the
- * page's visibility follows the scene; Android hides the page for a prompt too, so the app's activity says instead.
- */
-const followFront = () => {
-  if (/Android/.test(navigator.userAgent)) {
-    window.addEventListener("octopus-front", (event) => setWindowShown((event as CustomEvent<boolean>).detail));
-    return;
-  }
-  const shown = () => setWindowShown(document.visibilityState === "visible");
-  document.addEventListener("visibilitychange", shown);
-  shown();
-};
 
 async function start() {
   steadyCaret();

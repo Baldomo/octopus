@@ -23,7 +23,6 @@ tokio = { workspace = true, features = ["sync"] }
 
 [target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
 tauri-plugin-barcode-scanner = "2.5.3"
-tauri-plugin-clipboard-manager = "2.5.0"
 tauri-plugin-opener.workspace = true
 
 [target.'cfg(target_os = "ios")'.dependencies]
@@ -35,12 +34,18 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
   "std",
   "block2",
   "UIApplication",
+  "UICommand",
   "UIDevice",
+  "UIEditMenuInteraction",
   "UIFeedbackGenerator",
   "UIGeometry",
   "UIImpactFeedbackGenerator",
+  "UIInteraction",
   "UIInterface",
+  "UIMenu",
+  "UIMenuElement",
   "UINotificationFeedbackGenerator",
+  "UIPasteboard",
   "UIResponder",
   "UIScreen",
   "UIScrollView",
@@ -53,9 +58,14 @@ block2.workspace = true
 objc2-core-foundation = { workspace = true, features = ["CFCGTypes"] }
 objc2-foundation = { workspace = true, features = [
   "block2",
+  "NSArray",
+  "NSData",
   "NSDictionary",
+  "NSError",
+  "NSItemProvider",
   "NSNotification",
   "NSOperation",
+  "NSProgress",
   "NSString",
   "NSURL",
   "NSValue",
@@ -70,7 +80,7 @@ objc2-avf-audio = { version = "0.3.2", default-features = false, features = [
 security-framework = "3.7.0"
 
 [target.'cfg(target_os = "android")'.dependencies]
-base64 = "0.22.1"
+base64.workspace = true
 
 [build-dependencies]
 tauri-build.workspace = true

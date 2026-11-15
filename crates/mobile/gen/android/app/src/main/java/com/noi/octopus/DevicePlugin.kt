@@ -2,6 +2,7 @@ package com.noi.octopus
 
 import android.Manifest
 import android.app.Activity
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
@@ -12,6 +13,7 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.view.HapticFeedbackConstants
 import android.view.View
+import android.webkit.MimeTypeMap
 import android.webkit.WebView
 import androidx.activity.BackEventCompat
 import androidx.activity.OnBackPressedCallback
@@ -26,9 +28,11 @@ import app.tauri.annotation.Permission
 import app.tauri.annotation.PermissionCallback
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
+import app.tauri.plugin.JSArray
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import java.io.File
+import java.nio.file.Files
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -57,10 +61,12 @@ class Pops {
     var pops: Boolean = false
 }
 
-/**
- * What Android keeps and shows for the app: the device key, sealed under an AES key the Keystore holds and never lets
- * leave the device, the device's name, the system bars' icons, the insets the page clears, and microphone access.
- */
+@InvokeArg
+class Paste {
+    lateinit var folder: String
+}
+
+/** The app's way to Android for what neither the page nor Rust reaches. */
 @TauriPlugin(permissions = [Permission(strings = [Manifest.permission.RECORD_AUDIO], alias = MICROPHONE)])
 class DevicePlugin(private val activity: Activity) : Plugin(activity) {
     /** Resolves to whether the app may record, asking the user the first time. */
@@ -201,6 +207,37 @@ class DevicePlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun insets(invoke: Invoke) {
         invoke.resolve(edges)
+    }
+
+    /**
+     * The clipboard's text, each of its images copied into a folder of its own under `folder`, named `image` with its
+     * type's extension, and why each item that failed to paste failed.
+     */
+    @Command
+    fun paste(invoke: Invoke) {
+        val folder = File(invoke.parseArgs(Paste::class.java).folder).apply { mkdirs() }
+        val clip = activity.getSystemService(ClipboardManager::class.java).primaryClip
+        val items = clip?.let { c -> (0 until c.itemCount).map(c::getItemAt) }.orEmpty()
+        val text = StringBuilder()
+        val files = JSArray()
+        val problems = JSArray()
+        for (item in items) {
+            runCatching {
+                val uri = item.uri
+                val type = uri?.let(activity.contentResolver::getType)
+                if (uri != null && type?.startsWith("image/") == true) files.put(keepImage(uri, type, folder).path)
+                else text.append(item.coerceToText(activity))
+            }.onFailure { problems.put("paste the clipboard: ${it.message ?: it}") }
+        }
+        invoke.resolve(JSObject().put("text", text.toString()).put("files", files).put("problems", problems))
+    }
+
+    private fun keepImage(image: Uri, type: String, folder: File): File {
+        val own = Files.createTempDirectory(folder.toPath(), "").toFile()
+        val kept = File(own, MimeTypeMap.getSingleton().getExtensionFromMimeType(type)?.let { "image.$it" } ?: "image")
+        val input = activity.contentResolver.openInputStream(image) ?: error("read the pasted image")
+        input.use { kept.outputStream().use(input::copyTo) }
+        return kept
     }
 
     /** Opens this app's page of the system settings, where the user grants what they denied it. */

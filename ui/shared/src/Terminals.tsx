@@ -1,14 +1,13 @@
 import { createEffect, For, on, onCleanup, onMount, Show } from "solid-js";
-import { createStore } from "solid-js/store";
 import { backend } from "./backend";
-import { AGENT_PANEL, type PanelView, type PtyId, type TaskRef, type TaskView } from "./generated";
+import { AGENT_PANEL, type PanelView, type PtyId, type TaskView } from "./generated";
 import { Glyph } from "./Glyph";
 import { keepInView } from "./keepInView";
-import { onFileDrag, pastesSafely, shellQuoted } from "./fileDrag";
-import { EachPanel, taskPanels } from "./panels";
+import { onFileDrag } from "./fileDrag";
+import { chooseShell, EachPanel, openShell, taskPanels } from "./panels";
 import { commands, hint, mac } from "./commands";
 import { act, model, serverLabel, ui } from "./state";
-import { onServer } from "./taskFiles";
+import { pastedPaths } from "./taskFiles";
 import { toast } from "./Toast";
 import { type LinkTarget, openLinks, type OpenUrl } from "./terminalLinks";
 import { terminalSession, windowShown } from "./terminalSession";
@@ -24,11 +23,6 @@ const chord = (event: KeyboardEvent) =>
   [event.ctrlKey && "ctrl", event.altKey && "alt", event.metaKey && "meta", event.shiftKey && "shift", event.key]
     .filter(Boolean)
     .join("+");
-
-const [chosen, setChosen] = createStore<Record<string, PtyId | null>>({});
-
-export const openShell = (at: TaskRef, key: string, path: string) =>
-  backend.termOpen(at, path).then((panel) => setChosen(key, panel));
 
 export type OpenLink = (task: TaskView, url: string, target: LinkTarget) => void;
 
@@ -60,10 +54,7 @@ function Term(props: { task: TaskView; panel: PanelView; visible: boolean; resum
   };
   onFileDrag((drag, under) => {
     if (drag.kind !== "drop" || under === null || !pane.contains(under) || !pastable()) return;
-    if (!drag.paths.every(pastesSafely))
-      return toast("A path with a line break or a control character can't be pasted");
-    const typed = onServer(props.task, drag.paths);
-    act(typed.then((paths) => paths.length > 0 && pastable() && xterm.paste(paths.map(shellQuoted).join(" "))));
+    act(pastedPaths(props.task, drag.paths, toast).then((typed) => typed !== null && pastable() && xterm.paste(typed)));
   });
 
   onMount(() => {
@@ -151,8 +142,8 @@ function AgentTab(props: { open: TaskView; on: boolean; shown: boolean; choose: 
 function Stack(props: { key: string; openLink: OpenLink }) {
   const task = () => model.tasks[props.key];
   const shown = () => ui.prefs.open === props.key && ui.prefs.view === "task";
-  const choose = (panel: PtyId | null) => setChosen(props.key, panel);
-  const { panels, agent, shells, selected, agentOn } = taskPanels(task, () => chosen[props.key] ?? null);
+  const choose = (panel: PtyId | null) => chooseShell(props.key, panel);
+  const { panels, agent, shells, selected, agentOn } = taskPanels(task);
   const missing = () => {
     const kind = task()?.task.agent.kind;
     return kind === "harness_unknown" || kind === "harness_not_installed";

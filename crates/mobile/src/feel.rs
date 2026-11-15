@@ -2,8 +2,7 @@
 //! the webview's `performHapticFeedback` on Android, which follows the system's touch feedback setting.
 
 use serde::{Deserialize, Serialize};
-
-pub use os::play;
+use tauri::AppHandle;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -23,10 +22,14 @@ pub(crate) enum Feel {
     Error,
 }
 
+/// Async, so a feel never waits on the thread that draws the page.
+#[tauri::command]
+pub(crate) async fn phone_feel(app: AppHandle, feel: Feel) -> Result<(), String> {
+    os::play(&app, feel).map_err(|error| format!("{error:#}"))
+}
+
 #[cfg(target_os = "ios")]
 mod os {
-    #![allow(unsafe_code, reason = "a WKWebView reaches UIKit only through its raw pointer")]
-
     use std::cell::OnceCell;
 
     use anyhow::Context;
@@ -35,7 +38,7 @@ mod os {
         UIImpactFeedbackGenerator, UIImpactFeedbackStyle, UINotificationFeedbackGenerator, UINotificationFeedbackType,
         UISelectionFeedbackGenerator, UIView,
     };
-    use tauri::{AppHandle, Manager};
+    use tauri::AppHandle;
 
     use super::Feel;
 
@@ -89,15 +92,11 @@ mod os {
         static GENERATORS: OnceCell<Generators> = const { OnceCell::new() };
     }
 
-    pub fn play(app: &AppHandle, feel: Feel) -> anyhow::Result<()> {
-        let window = app.get_webview_window("main").context("no main window")?;
-        window
-            .with_webview(move |webview| {
-                // SAFETY: on iOS `inner` is the window's live WKWebView, a UIView, for as long as this closure runs.
-                let view = unsafe { &*webview.inner().cast::<UIView>() };
-                GENERATORS.with(|generators| generators.get_or_init(|| Generators::on(view)).play(feel));
-            })
-            .context("feel on the webview")
+    pub(super) fn play(app: &AppHandle, feel: Feel) -> anyhow::Result<()> {
+        crate::webview::on_view(app, move |view| {
+            GENERATORS.with(|generators| generators.get_or_init(|| Generators::on(view)).play(feel));
+        })
+        .context("feel on the webview")
     }
 }
 
@@ -115,7 +114,7 @@ mod os {
         feel: Feel,
     }
 
-    pub fn play(app: &AppHandle, feel: Feel) -> anyhow::Result<()> {
+    pub(super) fn play(app: &AppHandle, feel: Feel) -> anyhow::Result<()> {
         crate::device::run(app, "feel", Felt { feel }).map(|_: IgnoredAny| ()).context("feel")
     }
 }

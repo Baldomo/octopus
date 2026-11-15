@@ -1,6 +1,6 @@
 import { createRoot, createSelector, createSignal } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { backend } from "./backend";
+import { backend } from "./backend.ts";
 import {
   LIVE_STATES,
   type AccountView,
@@ -19,8 +19,8 @@ import {
   type UiAct,
   type View,
   type ZoomStep,
-} from "./generated";
-import { inSectionOrder } from "./sectionOrder";
+} from "./generated.ts";
+import { inSectionOrder } from "./sectionOrder.ts";
 
 export const [model, setModel] = createStore<Model>({
   version: -1,

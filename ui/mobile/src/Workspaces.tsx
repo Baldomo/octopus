@@ -8,7 +8,7 @@ import { feel } from "./feel";
 import { Icon } from "./Icon";
 import { back, go, screen, showInSheet } from "./nav";
 import { Chev, Field, Flab, Gap, Mi, Note, Path, Sep, ServerDot, Why } from "./parts";
-import { RenameItem } from "./Rename";
+import { NameItem } from "./NameField";
 import { Sheet, SheetHead } from "./Sheet";
 
 /** The 12 hues across and 4 tones down; the current color ringed and the auto color dotted, which picks auto. */
@@ -67,7 +67,12 @@ export function SectionMenu(props: { name: string }) {
             >
               Open board
             </Mi>
-            <RenameItem value={shown().name} apply={(name) => backend.sectionRename(shown().name, name).then(back)} />
+            <NameItem
+              icon="pen"
+              label="Rename…"
+              value={shown().name}
+              apply={(name) => backend.sectionRename(shown().name, name).then(back)}
+            />
             <Flab>color</Flab>
             <Matrix
               on={shown().swatch}

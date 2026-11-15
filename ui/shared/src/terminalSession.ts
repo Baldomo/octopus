@@ -217,12 +217,19 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
     input: (keys: string) => {
       if (attachment !== null) act(backend.termInput(attachment, keys));
     },
-    take: () =>
-      sentAtPaneSize(
-        (size) => backend.termTakeLock(props.at, props.panel().id, size.cols, size.rows),
+    take: () => {
+      const sent = sentAtPaneSize(
+        (size) =>
+          backend.termTakeLock(props.at, props.panel().id, size.cols, size.rows).catch((error) => {
+            claim.settled();
+            throw error;
+          }),
         "take",
         () => true,
-      ),
+      );
+      if (sent) claim.took();
+      return sent;
+    },
     fit,
     open: (pane: HTMLElement) => {
       xterm.open(pane);

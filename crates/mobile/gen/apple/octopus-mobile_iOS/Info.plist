@@ -41,7 +41,7 @@
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Scan a server&apos;s pairing QR code.</string>
+	<string>Scan a server&apos;s pairing QR code, and take photos to paste into a terminal.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Let the programs in a terminal you hold hear your microphone.</string>
 	<key>NSLocalNetworkUsageDescription</key>

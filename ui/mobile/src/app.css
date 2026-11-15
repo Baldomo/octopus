@@ -600,6 +600,12 @@ body {
   inset: 0;
 }
 
+/* Monaco draws on the screen's own surface, so the selected folder tab's tint shows under the code */
+.code-host .monaco-editor {
+  --vscode-editor-background: transparent;
+  --vscode-editorGutter-background: transparent;
+}
+
 .tab .udot {
   width: 8px;
   height: 8px;
@@ -766,12 +772,43 @@ body {
   user-select: text;
 }
 
+/* the address field keeps the focus a tap gives it while the page's address draws in its place */
+.urlrow .url {
+  position: relative;
+}
+
+.url input.behind {
+  position: absolute;
+  width: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.url .address {
+  display: flex;
+}
+
+.address .lead,
+.address .rest {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.address b {
+  flex: none;
+}
+
 .pick {
   overflow-x: auto;
 }
 
 .tree.closed .car {
   transform: rotate(-90deg);
+}
+
+.tree.cut > * {
+  opacity: 0.5;
 }
 
 .capsule .circle.on {
@@ -981,9 +1018,14 @@ body {
 }
 
 .thumbed > .on,
-.seg.thumbed > span.on {
+.seg.thumbed > span.on,
+.tabs.folder .thumbed > .tab.on {
   background: none;
   box-shadow: none;
+}
+
+.tabs.folder .thumbed > .tab.on::before {
+  content: none;
 }
 
 /* lists animate their items over their own box; a removed item fades where it was */

@@ -2,7 +2,9 @@
 //! server over data stream `Stream::Tunnel`, and the server dials the same port on its machine. The page keeps its
 //! origin, so cookies, websockets and devtools behave as they would against a dev server on this machine.
 
+use std::future::Future;
 use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,8 +15,9 @@ use crate::{Connection, Task};
 
 const ACCEPT_RETRY: Duration = Duration::from_millis(100);
 
-/// The server's connection at the moment a browser connects, which a reconnect may have replaced.
-pub(crate) type Dial = Arc<dyn Fn() -> Result<Arc<Connection>, String> + Send + Sync>;
+/// Resolves to the server's connection at the moment a browser connects, which a reconnect may have replaced.
+pub(crate) type Dial =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Arc<Connection>, String>> + Send>> + Send + Sync>;
 
 /// The port of the server's machine a page reaches, when its host is a loopback name or address.
 pub fn loopback_port(page: &url::Url) -> Option<u16> {
@@ -44,7 +47,7 @@ pub async fn listen_on_localhost(port: u16) -> io::Result<Vec<TcpListener>> {
 }
 
 async fn carry(port: u16, mut browser: TcpStream, dial: Dial) -> Result<(), String> {
-    let connection = dial()?;
+    let connection = dial().await?;
     let mut stream = connection.open_data_stream(&Stream::Tunnel(port)).await.map_err(|error| error.to_string())?;
     tokio::io::copy_bidirectional(&mut browser, &mut stream).await.map(drop).map_err(|error| error.to_string())
 }

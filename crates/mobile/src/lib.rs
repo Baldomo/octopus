@@ -7,6 +7,9 @@ mod client_menu;
 mod device;
 mod feel;
 #[cfg(target_os = "ios")]
+mod linger;
+mod paste;
+#[cfg(target_os = "ios")]
 mod webview;
 
 pub use app::run;

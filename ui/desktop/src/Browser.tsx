@@ -1,7 +1,17 @@
 import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show, untrack } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { backend } from "@octopus/shared/backend.ts";
 import { BACKGROUND_BROWSER_PANEL, NEW_BROWSER_PANEL } from "@octopus/shared/generated.ts";
+import { Address } from "@octopus/shared/Address.tsx";
+import {
+  createPanelSelection,
+  openPage,
+  openTyped,
+  pageName,
+  panelName,
+  type Target,
+} from "@octopus/shared/browserPanels.ts";
 import { provideBrowser } from "@octopus/shared/commands.ts";
 import { FolderTabs, type FolderTab } from "@octopus/shared/FolderTabs.tsx";
 import type { BrowserId, BrowserPanel, TaskRef, TaskView } from "@octopus/shared/generated.ts";
@@ -9,10 +19,8 @@ import { act, model, openView, report, serverLabel, showSurface, ui } from "@oct
 import type { OpenLink } from "@octopus/shared/Terminals.tsx";
 import { desktop, desktopEvents } from "./backend";
 import { liftOnDrag } from "./lift";
-import { cycled, heirOf, openedAt } from "./tabOrder";
+import { cycled, openedAt } from "./tabOrder";
 import type { Go, OnScreen } from "./generated";
-
-type Target = BrowserId | typeof NEW_BROWSER_PANEL;
 
 /** A rendered panel's page on this client, which moves off its server `url` as the user navigates. */
 type Page = {
@@ -24,15 +32,9 @@ type Page = {
   failed: { url: string; error: string } | null;
 };
 
-/** The panel each task's tabs select on this client; `new` makes the next page open a panel of its own. */
-const [selected, setSelected] = createStore<Record<string, Target>>({});
 /** Per task key, the task and the panels whose webview exists on this client. */
 const [rendered, setRendered] = createStore<Record<string, { at: TaskRef; panels: BrowserId[] }>>({});
 const [pages, setPages] = createStore<Record<string, Record<BrowserId, Page>>>({});
-/** Per task key, each panel's `load` this client last saw; a `load` that moves selects its panel. */
-const seenLoads = new Map<string, Map<BrowserId, number>>();
-/** Per task key, the order of its panels this client last saw. */
-const seenOrders = new Map<string, BrowserId[]>();
 /** Per task key, the panel whose page opened each panel a page opened on this client. */
 const openers = new Map<string, Map<BrowserId, BrowserId>>();
 /** Per task key, the tabs this client closed, the last closed last, each with its page and its index. */
@@ -111,12 +113,12 @@ function loadPanel(task: TaskView, panel: BrowserId, url: string, load: number) 
  * client at once, and no client selects it.
  */
 async function openFrom(task: TaskView, opener: BrowserId, url: string, select: boolean) {
-  const panel = await desktop.browserOpen(task.at, select ? NEW_BROWSER_PANEL : BACKGROUND_BROWSER_PANEL, url);
+  const panel = await backend.browserOpen(task.at, select ? NEW_BROWSER_PANEL : BACKGROUND_BROWSER_PANEL, url);
   const opened = entryOf(openers, task.key, () => new Map());
   opened.set(panel, opener);
   if (!select) loadPanel(task, panel, url, 0);
   const others = (model.tasks[task.key]?.task.browsers ?? []).map((known) => known.panel).filter((id) => id !== panel);
-  await desktop.browserMove(
+  await backend.browserMove(
     task.at,
     panel,
     openedAt(others, opener, (tab) => opened.get(tab)),
@@ -127,22 +129,9 @@ async function openFrom(task: TaskView, opener: BrowserId, url: string, select: 
 async function reopen(task: TaskView) {
   const last = closed.get(task.key)?.pop();
   if (last === undefined) return;
-  const panel = await desktop.browserOpen(task.at, NEW_BROWSER_PANEL, last.url);
-  await desktop.browserMove(task.at, panel, Math.min(last.at, task.task.browsers.length));
+  const panel = await backend.browserOpen(task.at, NEW_BROWSER_PANEL, last.url);
+  await backend.browserMove(task.at, panel, Math.min(last.at, task.task.browsers.length));
 }
-
-/** The task's chosen panel while it exists, else its last one. */
-function targetOf(task: TaskView): Target {
-  const chosen = selected[task.key];
-  const panels = task.task.browsers;
-  if (chosen === NEW_BROWSER_PANEL || panels.some((panel) => panel.panel === chosen))
-    return chosen ?? NEW_BROWSER_PANEL;
-  return panels.at(-1)?.panel ?? NEW_BROWSER_PANEL;
-}
-
-/** Shows `url` in the task's target panel, which stays the target. */
-const openPage = (task: TaskView, url: string) =>
-  desktop.browserOpen(task.at, targetOf(task), url).then((panel) => setSelected(task.key, panel), report);
 
 /** A terminal's link opens in the task's browser panel, the left side switching to Browser, or in the system's browser. */
 export const openLink: OpenLink = (task, url, target) => {
@@ -153,88 +142,16 @@ export const openLink: OpenLink = (task, url, target) => {
   }
 };
 
-/** What the user typed as a page: a URL with its scheme, a file's absolute path, or a web address. */
-const typedPage = (typed: string) => {
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(typed)) return typed;
-  if (typed.startsWith("/")) return new URL(`file://${typed}`).href;
-  return `http://${typed}`;
-};
-
-/** What a page is called before its title arrives: a file's name, else its host. */
-const nameOf = (url: string) => {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "file:" ? decodeURIComponent(parsed.pathname.split("/").at(-1) ?? "") : parsed.host;
-  } catch {
-    return url;
-  }
-};
-
-function Address(props: { url: string }) {
-  const parts = () => {
-    try {
-      const url = new URL(props.url);
-      if (url.protocol === "file:") {
-        const path = decodeURIComponent(url.pathname);
-        const cut = path.lastIndexOf("/") + 1;
-        return { lead: path.slice(0, cut), main: path.slice(cut), rest: `${url.search}${url.hash}` };
-      }
-      const rest = `${url.pathname === "/" ? "" : url.pathname}${url.search}${url.hash}`;
-      return { lead: "", main: url.host, rest };
-    } catch {
-      return { lead: "", main: props.url, rest: "" };
-    }
-  };
-  return (
-    <span class="name">
-      {parts().lead}
-      <b>{parts().main}</b>
-      {parts().rest}
-    </span>
-  );
-}
-
 export function Browser(props: { visible: boolean }) {
   let surface!: HTMLDivElement;
   const panels = (): BrowserPanel[] => openView()?.task.browsers ?? [];
-  const target = (): Target => {
-    const task = openView();
-    return task === undefined ? NEW_BROWSER_PANEL : targetOf(task);
-  };
-  const current = () => {
-    const task = openView();
-    return task?.task.browsers.find((panel) => panel.panel === targetOf(task));
-  };
+  const { target, panel: current, select } = createPanelSelection(openView);
   const shown = () => {
     const task = openView();
     const panel = current();
     return task === undefined || panel === undefined ? undefined : page(task.key, panel.panel);
   };
   const shownUrl = () => shown()?.failed?.url || shown()?.url || current()?.url;
-
-  /**
-   * A panel whose `load` moved since this client last saw the task selects itself, a new panel counting from 0;
-   * otherwise the selection holds on to its panel, so panels moving around it leave it where it is, and passes to its
-   * heir when it closes.
-   */
-  createEffect(() => {
-    const task = openView();
-    if (task === undefined) return;
-    const seen = seenLoads.get(task.key);
-    const loads = new Map(task.task.browsers.map((panel) => [panel.panel, panel.load]));
-    const moved =
-      seen === undefined
-        ? undefined
-        : task.task.browsers.findLast((panel) => (seen.get(panel.panel) ?? 0) !== panel.load);
-    seenLoads.set(task.key, loads);
-    const order = task.task.browsers.map((panel) => panel.panel);
-    const before = seenOrders.get(task.key) ?? order;
-    seenOrders.set(task.key, order);
-    const chosen = untrack(() => selected[task.key]);
-    const gone = chosen !== undefined && chosen !== NEW_BROWSER_PANEL && !order.includes(chosen);
-    const heir = gone ? (heirOf(before, order, chosen) ?? NEW_BROWSER_PANEL) : undefined;
-    setSelected(task.key, moved?.panel ?? heir ?? untrack(() => targetOf(task)));
-  });
 
   const unlisten = desktopEvents.browserOpened(({ task, panel, url, select }) => {
     const view = model.tasks[task];
@@ -287,7 +204,7 @@ export function Browser(props: { visible: boolean }) {
 
   const open = (typed: string) => {
     const task = openView();
-    if (task !== undefined && typed.trim() !== "") openPage(task, typedPage(typed.trim()));
+    if (task !== undefined) openTyped(task, typed);
   };
 
   const navigate = (step: Go) => {
@@ -302,7 +219,7 @@ export function Browser(props: { visible: boolean }) {
   const tabs = (): FolderTab[] =>
     panels().map((panel) => ({
       key: panel.panel,
-      name: panel.title || nameOf(panel.url),
+      name: panelName(panel),
       where: undefined,
       title: panel.url,
       loading: page(openView()?.key ?? "", panel.panel)?.loading === true,
@@ -315,17 +232,16 @@ export function Browser(props: { visible: boolean }) {
     const at = panels().findIndex((known) => known.panel === panel);
     const url = page(task.key, panel)?.url || panels()[at]?.url;
     if (url !== undefined) entryOf(closed, task.key, () => []).push({ url, at });
-    act(desktop.browserClose(task.at, panel));
+    act(backend.browserClose(task.at, panel));
   };
 
   const move = async (panel: BrowserId, to: number) => {
     const task = openView();
-    if (task !== undefined) await desktop.browserMove(task.at, panel, to);
+    if (task !== undefined) await backend.browserMove(task.at, panel, to);
   };
 
   const choose = (panel: Target) => {
-    const task = openView();
-    if (task !== undefined) setSelected(task.key, panel);
+    select(panel);
     if (panel === NEW_BROWSER_PANEL) locate();
   };
 
@@ -459,7 +375,7 @@ export function Browser(props: { visible: boolean }) {
           {(failed) => (
             <div class="empty failed">
               <div>
-                <b>{nameOf(failed().url)}</b> could not load
+                <b>{pageName(failed().url)}</b> could not load
               </div>
               <div class="why">{failed().error}</div>
               <code>{failed().url}</code>

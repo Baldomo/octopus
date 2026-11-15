@@ -2,7 +2,6 @@ import { invoke as invokeAny, type InvokeArgs } from "@tauri-apps/api/core";
 import { on } from "@octopus/shared/backend.ts";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { BrowserId, TaskRef } from "@octopus/shared/generated.ts";
-import { BACKGROUND_BROWSER_PANEL, NEW_BROWSER_PANEL } from "@octopus/shared/generated.ts";
 import {
   COMMANDS,
   EVENTS,
@@ -22,16 +21,6 @@ const invoke = <T>(command: (typeof COMMANDS)[number], args?: InvokeArgs) => inv
 
 export const desktop = {
   titleBarDoubleClick: () => invoke<void>("title_bar_double_click"),
-  /** Resolves to the id of the panel that shows `url` on the task's server. */
-  browserOpen: (
-    at: TaskRef,
-    panel: BrowserId | typeof NEW_BROWSER_PANEL | typeof BACKGROUND_BROWSER_PANEL,
-    url: string,
-  ) => invoke<BrowserId>("browser_open", { at, panel, url }),
-  /** Removes the panel on the task's server, and so from every client. */
-  browserClose: (at: TaskRef, panel: BrowserId) => invoke<void>("browser_close", { at, panel }),
-  /** Moves the panel to index `to` among the task's panels on its server, and so on every client. */
-  browserMove: (at: TaskRef, panel: BrowserId, to: number) => invoke<void>("browser_move", { at, panel, to }),
   /** Loads the panel's `url` on this client, unless its webview already loaded this `load`. */
   browserLoad: (at: TaskRef, panel: BrowserId, url: string, load: number) =>
     invoke<void>("browser_load", { at, panel, url, load }),

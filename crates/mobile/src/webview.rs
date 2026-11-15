@@ -10,6 +10,7 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use anyhow::Context;
 use block2::{DynBlock, RcBlock};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
@@ -22,26 +23,37 @@ use objc2_ui_kit::{
 };
 use octopus_shell::client_menu::Appearance;
 use octopus_shell::ui::UiStore;
-use tauri::{Manager, WebviewWindow};
+use tauri::{AppHandle, Manager};
 
 pub(crate) fn set_up(app: &tauri::App) -> anyhow::Result<()> {
-    let window = app.get_webview_window("main").ok_or_else(|| anyhow::anyhow!("no main window"))?;
     bare_keyboard()?;
-    on_view(&window, |view| {
+    on_view(app.handle(), |view| {
         // SAFETY: a WKWebView's `scrollView` is its UIScrollView.
         let scroll: Retained<UIScrollView> = unsafe { msg_send![view, scrollView] };
         scroll.setContentInsetAdjustmentBehavior(UIScrollViewContentInsetAdjustmentBehavior::Never);
         follow_keyboard(view.retain());
     })?;
     let ui = Arc::clone(app.state::<Arc<UiStore>>().inner());
-    show(&window, ui.native().appearance)?;
+    let app = app.handle().clone();
+    show(&app, ui.native().appearance)?;
     ui.follow(move |before, after| {
         if before.appearance == after.appearance {
             return Ok(());
         }
-        show(&window, after.appearance).map_err(|error| format!("show the {:?} appearance: {error}", after.appearance))
+        show(&app, after.appearance).map_err(|error| format!("show the {:?} appearance: {error:#}", after.appearance))
     });
     Ok(())
+}
+
+/// Runs `act` on the main thread with the main window's WKWebView.
+pub(crate) fn on_view(app: &AppHandle, act: impl FnOnce(&UIView) + Send + 'static) -> anyhow::Result<()> {
+    let window = app.get_webview_window("main").context("no main window")?;
+    window
+        .with_webview(move |webview| {
+            // SAFETY: on iOS `inner` is the window's live WKWebView, a UIView, for as long as this closure runs.
+            act(unsafe { &*webview.inner().cast::<UIView>() });
+        })
+        .context("reach the webview on the main thread")
 }
 
 /// Tells the page, each time the keyboard starts to move, the height of the webview it will leave uncovered.
@@ -85,13 +97,13 @@ fn follow_keyboard(view: Retained<UIView>) {
 }
 
 /// The whole window takes the appearance, so the status bar reads against the page.
-fn show(window: &WebviewWindow, appearance: Appearance) -> tauri::Result<()> {
+fn show(app: &AppHandle, appearance: Appearance) -> anyhow::Result<()> {
     let style = match appearance {
         Appearance::System => UIUserInterfaceStyle::Unspecified,
         Appearance::Light => UIUserInterfaceStyle::Light,
         Appearance::Dark => UIUserInterfaceStyle::Dark,
     };
-    on_view(window, move |view| {
+    on_view(app, move |view| {
         view.window().expect("the webview shows in a window").setOverrideUserInterfaceStyle(style);
     })
 }
@@ -115,12 +127,4 @@ fn bare_keyboard() -> anyhow::Result<()> {
         );
     }
     Ok(())
-}
-
-/// Runs `act` on the main thread with the window's WKWebView.
-fn on_view(window: &WebviewWindow, act: impl FnOnce(&UIView) + Send + 'static) -> tauri::Result<()> {
-    window.with_webview(move |webview| {
-        // SAFETY: on iOS `inner` is the window's live WKWebView, a UIView, for as long as this closure runs.
-        act(unsafe { &*webview.inner().cast::<UIView>() });
-    })
 }

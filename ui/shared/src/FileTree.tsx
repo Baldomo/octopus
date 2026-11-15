@@ -4,10 +4,27 @@ import type { EntryKind, TaskView } from "./generated";
 import { keepInView } from "./keepInView";
 import { onFileDrag } from "./fileDrag";
 import { closeMenu, Head, Item, onRightClick, openMenu, Sep } from "./Menu";
-import { each, said, toast } from "./Toast";
-import { act, isLocal, serverLabel } from "./state";
-import { freeName, join, nameOf, parentOf, within, type TaskFiles } from "./taskFiles";
-import { openShell } from "./Terminals";
+import {
+  absolute,
+  copyPaths,
+  create,
+  deletion,
+  duplicate,
+  folderOf,
+  landed,
+  outermost,
+  paste,
+  place,
+  remove,
+  rename,
+  subject,
+  type Say,
+} from "./entries";
+import { said } from "./errors";
+import { openShell } from "./panels";
+import { toast } from "./Toast";
+import { act, isLocal } from "./state";
+import { join, parentOf, within, type TaskFiles } from "./taskFiles";
 
 export type Outside = (task: TaskView, path: string, how: "reveal" | "open") => Promise<void>;
 
@@ -29,6 +46,7 @@ const KEYS = mac
       reveal: "Ctrl+Alt+R",
       delete: "Delete",
     };
+const SAY: Say = { done: toast, problem: toast };
 const REVEAL = mac ? "Reveal in Finder" : "Reveal in file manager";
 
 type Row = { path: string; name: string; kind: EntryKind; depth: number };
@@ -42,9 +60,6 @@ const [refusal, setRefusal] = createSignal<string | null>(null);
 const [dragged, setDragged] = createSignal<string[] | null>(null);
 const [target, setTarget] = createSignal<string | null>(null);
 
-const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`;
-const subject = (paths: string[]) => (paths.length === 1 ? nameOf(paths[0]!) : plural(paths.length, "item"));
-
 function startDraft(files: TaskFiles, next: Draft) {
   batch(() => {
     closeMenu();
@@ -54,77 +69,16 @@ function startDraft(files: TaskFiles, next: Draft) {
   });
 }
 
-const where = (dir: string) => (dir === "." ? "the task's directory" : dir);
-
-async function vacant(files: TaskFiles, dir: string, name: string) {
-  if ((await files.names(dir)).has(name)) throw new Error(`${where(dir)} already has ${name}`);
-  return join(dir, name);
-}
-
-const outermost = (paths: string[]) =>
-  paths.filter((path) => !paths.some((other) => other !== path && within(path, other)));
-
-async function place(files: TaskFiles, paths: string[], dir: string, copying: boolean) {
-  const sources = outermost(paths).filter((path) => copying || parentOf(path) !== dir);
-  const taken = await files.names(dir);
-  const done = await each(sources, async (path) => {
-    if (copying) {
-      const name = freeName(nameOf(path), taken);
-      taken.add(name);
-      return files.copy(path, join(dir, name));
-    }
-    if (taken.has(nameOf(path))) throw new Error(`${where(dir)} already has ${nameOf(path)}`);
-    return files.move(path, join(dir, nameOf(path)));
-  });
-  landed(files, dir, done, copying ? "Copied" : "Moved");
-}
-
-function landed(files: TaskFiles, dir: string, done: number, verb: string) {
-  if (done === 0) return;
-  if (dir !== ".") files.reveal(dir, true);
-  toast(`${verb} ${plural(done, "item")} into ${where(dir)}`);
-}
-
-function paste(files: TaskFiles, dir: string) {
-  const clip = files.state.clip;
-  if (clip === null) return;
-  if (clip.cut) files.setClip(null);
-  act(place(files, clip.paths, dir, !clip.cut));
-}
-
-async function duplicate(files: TaskFiles, paths: string[]) {
-  await each(paths, async (path) =>
-    files.copy(path, join(parentOf(path), freeName(nameOf(path), await files.names(parentOf(path))))),
-  );
-}
-
-const absolute = (task: TaskView, path: string) =>
-  path === "." ? task.task.directory : `${task.task.directory}/${path}`;
-
-async function copyPaths(task: TaskView, paths: string[], full: boolean) {
-  await navigator.clipboard.writeText(paths.map((path) => (full ? absolute(task, path) : path)).join("\n"));
-  toast(`Copied ${paths.length === 1 ? (full ? "the path" : "the relative path") : plural(paths.length, "path")}`);
-}
-
-/** Deleting confirms in place: a server on this machine sends entries to its trash, another one deletes them. */
+/** Deleting confirms in place. */
 function ConfirmDelete(props: { files: TaskFiles; task: TaskView; paths: string[]; back: () => void }) {
-  const trash = () => isLocal(props.task.at.server);
+  const asked = () => deletion(props.task, props.paths);
   const go = () => {
     closeMenu();
-    const paths = outermost(props.paths);
-    act(
-      each(paths, (path) => props.files.remove(path, trash())).then(
-        (done) => done > 0 && toast(`${trash() ? "Moved to the Trash" : "Deleted"}: ${subject(paths)}`),
-      ),
-    );
+    remove(props.files, props.paths, asked().trash, SAY);
   };
   return (
     <div class="confirm">
-      <span>
-        {trash()
-          ? `Move ${subject(props.paths)} to the Trash?`
-          : `Delete ${subject(props.paths)} from ${serverLabel(props.task.at.server)} for good?`}
-      </span>
+      <span>{asked().question}</span>
       <div class="row">
         <button class="btn" onClick={() => props.back()}>
           Cancel
@@ -135,7 +89,7 @@ function ConfirmDelete(props: { files: TaskFiles; task: TaskView; paths: string[
           onKeyDown={(event) => event.key === "Enter" && event.stopPropagation()}
           onClick={go}
         >
-          {trash() ? "Move to Trash" : "Delete"}
+          {asked().button}
         </button>
       </div>
     </div>
@@ -156,11 +110,11 @@ type MenuProps = {
 function EntryMenu(props: MenuProps) {
   const [deleting, setDeleting] = createSignal(props.deleting === true);
   const root = props.path === ".";
-  const dir = props.kind === "directory" ? props.path : parentOf(props.path);
+  const dir = folderOf(props.path, props.kind);
   const local = () => props.outside !== undefined && isLocal(props.task.at.server);
   const closing = (action: () => unknown) => () => {
     closeMenu();
-    act(Promise.resolve(action()));
+    action();
   };
   return (
     <Show
@@ -177,16 +131,16 @@ function EntryMenu(props: MenuProps) {
       <Item run={() => startDraft(props.files, { kind: "directory", dir })}>New folder…</Item>
       <Item
         why={props.task.live ? undefined : "task ended"}
-        run={closing(() => openShell(props.task.at, props.task.key, dir))}
+        run={closing(() => act(openShell(props.task.at, props.task.key, dir)))}
       >
         Open in terminal
       </Item>
       <Show when={local()}>
-        <Item kbd={KEYS.reveal} run={closing(() => props.outside?.(props.task, props.path, "reveal"))}>
+        <Item kbd={KEYS.reveal} run={closing(() => act(props.outside!(props.task, props.path, "reveal")))}>
           {REVEAL}
         </Item>
         <Show when={props.kind === "file"}>
-          <Item run={closing(() => props.outside?.(props.task, props.path, "open"))}>Open in default app</Item>
+          <Item run={closing(() => act(props.outside!(props.task, props.path, "open")))}>Open in default app</Item>
         </Show>
       </Show>
       <Sep />
@@ -201,19 +155,19 @@ function EntryMenu(props: MenuProps) {
       <Item
         kbd={KEYS.paste}
         why={props.files.state.clip === null ? "nothing copied" : undefined}
-        run={closing(() => paste(props.files, dir))}
+        run={closing(() => paste(props.files, dir, SAY))}
       >
         Paste
       </Item>
       <Show when={!root}>
-        <Item run={closing(() => duplicate(props.files, outermost(props.paths)))}>Duplicate</Item>
+        <Item run={closing(() => duplicate(props.files, props.paths, SAY))}>Duplicate</Item>
       </Show>
       <Sep />
-      <Item kbd={KEYS.path} run={closing(() => copyPaths(props.task, props.paths, true))}>
+      <Item kbd={KEYS.path} run={closing(() => copyPaths(props.task, props.paths, true, SAY))}>
         Copy path
       </Item>
       <Show when={!root}>
-        <Item kbd={KEYS.relative} run={closing(() => copyPaths(props.task, props.paths, false))}>
+        <Item kbd={KEYS.relative} run={closing(() => copyPaths(props.task, props.paths, false, SAY))}>
           Copy relative path
         </Item>
         <Sep />
@@ -398,7 +352,7 @@ export function FileTree(props: { files: TaskFiles; task: TaskView; outside?: Ou
       const swallow = (click: MouseEvent) => click.stopPropagation();
       window.addEventListener("click", swallow, { capture: true, once: true });
       setTimeout(() => window.removeEventListener("click", swallow, { capture: true }));
-      if (dir !== null) act(place(files(), paths, dir, event.altKey));
+      if (dir !== null) place(files(), paths, dir, event.altKey, SAY);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -414,8 +368,8 @@ export function FileTree(props: { files: TaskFiles; task: TaskView; outside?: Ou
     if (drag.kind === "drop" && dir !== null)
       act(
         files()
-          .bringIn(drag.paths, dir)
-          .then((copies) => landed(files(), dir, copies.length, "Copied")),
+          .bringIn(drag.paths, dir, toast)
+          .then((copies) => landed(files(), dir, copies.length, "Copied", SAY)),
       );
   });
 
@@ -433,7 +387,7 @@ export function FileTree(props: { files: TaskFiles; task: TaskView; outside?: Ou
       else files().select([to], to);
     };
     const clip = (cut: boolean) => chosen.length > 0 && files().setClip({ paths: chosen, cut });
-    const copyPath = (full: boolean) => chosen.length > 0 && act(copyPaths(props.task, chosen, full));
+    const copyPath = (full: boolean) => chosen.length > 0 && copyPaths(props.task, chosen, full, SAY);
     const open = () => row !== undefined && activate(row);
     const remove = () =>
       row !== undefined && openMenu(`file:${row.path}`, rowElement(row.path) ?? tree, menu(row.path, true));
@@ -441,7 +395,7 @@ export function FileTree(props: { files: TaskFiles; task: TaskView; outside?: Ou
     const bindings: Record<string, () => unknown> = {
       "mod+KeyC": () => clip(false),
       "mod+KeyX": () => clip(true),
-      "mod+KeyV": () => paste(files(), row?.kind === "directory" ? row.path : parentOf(focus ?? ".")),
+      "mod+KeyV": () => paste(files(), row === undefined ? "." : folderOf(row.path, row.kind), SAY),
       "mod+KeyA": () => files().select(paths, focus, paths[0] ?? null),
       "mod+alt+KeyC": () => copyPath(true),
       "mod+alt+shift+KeyC": () => copyPath(false),
@@ -500,7 +454,6 @@ export function FileTree(props: { files: TaskFiles; task: TaskView; outside?: Ou
     });
   });
 
-  const cut = () => (state().clip?.cut ? state().clip!.paths : []);
   const inTarget = (path: string) => target() !== null && target() !== "." && within(path, target()!);
 
   return (
@@ -527,10 +480,7 @@ export function FileTree(props: { files: TaskFiles; task: TaskView; outside?: Ou
                 <div class="draft">
                   {indent(row().depth)}
                   {row().kind === "directory" ? "▸ " : ""}
-                  <NameField
-                    value=""
-                    apply={async (name) => files().create(await vacant(files(), editing.dir, name), editing.kind)}
-                  />
+                  <NameField value="" apply={(name) => create(files(), editing.dir, name, editing.kind)} />
                 </div>
                 <Show when={refusal()}>{(why) => <div class="err">{why()}</div>}</Show>
               </>
@@ -545,7 +495,7 @@ export function FileTree(props: { files: TaskFiles; task: TaskView; outside?: Ou
             <>
               <div
                 data-path={path}
-                data-drop-dir={directory() ? path : parentOf(path)}
+                data-drop-dir={folderOf(path, row().kind)}
                 title={path}
                 ref={keepInView(() => state().focus === path)}
                 classList={{
@@ -554,7 +504,7 @@ export function FileTree(props: { files: TaskFiles; task: TaskView; outside?: Ou
                   mod: state().dirty[path] === true,
                   sel: state().selected.includes(path),
                   focus: state().focus === path,
-                  cut: cut().some((cutPath) => within(path, cutPath)),
+                  cut: files().isCut(path),
                   dragging: dragged()?.some((moving) => within(path, moving)) === true,
                   over: target() === path,
                   within: inTarget(path) && target() !== path,
@@ -566,10 +516,7 @@ export function FileTree(props: { files: TaskFiles; task: TaskView; outside?: Ou
                 {indent(row().depth)}
                 {directory() ? (state().expanded[path] ? "▾ " : "▸ ") : ""}
                 <Show when={renaming()} fallback={row().name}>
-                  <NameField
-                    value={row().name}
-                    apply={async (name) => files().move(path, await vacant(files(), parentOf(path), name))}
-                  />
+                  <NameField value={row().name} apply={(name) => rename(files(), path, name)} />
                 </Show>
                 {state().dirty[path] ? `${GAP}M` : ""}
               </div>

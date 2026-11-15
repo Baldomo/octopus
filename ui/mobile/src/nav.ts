@@ -1,6 +1,6 @@
 import { createEffect, createRoot, createSignal } from "solid-js";
 import type { FolderPicker } from "@octopus/shared/folderPath.ts";
-import type { PtyId } from "@octopus/shared/generated.ts";
+import type { EntryKind, PtyId } from "@octopus/shared/generated.ts";
 import type { Toward } from "@octopus/shared/motion.ts";
 import { act, openTask as markOpened } from "@octopus/shared/state.ts";
 import { phone } from "./phone";
@@ -24,6 +24,7 @@ export type Sheet =
   | { is: "pair"; invite: string; reading: Reading }
   | { is: "task"; key: string; open: { panel: PtyId | null } | null }
   | { is: "reopen"; key: string }
+  | { is: "entry"; key: string; path: string; kind: EntryKind }
   | { is: "section"; name: string }
   | { is: "addws" }
   | { is: "newtask"; section: string | null }
@@ -50,10 +51,16 @@ export const sheetEntries = (): SheetEntry[] =>
     .flatMap((entry) => ("sheet" in entry ? [entry] : []));
 export const sheet = () => sheetEntries().at(-1)?.sheet ?? null;
 
-const push = (entry: Entry) => {
-  history.pushState(entries().length, "");
-  setEntries((shown) => [...shown, entry]);
-};
+/**
+ * Shows `next` in place of the entries shown. History holds one entry per entry past the root, each holding its index,
+ * so entries it adds get history entries of their own, and history goes back over the ones it drops.
+ */
+function show(next: Entry[]) {
+  const from = entries().length;
+  for (let index = from; index < next.length; index++) history.pushState(index, "");
+  setEntries(next);
+  if (next.length < from) history.go(next.length - from);
+}
 
 /** Each history entry holds the index of its top entry, so a jump back any number of entries lands on its own. */
 addEventListener("popstate", (event) => {
@@ -66,19 +73,31 @@ createRoot(() => createEffect(() => act(phone.backPops(entries().length > 1))));
 
 export const back = () => history.back();
 
-/**
- * Pushes a screen; from sheets, the screen takes the lowest one's place and every sheet goes. The history entries of
- * the sheets above the lowest go back with them, landing on the lowest's, which the screen takes over.
- */
-export function go(screen: Screen) {
-  const sheets = sheetEntries().length;
-  if (sheets === 0) return push({ screen });
-  setEntries((shown) => [...shown.slice(0, sheetsFrom()), { screen }]);
-  if (sheets > 1) history.go(1 - sheets);
+/** The screen a screen sits on: a task's Files and Browser on its Task screen, its editor on its Files. */
+function parentOf(screen: Screen): Screen | undefined {
+  if (screen.at === "editor") return { at: "files", key: screen.key };
+  if (screen.at === "files" || screen.at === "browser") return { at: "task", key: screen.key };
 }
 
+const same = (one: Screen, other: Screen) => JSON.stringify(one) === JSON.stringify(other);
+
+/** The screen, after each of its parents up to the first that is `under`. */
+function lineage(screen: Screen, under: Screen): Screen[] {
+  const parent = parentOf(screen);
+  return parent === undefined || same(parent, under) ? [screen] : [...lineage(parent, under), screen];
+}
+
+/** Pushes a screen over the parents it lacks under it; from sheets, the screens take their place and every sheet goes. */
+export function go(next: Screen) {
+  const pushed = lineage(next, screen()).map((each) => ({ screen: each }));
+  show([...entries().slice(0, sheetsFrom()), ...pushed]);
+}
+
+/** Pops the top screen and every sheet over it. */
+export const up = () => show(entries().slice(0, sheetsFrom() - 1));
+
 /** Raises a sheet over the one up, with a history entry of its own, so back lowers it alone. */
-export const raiseSheet = (next: Sheet) => push({ sheet: next });
+export const raiseSheet = (next: Sheet) => show([...entries(), { sheet: next }]);
 
 /** Opens a sheet over the screen, or shows it a level deeper in the sheet that is up. */
 export const openSheet = (next: Sheet) => (sheet() === null ? raiseSheet(next) : showInSheet(next, "deeper"));
@@ -87,10 +106,7 @@ export const openSheet = (next: Sheet) => (sheet() === null ? raiseSheet(next) :
 export const showInSheet = (sheet: Sheet, turned: Toward) =>
   setEntries((shown) => [...shown.slice(0, -1), { sheet, turned }]);
 
-export function home() {
-  const depth = entries().length - 1;
-  if (depth > 0) history.go(-depth);
-}
+export const home = () => show(entries().slice(0, 1));
 
 /** Opening a task shows it on the Task screen, which focuses it, and makes it the one Tasks tints. */
 export function openTask(key: string) {

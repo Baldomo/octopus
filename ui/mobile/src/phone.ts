@@ -1,9 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { cancel, Format, requestPermissions, scan } from "@tauri-apps/plugin-barcode-scanner";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Feel } from "./feel";
 
 const INVITE = "octopus://";
+
+export const android = /Android/.test(navigator.userAgent);
 
 export const phone = {
   /** Whether the phone has the name it took on its first pairing. */
@@ -26,12 +29,36 @@ export const phone = {
   backPops: (pops: boolean) => invoke<void>("phone_back_pops", { pops }),
   feel: (feel: Feel) => invoke<void>("phone_feel", { feel }),
   settings: () => invoke<void>("phone_settings"),
+  paste: () => invoke<Pasted>("phone_paste"),
+  /** Opens iOS's edit menu, or moves the open one with the same key. */
+  editMenu: (menu: EditMenu) => invoke<void>("phone_edit_menu", { menu }),
+  closeEditMenu: (key: number) => invoke<void>("phone_edit_menu_close", { key }),
+  /** What iOS's edit menu did, by the key of the menu that did it. */
+  onEditMenu: (handle: (chose: Chose) => void) => listen<Chose>("phone-edit-menu", (heard) => handle(heard.payload)),
   /** Dials every unconnected server again now, for when the phone's network may have changed. */
   redial: () => invoke<void>("phone_redial"),
+  /** Resolves once each of `servers` is reachable again, or after a bounded wait. */
+  resume: (servers: string[]) => invoke<void>("phone_resume", { servers }),
   open: openUrl,
 };
 
 type Page = { url: string; tunneled: boolean };
+
+/** About a box in the OS's points: Copy while there is a selection, whose text it copies, and Paste while `paste`. */
+export type EditMenu = {
+  key: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  selection: string | null;
+  paste: boolean;
+};
+
+type Chose = { did: "copy"; key: number } | { did: "paste"; key: number; pasted: Pasted };
+
+/** The OS's clipboard: its text, and its images as files on this phone. */
+export type Pasted = { text: string; files: string[] };
 
 type Insets = { top: number; left: number; right: number; bottom: number };
 

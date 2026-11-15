@@ -1,13 +1,23 @@
-import { For, Show, type JSX } from "solid-js";
+import { For, onCleanup, Show, type JSX } from "solid-js";
 import type { Glyph as Status, ServerView } from "@octopus/shared/generated.ts";
 import { turning } from "@octopus/shared/Glyph.tsx";
+import { keepInView } from "@octopus/shared/keepInView.ts";
 import { sectionView } from "@octopus/shared/state.ts";
+import type { Size } from "@octopus/shared/terminalSession.ts";
 import { swatchColor } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
+import { settles } from "./front";
 import { Icon, type IconName } from "./Icon";
 import { onPainted } from "./motion";
 import { back } from "./nav";
 import { slidingThumb } from "./thumb";
+
+/** Calls `set` with `element`'s size each time it changes, for as long as the calling component lives. */
+export function observeSize(element: HTMLElement, set: (size: Size) => void) {
+  const observer = new ResizeObserver(() => set({ width: element.clientWidth, height: element.clientHeight }));
+  observer.observe(element);
+  onCleanup(() => observer.disconnect());
+}
 
 /** The color of the section named `name`, faint while the model lists none by that name. */
 export const sectionColor = (name: string | undefined) => {
@@ -56,9 +66,15 @@ const look: Record<Status, () => JSX.Element> = {
 /** A task's status: working spins, waiting is amber, idle a grey dot, an agent not running a ring, waking a faint spinner, and an ended task its check or cross. */
 export const Glyph = (props: { status: Status }) => <>{look[props.status]()}</>;
 
-/** A server's dot: filled while reachable, hollow while not, an amber ring while the phone reconnects to it. */
+export const looksReachable = (server: ServerView | undefined) =>
+  server !== undefined && (server.reachable || settles(server.name));
+
+/** A server's dot: filled while it looks reachable, hollow while not, an amber ring while the phone reconnects to it. */
 export const ServerDot = (props: { server: ServerView | undefined; reconnecting?: boolean }) => (
-  <i class="dot srv" classList={{ off: !props.server?.reachable && !props.reconnecting, re: props.reconnecting }} />
+  <i
+    class="dot srv"
+    classList={{ off: !looksReachable(props.server) && !props.reconnecting, re: props.reconnecting }}
+  />
 );
 
 export const Id = (props: { children: JSX.Element; class?: string }) => (
@@ -101,6 +117,23 @@ export function Mi(props: {
       <Slot>{props.slot}</Slot>
       <span class="name">{props.children}</span>
       {props.end}
+    </div>
+  );
+}
+
+/** A destructive step's confirmation, in place on its red block. */
+export function Confirm(props: { text: string; act: string; run: () => void; cancel: () => void }) {
+  return (
+    <div class="confirm">
+      <span>{props.text}</span>
+      <div class="row2">
+        <button class="btn quiet" onClick={props.cancel}>
+          Cancel
+        </button>
+        <button class="btn danger" onClick={props.run}>
+          {props.act}
+        </button>
+      </div>
     </div>
   );
 }
@@ -220,6 +253,73 @@ export const Trail = (props: { parts: string[] }) => (
     )}
   </For>
 );
+
+export type FolderTab = { key: string; name: string; hint?: string; dirty?: boolean };
+
+/**
+ * A row of folder tabs under a screen's bar, the selected one kept in view: each tab's name, its unsaved dot and the
+ * hint that tells it from a tab of the same name, and its × to close it, then the + `add` makes, when it is given.
+ */
+export function FolderTabs(props: {
+  tabs: FolderTab[];
+  selected: string;
+  choose: (key: string) => void;
+  close: (key: string) => void;
+  add?: { label: string; selected: boolean; run: () => void };
+}) {
+  return (
+    <div class="tabs folder">
+      <div class="tabrow" ref={slidingThumb}>
+        <For each={props.tabs.map((tab) => tab.key)}>
+          {(key) => (
+            <Show when={props.tabs.find((tab) => tab.key === key)}>
+              {(tab) => (
+                <span
+                  ref={keepInView(() => key === props.selected)}
+                  class="tab"
+                  classList={{ on: key === props.selected }}
+                  role="button"
+                  onClick={() => props.choose(key)}
+                >
+                  <span class="name">{tab().name}</span>
+                  <Show when={tab().dirty}>
+                    <i class="udot" />
+                  </Show>
+                  <Show when={tab().hint}>{(hint) => <Id>{hint()}</Id>}</Show>
+                  <span
+                    class="x"
+                    role="button"
+                    aria-label={`Close ${tab().name}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      props.close(key);
+                    }}
+                  >
+                    <Icon name="x" />
+                  </span>
+                </span>
+              )}
+            </Show>
+          )}
+        </For>
+        <Show when={props.add}>
+          {(add) => (
+            <span
+              ref={keepInView(() => add().selected)}
+              class="tab plus"
+              classList={{ on: add().selected }}
+              role="button"
+              aria-label={add().label}
+              onClick={() => add().run()}
+            >
+              <Icon name="plus" />
+            </span>
+          )}
+        </Show>
+      </div>
+    </div>
+  );
+}
 
 /** A screen's top bar over a crumb in its section's color, back to the screen named `up`. */
 export function CrumbBar(props: {

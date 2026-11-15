@@ -1,5 +1,4 @@
 import logo from "../../../crates/mobile/icons/icon.png?url";
-import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import { createEffect, createResource, createSignal, on, onCleanup, Show, type JSX } from "solid-js";
 import { backend } from "@octopus/shared/backend.ts";
 import { isLink } from "@octopus/shared/pairing.ts";
@@ -21,7 +20,7 @@ const nameToTake = () => (named() === false ? (phoneName() ?? me()).trim() : nul
 export const [scanning, setScanning] = createSignal(false);
 
 const paste = (reading: Reading) =>
-  readText().then((text) => {
+  phone.paste().then(({ text }) => {
     const invite = text.trim();
     if (invite === "") return report(`The clipboard holds no ${reading}.`);
     openSheet({ is: "pair", invite, reading });

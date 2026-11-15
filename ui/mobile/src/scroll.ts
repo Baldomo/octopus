@@ -6,6 +6,8 @@ const beyond = (at: number, end: number, bend: (over: number) => number) =>
 
 /** How much of its speed a thrown scroll keeps each millisecond, as iOS's scroll views do. */
 const LN_DECAY = Math.log(0.998);
+/** A coast slower than this, in units a second, no longer reads as moving, so a touch on it is a tap. */
+const MOVING_SPEED = 50;
 
 /**
  * One axis a finger scrolls: where it stands, its far end past 0, where a throw toward a point comes to rest, and what
@@ -61,12 +63,24 @@ function coast(scroll: Scroll, from: number, velocity: number): Running {
  */
 export function scroller(scroll: Scroll) {
   let running: Running | null = null;
-  const stop = () => running?.stop();
+  let thrown = { at: 0, speed: 0 };
+  const stop = () => {
+    running?.stop();
+    running = null;
+  };
   const release = (velocity: number) => {
     stop();
-    running = coast(scroll, scroll.at(), velocity);
+    const coasting = coast(scroll, scroll.at(), velocity);
+    running = coasting;
+    thrown = { at: performance.now(), speed: Math.abs(velocity) };
+    void coasting.done.then(() => {
+      if (running === coasting) running = null;
+    });
   };
   return {
+    /** Whether a throw still moves it visibly. */
+    coasting: () =>
+      running !== null && thrown.speed * Math.exp(LN_DECAY * (performance.now() - thrown.at)) > MOVING_SPEED,
     stop,
     settle: () => release(0),
     grab: () => {

@@ -1,5 +1,4 @@
-//! What the OS keeps for this phone: its device key, in the iOS Keychain or sealed under an Android Keystore key, and
-//! the name it reports for the device. On Android the system bars also take the app's appearance from here.
+//! What the phone's OS keeps and shows for the app.
 
 use anyhow::Context;
 use octopus_proto::device::DeviceKey;
@@ -19,7 +18,7 @@ pub fn key(app: &AppHandle, before_making: impl FnOnce() -> anyhow::Result<()>) 
     Ok(key)
 }
 
-pub use os::{back_pops, insets, name, settings};
+pub use os::name;
 
 /// How far the status bar, the display's cutout and the navigation bar reach over the page, in CSS pixels.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -29,6 +28,24 @@ pub struct Insets {
     pub left: f64,
     pub right: f64,
     pub bottom: f64,
+}
+
+/// The page's insets where its webview leaves them out of the safe area, read again whenever the page resizes. Async,
+/// so the OS answers on its own thread while this one waits.
+#[tauri::command]
+pub(crate) async fn phone_insets(app: AppHandle) -> Result<Option<Insets>, String> {
+    os::insets(&app).map_err(|error| format!("{error:#}"))
+}
+
+/// Opens this app's page of the OS's settings, where a denied microphone is granted.
+#[tauri::command]
+pub(crate) fn phone_settings(app: AppHandle) -> Result<(), String> {
+    os::settings(&app).map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub(crate) async fn phone_back_pops(app: AppHandle, pops: bool) -> Result<(), String> {
+    os::back_pops(&app, pops).map_err(|error| format!("{error:#}"))
 }
 
 /// Whether the phone may record, asking the user the first time and waiting for the answer.
@@ -160,13 +177,13 @@ mod os {
     use tauri::plugin::{PluginHandle, TauriPlugin};
     use tauri::{AppHandle, Manager, Wry};
 
-    /// `DevicePlugin.kt`, which seals the key under a Keystore key that never leaves the device.
-    struct Keeper(PluginHandle<Wry>);
+    /// The Kotlin `DevicePlugin`, every Android call's way to the OS.
+    struct DevicePlugin(PluginHandle<Wry>);
 
     pub fn plugin() -> TauriPlugin<Wry> {
         tauri::plugin::Builder::new("device")
             .setup(|app, api| {
-                app.manage(Keeper(api.register_android_plugin("com.noi.octopus", "DevicePlugin")?));
+                app.manage(DevicePlugin(api.register_android_plugin("com.noi.octopus", "DevicePlugin")?));
                 Ok(())
             })
             .build()
@@ -210,7 +227,7 @@ mod os {
         command: &str,
         args: impl Serialize,
     ) -> anyhow::Result<T> {
-        Ok(app.state::<Keeper>().0.run_mobile_plugin(command, args)?)
+        Ok(app.state::<DevicePlugin>().0.run_mobile_plugin(command, args)?)
     }
 
     #[derive(Serialize)]

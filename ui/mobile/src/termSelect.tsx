@@ -1,11 +1,12 @@
 import type { Terminal } from "@xterm/xterm";
-import { createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { act, scale, ui } from "@octopus/shared/state.ts";
 import { urlsIn } from "@octopus/shared/terminalUrls.ts";
+import { px } from "@octopus/shared/tokens.ts";
 import { feel } from "./feel";
-import { phone } from "./phone";
+import { type Pasted, phone } from "./phone";
 import { LONG_PRESS_MS, type Point } from "./press";
-import { copy } from "./Toast";
+import { type Box, SelectionMenu } from "./selectionMenu";
 import { COMMIT_PX, fingerIn, keepTouch } from "./touch";
 
 /** A buffer cell; `row` counts from the first line of the scrollback. */
@@ -18,8 +19,6 @@ type Char = { text: string; cell: Cell; width: number };
 
 /** xterm's double-click word separators, so a word reads the same on the phone and the desktop. */
 const SEPARATORS = " ()[]{}',\"`";
-const MENU_GAP_PT = 8;
-
 const before = (a: Cell, b: Cell) => a.row < b.row || (a.row === b.row && a.col < b.col);
 const ordered = (a: Cell, b: Cell): Span => (before(b, a) ? { from: b, to: a } : { from: a, to: b });
 
@@ -97,9 +96,11 @@ export function termSelection(props: {
   size: () => Size;
   view: () => Size;
   pan: () => Point;
-  /** Whether the menu offers Paste, and what Paste does. */
+  /** Whether the terminal's tab is chosen and its Task screen is on top. */
+  shown: () => boolean;
+  /** Whether the menu offers Paste, and what to do with what it pastes. */
   canPaste: () => boolean;
-  paste: () => void;
+  paste: (pasted: Pasted) => void;
 }) {
   const { xterm } = props;
   /** Read again on every frame xterm draws, since scrolling and trimmed scrollback move it without a change event. */
@@ -121,14 +122,20 @@ export function termSelection(props: {
     xterm.clearSelection();
     setSpot(null);
   };
-  const select = ({ from, to }: Span) =>
+  /** xterm skips onSelectionChange for a selection equal to the last one it announced, even after a clear. */
+  const select = ({ from, to }: Span) => {
     xterm.select(from.col, from.row, (to.row - from.row) * xterm.cols + to.col - from.col + 1);
+    readSelection();
+  };
   const listeners = [
     xterm.onSelectionChange(readSelection),
     xterm.onRender(readSelection),
     xterm.onResize(() => dismiss()),
   ];
   onCleanup(() => listeners.forEach((listener) => listener.dispose()));
+  createEffect(() => {
+    if (!props.shown()) dismiss();
+  });
 
   /** The cell under `at`, or null off the drawn screen unless `clamped` to its nearest cell. */
   const cellAt = (at: Point, clamped: boolean): Cell | null => {
@@ -261,35 +268,39 @@ export function termSelection(props: {
       });
   };
 
-  const copySelection = () => act(copy(xterm.getSelection(), "the selection").then(dismiss));
-  const pasteHere = () => {
-    dismiss();
-    props.paste();
-  };
-
   const placed = (point: Point) => ({
     left: `calc(var(--g1) + ${point.x}px)`,
     top: `calc(var(--g1) + ${point.y}px)`,
   });
-  const [menuSize, setMenuSize] = createSignal<Size | null>(null);
-  const measureMenu = (menu: HTMLElement) => {
-    const observer = new ResizeObserver(() => setMenuSize({ width: menu.offsetWidth, height: menu.offsetHeight }));
-    observer.observe(menu);
-    onCleanup(() => observer.disconnect());
-  };
   /** Over the first line, else under the last, else over the selection; centered on one line, else on the pane. */
-  const menuAt = (held: Span) => {
-    const size = menuSize();
+  const menuAt = (held: Span, size: Size | null) => {
     if (size === null) return { visibility: "hidden" as const };
     const top = cornerOf(held.from);
     const bottom = cornerOf({ col: held.to.col + 1, row: held.to.row + 1 });
     const zoom = scale(ui.prefs);
     const room = { width: props.view().width / zoom, height: props.view().height / zoom };
     const middle = held.from.row === held.to.row ? (top.x + bottom.x) / 2 : room.width / 2;
-    const over = top.y - MENU_GAP_PT - size.height;
-    const under = bottom.y + MENU_GAP_PT;
+    const gap = px("--g2");
+    const over = top.y - gap - size.height;
+    const under = bottom.y + gap;
     const y = over >= 0 ? over : under + size.height <= room.height ? under : 0;
     return placed({ x: Math.min(Math.max(middle - size.width / 2, 0), room.width - size.width), y });
+  };
+
+  /**
+   * The span's box in the OS's points: its one line, else its whole lines. The body's zoom scales the page, and WebKit
+   * may report a box inside it before or after the zoom, the body's own box telling which.
+   */
+  const boxOf = (held: Span): Box => {
+    const screen = props.screen()!.getBoundingClientRect();
+    const cell = { width: screen.width / xterm.cols, height: screen.height / xterm.rows };
+    const oneLine = held.from.row === held.to.row;
+    const left = oneLine ? screen.left + held.from.col * cell.width : screen.left;
+    const right = oneLine ? screen.left + (held.to.col + 1) * cell.width : screen.right;
+    const top = screen.top + (held.from.row - xterm.buffer.active.viewportY) * cell.height;
+    const points = window.innerWidth / document.body.getBoundingClientRect().width;
+    const lines = held.to.row - held.from.row + 1;
+    return { x: left * points, y: top * points, width: (right - left) * points, height: lines * cell.height * points };
   };
 
   /** The selection, else the spot while the menu has Paste to offer there. */
@@ -314,14 +325,14 @@ export function termSelection(props: {
       </Show>
       <Show when={!moving() && menuAnchor()}>
         {(at) => (
-          <div ref={measureMenu} class="selmenu" style={menuAt(at())}>
-            <Show when={span()}>
-              <button onClick={copySelection}>Copy</button>
-            </Show>
-            <Show when={props.canPaste()}>
-              <button onClick={pasteHere}>Paste</button>
-            </Show>
-          </div>
+          <SelectionMenu
+            selection={span() === null ? null : xterm.getSelection()}
+            paste={props.canPaste()}
+            place={(size) => menuAt(at(), size)}
+            box={() => boxOf(at())}
+            done={dismiss}
+            pasted={props.paste}
+          />
         )}
       </Show>
     </>

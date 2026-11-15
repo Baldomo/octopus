@@ -19,6 +19,7 @@ octopus-desktop = { path = "crates/desktop" }
 iroh = { version = "=1.4.1", default-features = false, features = ["tls-ring", "fast-apple-datapath"] }
 iroh-relay = { version = "=1.4.1", default-features = false, features = ["server"] }
 anyhow = "1.0.104"
+base64 = "0.22.1"
 block2 = "0.6.2"
 dirs = "7.0.0"
 nix = "0.31.3"
