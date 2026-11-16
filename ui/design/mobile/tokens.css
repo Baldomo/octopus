@@ -1,0 +1,29 @@
+:root{
+  color-scheme:light dark;
+  /* surfaces and ink */
+  --bg:light-dark(#fcfcfd,#101115); --code:var(--bg); --fill:light-dark(#f0f1f4,#1c1e24); --line:light-dark(#e6e7eb,#22242b);
+  --text:light-dark(#18191d,#e7e8eb); --dim:light-dark(#575c66,#9298a2); --faint:light-dark(#8a8f99,#646973);
+  --term-text:light-dark(#2a2d33,#cdd1d8); --select:light-dark(rgba(24,25,29,.14),rgba(231,232,235,.2));
+  --accent:light-dark(#5b5bd6,#8f8cff); --accent-ink:light-dark(rgba(91,91,214,.1),rgba(143,140,255,.14));
+  --working:light-dark(#16a34a,#4ade80); --needs:light-dark(#d97706,#fbbf24); --info:light-dark(#1a68c8,#6cb8ff); --err:light-dark(#dc2626,#f87171); --violet:light-dark(#a33ac6,#e19cff);
+  --sheet:light-dark(#ffffff,#17181d); --sheet-fill:light-dark(#f0f1f4,#24262d); --scrim:light-dark(rgba(24,25,29,.28),rgba(0,0,0,.6));
+  /* section colors: the desktop's soft tone, one OKLCH lightness and chroma per scheme */
+  --ws-violet-soft:light-dark(oklch(0.62 0.11 310),oklch(0.8 0.11 310)); --ws-sky-soft:light-dark(oklch(0.62 0.11 225),oklch(0.8 0.11 225));
+  --ws-teal-soft:light-dark(oklch(0.62 0.11 195),oklch(0.8 0.11 195)); --ws-indigo-soft:light-dark(oklch(0.62 0.11 280),oklch(0.8 0.11 280));
+  /* grid: one 4pt baseline; rails at 20 + 32n from the left edge, one rail 20 from the right */
+  --rail:20px; --step:32px; --slot:20px;
+  /* fixed heights */
+  --h-chip:32px; --h-row:48px; --h-bar:56px; --h-btn:40px;
+  /* the widest a folder tab's label runs before its ellipsis */
+  --w-tab-label:160px;
+  /* gaps */
+  --g1:4px; --g2:8px; --g3:12px; --g4:20px; --g5:32px;
+  /* radii */
+  --r1:8px; --r2:12px; --r3:24px; --pill:999px;
+  /* type: every line height is a multiple of 8 except the terminal's 20, so text centered in a 32, 48 or 56 row lands on the grid */
+  --ui:"Inter",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace; --mono-terminal:"MesloLGS NF",var(--mono);
+  --t-title:600 28px/32px var(--ui); --t-body:450 17px/24px var(--ui); --t-head:600 17px/24px var(--ui);
+  --t-sub:450 15px/24px var(--ui); --t-cap:500 13px/16px var(--ui); --t-id:400 13px/16px var(--mono); --t-term:400 13px/20px var(--mono-terminal);
+  /* the terminal the phone shares with the desktop starts from these */
+  --fs-mono:12px; --scrollbar-w:6px;
+}

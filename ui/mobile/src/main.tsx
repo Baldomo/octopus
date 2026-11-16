@@ -1,6 +1,8 @@
 import inter from "@fontsource-variable/inter/files/inter-latin-opsz-normal.woff2?url";
 import { createEffect, createSignal, For, Match, on, Show, Switch } from "solid-js";
-import "virtual:design.css";
+import "../../design/desktop/tokens.css";
+import "../../design/mobile/tokens.css";
+import "../../design/mobile/components.css";
 import "./app.css";
 import { backend, events } from "@octopus/shared/backend.ts";
 import { loadFonts } from "@octopus/shared/fonts.ts";

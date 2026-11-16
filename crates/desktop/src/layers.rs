@@ -104,7 +104,7 @@ fn appear(window: &Window, base: &Webview, appearance: Appearance) -> tauri::Res
     paint(window, base, appearance.theme().map_or_else(|| window.theme(), Ok)?)
 }
 
-/// Paints DESIGN.html's `--bg` of the window's appearance under the UI, so no frame shows another color.
+/// Paints the desktop tokens' `--bg` of the window's appearance under the UI, so no frame shows another color.
 fn paint(window: &Window, base: &Webview, theme: Theme) -> tauri::Result<()> {
     let bg = if theme == Theme::Dark { env!("OCTOPUS_BG_DARK") } else { env!("OCTOPUS_BG_LIGHT") };
     let color: tauri::window::Color = bg.parse().expect("build.rs emits --bg as two hex colors");

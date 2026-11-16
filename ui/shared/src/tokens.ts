@@ -1,4 +1,4 @@
-/** Values from DESIGN.html, read back from the stylesheet it compiles into. */
+/** Values from the design tokens in `ui/design/`, read back from the app's stylesheet. */
 
 import { createSignal } from "solid-js";
 import type { Swatch } from "./generated";

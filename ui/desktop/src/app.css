@@ -1,4 +1,4 @@
-/* Layout only: every component's look comes from DESIGN.html's #components block. */
+/* Layout only: every component's look comes from ui/design/desktop/components.css. */
 
 /* The zoom scales the whole UI but the title bar, which keeps its height in points. */
 :root {

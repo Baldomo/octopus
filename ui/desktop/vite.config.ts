@@ -1,10 +1,10 @@
 import { defineConfig } from "vite";
 import solid from "vite-plugin-solid";
-import { design } from "../shared/design.ts";
 import { pdfAssets } from "../shared/pdfjs.ts";
 
 export default defineConfig({
-  plugins: [design(["DESIGN.html", ["tokens", "components"]]), pdfAssets(), solid()],
+  plugins: [pdfAssets(), solid()],
   clearScreen: false,
-  build: { target: "es2022", chunkSizeWarningLimit: 4096 },
+  // light-dark() stays as written, so a token resolves against whichever scheme the element asking for it carries.
+  build: { target: "es2022", cssTarget: ["safari17.5", "chrome123"], chunkSizeWarningLimit: 4096 },
 });

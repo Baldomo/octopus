@@ -1,6 +1,6 @@
 /*
- * The phone's screens around DESIGN-MOBILE.html's tokens and components: the content box between the OS's insets,
- * the sheet layer, and the screen parts the design draws in its rendered examples.
+ * The phone's screens around the tokens and components in ui/design/mobile/: the content box between the OS's insets,
+ * the sheet layer, and the parts of each screen.
  */
 
 :where(button) {
@@ -949,7 +949,7 @@ body {
 }
 
 /*
- * Motion: what DESIGN-MOBILE.html's motion rule draws between states. Pressing shows at once and fades out on
+ * Motion between states. Pressing shows at once and fades out on
  * release; selections slide; a status settles into its new look; reduced motion keeps only the spinners turning.
  */
 @keyframes spin {

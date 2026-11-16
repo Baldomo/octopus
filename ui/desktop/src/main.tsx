@@ -1,4 +1,5 @@
-import "virtual:design.css";
+import "../../design/desktop/tokens.css";
+import "../../design/desktop/components.css";
 import "./app.css";
 import { backend, events } from "@octopus/shared/backend.ts";
 import inter from "@fontsource-variable/inter/files/inter-latin-wght-normal.woff2?url";

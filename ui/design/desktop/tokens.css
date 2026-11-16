@@ -1,0 +1,31 @@
+:root{
+  color-scheme:light dark;
+  --bg:light-dark(#eeeff2,#0a0b0d); --panel:light-dark(#f7f7f9,#101115); --raised:light-dark(#ffffff,#16171c); --hover:light-dark(#e6e7eb,#1c1e24); --term:light-dark(#fcfcfd,#0c0d10); --code:var(--term); --overlay:light-dark(#fafafb,#121316);
+  --line:light-dark(#e1e2e7,#202228); --line2:light-dark(#d2d4da,#2b2e36);
+  --text:light-dark(#18191d,#e7e8eb); --dim:light-dark(#575c66,#9298a2); --faint:light-dark(#8a8f99,#5d626c);
+  --term-text:light-dark(#2a2d33,#cdd1d8); --gutter:light-dark(#b9bcc3,#3a3e47); --ansi-black:light-dark(var(--text),var(--raised));
+  --accent:light-dark(#5b5bd6,#8f8cff); --accent-ink:light-dark(rgba(91,91,214,.1),rgba(143,140,255,.14)); --accent-line:light-dark(rgba(91,91,214,.4),rgba(143,140,255,.38));
+  --working:light-dark(#16a34a,#4ade80); --needs:light-dark(#d97706,#fbbf24); --err:light-dark(#dc2626,#f87171); --info:light-dark(#1a68c8,#6cb8ff); --violet:light-dark(#a33ac6,#e19cff);
+  --shadow:light-dark(rgba(24,25,29,.18),rgba(0,0,0,.7));
+  --syn-keyword:light-dark(var(--info),#569cd6); --syn-flow:light-dark(var(--violet),#c586c0); --syn-string:light-dark(var(--ws-orange-deep),#ce9178); --syn-comment:light-dark(var(--ws-green-deep),#608b4e);
+  --syn-number:light-dark(var(--ws-mint-deep),#b5cea8); --syn-type:light-dark(var(--ws-teal-deep),#3dc9b0); --syn-variable:light-dark(var(--ws-blue-deep),#74b0df); --syn-key:light-dark(var(--ws-sky-deep),#9cdcfe);
+  --syn-regexp:light-dark(var(--ws-pink-deep),#b46695); --syn-annotation:light-dark(var(--ws-red-deep),#cc6666); --syn-invalid:light-dark(var(--err),#f44747); --syn-delimiter:light-dark(var(--term-text),#dcdcdc);
+  --syn-bracket-1:light-dark(var(--ws-amber-deep),#ffd700); --syn-bracket-2:light-dark(var(--ws-violet-deep),#da70d6); --syn-bracket-3:light-dark(var(--ws-blue-deep),#179fff);
+  --code-guide:light-dark(var(--line2),#404040); --code-guide-active:light-dark(var(--faint),#707070);
+  --r1:6px; --r2:10px; --r3:15px;
+  --s1:4px; --s2:9px; --s3:13px; --s4:18px; --s5:22px; --s6:26px;
+  --hit:26px; --chrome-h:38px; --tabs-h:37px; --status-h:29px; --sidebar-w:315px; --scrollbar-w:7px; --scrollbar-gap:1px; --scrollbar-r:3px;
+  --ui:"Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  --mono-terminal:"MesloLGS NF",var(--mono);
+  --fs-ui:14px; --fs-small:13px; --fs-micro:12px; --fs-head:22px; --fs-mono:13px;
+  /* the phone: every target a finger hits is --touch tall */
+  --touch:44px; --fs-phone:15px; --fs-phone-head:28px;
+  --lh-ui:1.5; --lh-mono:1.6;
+  --ease:cubic-bezier(.2,.8,.2,1); --t-sidebar:220ms; --t-hover:150ms;
+  /* workspace colors, --ws-<hue>-<tone>: 12 hues every 30°, each tone one OKLCH lightness and chroma per scheme */
+  --ws-red-mist:light-dark(oklch(0.68 0.06 22),oklch(0.86 0.06 22)); --ws-orange-mist:light-dark(oklch(0.68 0.06 52),oklch(0.86 0.06 52)); --ws-amber-mist:light-dark(oklch(0.68 0.06 82),oklch(0.86 0.06 82)); --ws-lime-mist:light-dark(oklch(0.68 0.06 115),oklch(0.86 0.06 115)); --ws-green-mist:light-dark(oklch(0.68 0.06 145),oklch(0.86 0.06 145)); --ws-mint-mist:light-dark(oklch(0.68 0.06 170),oklch(0.86 0.06 170)); --ws-teal-mist:light-dark(oklch(0.68 0.06 195),oklch(0.86 0.06 195)); --ws-sky-mist:light-dark(oklch(0.68 0.06 225),oklch(0.86 0.06 225)); --ws-blue-mist:light-dark(oklch(0.68 0.06 255),oklch(0.86 0.06 255)); --ws-indigo-mist:light-dark(oklch(0.68 0.06 280),oklch(0.86 0.06 280)); --ws-violet-mist:light-dark(oklch(0.68 0.06 310),oklch(0.86 0.06 310)); --ws-pink-mist:light-dark(oklch(0.68 0.06 345),oklch(0.86 0.06 345));
+  --ws-red-soft:light-dark(oklch(0.62 0.11 22),oklch(0.8 0.11 22)); --ws-orange-soft:light-dark(oklch(0.62 0.11 52),oklch(0.8 0.11 52)); --ws-amber-soft:light-dark(oklch(0.62 0.11 82),oklch(0.8 0.11 82)); --ws-lime-soft:light-dark(oklch(0.62 0.11 115),oklch(0.8 0.11 115)); --ws-green-soft:light-dark(oklch(0.62 0.11 145),oklch(0.8 0.11 145)); --ws-mint-soft:light-dark(oklch(0.62 0.11 170),oklch(0.8 0.11 170)); --ws-teal-soft:light-dark(oklch(0.62 0.11 195),oklch(0.8 0.11 195)); --ws-sky-soft:light-dark(oklch(0.62 0.11 225),oklch(0.8 0.11 225)); --ws-blue-soft:light-dark(oklch(0.62 0.11 255),oklch(0.8 0.11 255)); --ws-indigo-soft:light-dark(oklch(0.62 0.11 280),oklch(0.8 0.11 280)); --ws-violet-soft:light-dark(oklch(0.62 0.11 310),oklch(0.8 0.11 310)); --ws-pink-soft:light-dark(oklch(0.62 0.11 345),oklch(0.8 0.11 345));
+  --ws-red-vivid:light-dark(oklch(0.56 0.15 22),oklch(0.74 0.15 22)); --ws-orange-vivid:light-dark(oklch(0.56 0.15 52),oklch(0.74 0.15 52)); --ws-amber-vivid:light-dark(oklch(0.56 0.15 82),oklch(0.74 0.15 82)); --ws-lime-vivid:light-dark(oklch(0.56 0.15 115),oklch(0.74 0.15 115)); --ws-green-vivid:light-dark(oklch(0.56 0.15 145),oklch(0.74 0.15 145)); --ws-mint-vivid:light-dark(oklch(0.56 0.15 170),oklch(0.74 0.15 170)); --ws-teal-vivid:light-dark(oklch(0.56 0.15 195),oklch(0.74 0.15 195)); --ws-sky-vivid:light-dark(oklch(0.56 0.15 225),oklch(0.74 0.15 225)); --ws-blue-vivid:light-dark(oklch(0.56 0.15 255),oklch(0.74 0.15 255)); --ws-indigo-vivid:light-dark(oklch(0.56 0.15 280),oklch(0.74 0.15 280)); --ws-violet-vivid:light-dark(oklch(0.56 0.15 310),oklch(0.74 0.15 310)); --ws-pink-vivid:light-dark(oklch(0.56 0.15 345),oklch(0.74 0.15 345));
+  --ws-red-deep:light-dark(oklch(0.46 0.12 22),oklch(0.64 0.12 22)); --ws-orange-deep:light-dark(oklch(0.46 0.12 52),oklch(0.64 0.12 52)); --ws-amber-deep:light-dark(oklch(0.46 0.12 82),oklch(0.64 0.12 82)); --ws-lime-deep:light-dark(oklch(0.46 0.12 115),oklch(0.64 0.12 115)); --ws-green-deep:light-dark(oklch(0.46 0.12 145),oklch(0.64 0.12 145)); --ws-mint-deep:light-dark(oklch(0.46 0.12 170),oklch(0.64 0.12 170)); --ws-teal-deep:light-dark(oklch(0.46 0.12 195),oklch(0.64 0.12 195)); --ws-sky-deep:light-dark(oklch(0.46 0.12 225),oklch(0.64 0.12 225)); --ws-blue-deep:light-dark(oklch(0.46 0.12 255),oklch(0.64 0.12 255)); --ws-indigo-deep:light-dark(oklch(0.46 0.12 280),oklch(0.64 0.12 280)); --ws-violet-deep:light-dark(oklch(0.46 0.12 310),oklch(0.64 0.12 310)); --ws-pink-deep:light-dark(oklch(0.46 0.12 345),oklch(0.64 0.12 345));
+}

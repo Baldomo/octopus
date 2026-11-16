@@ -1,9 +1,9 @@
-const DESIGN: &str = "../../DESIGN.html";
+const TOKENS: &str = "../../ui/design/desktop/tokens.css";
 
-fn token(design: &str, name: &str) -> String {
+fn token(tokens: &str, name: &str) -> String {
     let declared = format!("--{name}:");
-    let start = design.find(&declared).unwrap_or_else(|| panic!("DESIGN.html declares --{name}")) + declared.len();
-    let value = &design[start..];
+    let start = tokens.find(&declared).unwrap_or_else(|| panic!("{TOKENS} declares --{name}")) + declared.len();
+    let value = &tokens[start..];
     value[..value.find(';').unwrap_or_else(|| panic!("--{name} ends with ;"))].trim().to_string()
 }
 
@@ -15,10 +15,10 @@ fn is_hex(color: &str) -> bool {
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed={DESIGN}");
-    let design = std::fs::read_to_string(DESIGN).expect("read DESIGN.html");
+    println!("cargo:rerun-if-changed={TOKENS}");
+    let tokens = std::fs::read_to_string(TOKENS).expect("read the desktop tokens");
     // The window paints --bg before the UI loads, so launch never flashes another color.
-    let bg = token(&design, "bg");
+    let bg = token(&tokens, "bg");
     let (light, dark) = bg
         .strip_prefix("light-dark(")
         .and_then(|pair| pair.strip_suffix(')'))
@@ -29,7 +29,7 @@ fn main() {
     println!("cargo:rustc-env=OCTOPUS_BG_LIGHT={light}");
     println!("cargo:rustc-env=OCTOPUS_BG_DARK={dark}");
     // The traffic lights center on the title bar, and the float layer hangs from its bottom edge.
-    let chrome = token(&design, "chrome-h");
+    let chrome = token(&tokens, "chrome-h");
     println!("cargo:rustc-env=OCTOPUS_CHROME_H={}", chrome.strip_suffix("px").expect("--chrome-h is in px"));
     tauri_build::build();
 }
