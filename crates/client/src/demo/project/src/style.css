@@ -1,0 +1,22 @@
+body {
+  font: 16px/1.5 system-ui, sans-serif;
+  margin: 24px;
+  color: #12303a;
+  background: #f4f8f9;
+}
+
+.high {
+  color: #1f6f8b;
+  fill: #1f6f8b;
+}
+
+.low {
+  color: #8aa6ae;
+  fill: #8aa6ae;
+}
+
+polyline {
+  fill: none;
+  stroke: #1f6f8b;
+  stroke-width: 2;
+}

@@ -1,6 +1,7 @@
 pub mod account;
 pub mod cache;
 pub mod connection;
+pub mod demo;
 pub mod qr;
 pub mod servers;
 pub mod tunnel;

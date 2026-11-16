@@ -122,6 +122,7 @@ pub enum CallError {
 enum Link {
     Local(PathBuf),
     Remote { connection: RemoteConnection, _dialer: Dialer },
+    Demo(crate::demo::Line),
 }
 
 impl Link {
@@ -132,6 +133,7 @@ impl Link {
                 let (send, receive) = connection.open_bi().await?;
                 Ok(Box::new(tokio::io::join(receive, send)))
             }
+            Self::Demo(line) => Ok(line.open()),
         }
     }
 }
@@ -275,6 +277,9 @@ impl Connection {
     pub async fn connect(address: &Address, me: &Identity) -> anyhow::Result<Self> {
         let link = match address {
             Address::Local { socket } => Link::Local(socket.clone()),
+            Address::Remote { key, relay } if crate::demo::reaches(key, relay) => {
+                Link::Demo(crate::demo::Line::dial(me.key.public()))
+            }
             Address::Remote { key, relay } => {
                 let dialer = me.dialer().await?;
                 let connection = dialer.connect(&me.key, *key, relay).await?;

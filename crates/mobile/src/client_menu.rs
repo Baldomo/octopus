@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
+use octopus_client::demo;
 use octopus_client::servers::{self, Config};
 use octopus_proto::account::Link;
 use octopus_proto::pairing::Invite;
@@ -52,6 +53,9 @@ pub(crate) fn phone_named(phone: State<Phone>) -> bool {
 /// invite that is wrong.
 #[tauri::command]
 pub(crate) fn phone_invite_key(invite: String) -> Result<String, String> {
+    if let Some(key) = demo::key_of(&invite) {
+        return Ok(key.hex());
+    }
     let invite: Invite = invite.trim().parse()?;
     Ok(invite.server.hex())
 }
@@ -73,6 +77,9 @@ pub(crate) async fn phone_pair(
     invite: String,
     name: Option<String>,
 ) -> Result<String, String> {
+    if demo::is_code(&invite) {
+        return named(&hub, &phone, name, async || demo::pair(&hub.me)).await;
+    }
     let invite: Invite = invite.trim().parse()?;
     if let Some(listed) = hub.listed_as(&invite.server) {
         return Err(format!("Already paired as {listed}."));
