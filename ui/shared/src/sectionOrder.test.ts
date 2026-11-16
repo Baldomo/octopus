@@ -20,8 +20,18 @@ test("sections follow the saved order, new ones append in their default order, a
 
 test("a drag moves only the dragged name, keeping an offline section's saved place and saving a new one where it shows", () => {
   const saved = ["willow", "offline", "acme", "octopus"];
-  assert.deepEqual(placeAmong(saved, ["acme", "willow", "octopus"], "willow"), ["offline", "acme", "willow", "octopus"]);
-  assert.deepEqual(placeAmong(saved, ["acme", "octopus", "willow"], "willow"), ["offline", "acme", "octopus", "willow"]);
+  assert.deepEqual(placeAmong(saved, ["acme", "willow", "octopus"], "willow"), [
+    "offline",
+    "acme",
+    "willow",
+    "octopus",
+  ]);
+  assert.deepEqual(placeAmong(saved, ["acme", "octopus", "willow"], "willow"), [
+    "offline",
+    "acme",
+    "octopus",
+    "willow",
+  ]);
   assert.deepEqual(placeAmong(["octopus"], ["acme", "octopus", "dotfiles"], "acme"), ["acme", "octopus", "dotfiles"]);
 });
 

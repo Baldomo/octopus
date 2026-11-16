@@ -1,28 +1,43 @@
-<h1 align="center">
-  <img src="crates/desktop/icons/icon.png" alt="" width="128">
-  <br>octopus
-</h1>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/zabealbe/octopus/raw/assets/readme/banner-dark.jpg">
+  <img src="https://github.com/zabealbe/octopus/raw/assets/readme/banner.jpg" alt="octopus: collaborative PEER-TO-PEER control surface for your agents. Across every machine you own." width="100%">
+</picture>
 
 <p align="center">
-  Run your coding agents in parallel, on your own machines, from your laptop or your phone.
-  <br>
   <a href="#quick-start">Quick start</a>
   ·
   <a href="docs/CONTRIBUTING.md">Contributing</a>
 </p>
 
-<img src="https://github.com/zabealbe/octopus/raw/assets/readme/hero.png" alt="One task on three devices: the tablet holds the agent's terminal and fills its screen, the laptop shows the same terminal read-only beside a k6 load-test report in its browser with Take over, and the phone lists the live tasks with each agent's status" width="100%">
+### One terminal, many screens
 
-- **Agents in parallel.** Every task runs its own Claude Code agent in its own terminal. Tasks nest into subtasks and group by workspace, and a glance at the sidebar or the Tasks board shows which agents are working and which wait on you.
+Open the same task on your laptop and your phone. A visible lock shows which device types into the terminal, and any other takes over with one tap.
+
+<img src="https://github.com/zabealbe/octopus/raw/assets/readme/lock.png" alt="The same task on the laptop, read-only and held by the iPhone, and on the phone, which types into its terminal" width="100%">
+
+### Agents in parallel
+
+Every task runs its own Claude Code agent in its own terminal. Tasks nest into subtasks and group by workspace, and a glance at the sidebar or the Tasks board shows which agents are working and which wait on you.
+
+<img src="https://github.com/zabealbe/octopus/raw/assets/readme/parallel.png" alt="An agent's terminal on the laptop, the phone's list of every computer's tasks, and an agent waiting on a permission prompt" width="100%">
+
+### Files, browser and terminals in one window
+
+Each task has an editor, a browser and terminal panels beside its agent.
+
+<img src="https://github.com/zabealbe/octopus/raw/assets/readme/window.png" alt="The laptop with the task's browser on its pull request beside the agent, and the same browser on the phone" width="100%">
+
+### Pair a server, share it
+
+Pair a device by scanning a server's QR code or pasting its invite. Hand the same invite to a teammate and their account gets in, every device of theirs with it. The server's menu lists each account, and any of them can be revoked.
+
+<img src="https://github.com/zabealbe/octopus/raw/assets/readme/share.png" alt="The laptop showing a server's one-time pairing code, and a teammate's phone that read it, about to pair" width="100%">
+
+### And
+
 - **Any folder, three ways.** A task works in any folder on its server: in place, in a git worktree of its own, or in a worktree that also clones your ignored files such as `.env` and `node_modules` (on a file system that clones files, like APFS).
-- **Files, browser and terminals in one window.** Each task has an editor, a browser and terminal panels beside its agent.
-- **One terminal, many screens.** Open the same task on your laptop and your phone. A visible lock shows which device types into the terminal, and any other takes over with one tap.
 - **A phone app for iOS and Android.** Pair it with your servers by scanning a QR code, then check on agents and answer them from anywhere.
 - **Your machines.** Tasks run on your laptop, and on any Mac mini or Linux box you install the server on. Other devices reach them through an iroh relay that forwards packets it cannot read: n0's public one or your own.
-
-<img src="https://github.com/zabealbe/octopus/raw/assets/readme/board.png" alt="The Tasks board: a workspace's tasks in pinned, temporary, completed and cancelled columns, each live task marked working, needs you or idle" width="100%">
-
-<img src="https://github.com/zabealbe/octopus/raw/assets/readme/devices.png" alt="The phone app listing tasks, and following an agent mid-run" width="100%">
 
 ## Quick start
 
