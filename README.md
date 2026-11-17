@@ -1,6 +1,6 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/zabealbe/octopus/raw/assets/readme/banner-dark.jpg">
-  <img src="https://github.com/zabealbe/octopus/raw/assets/readme/banner.jpg" alt="octopus: collaborative PEER-TO-PEER control surface for your agents. Across every machine you own." width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/readme/banner-dark.jpg">
+  <img src="docs/readme/banner.jpg" alt="octopus: collaborative PEER-TO-PEER control surface for your agents. Across every machine you own." width="100%">
 </picture>
 
 <p align="center">
@@ -13,25 +13,25 @@
 
 Open the same task on your laptop and your phone. A visible lock shows which device types into the terminal, and any other takes over with one tap.
 
-<img src="https://github.com/zabealbe/octopus/raw/assets/readme/lock.png" alt="The same task on the laptop, read-only and held by the iPhone, and on the phone, which types into its terminal" width="100%">
+<img src="docs/readme/lock.png" alt="The same task on the laptop, read-only and held by the iPhone, and on the phone, which types into its terminal" width="100%">
 
 ### Agents in parallel
 
 Every task runs its own Claude Code agent in its own terminal. Tasks nest into subtasks and group by workspace, and a glance at the sidebar or the Tasks board shows which agents are working and which wait on you.
 
-<img src="https://github.com/zabealbe/octopus/raw/assets/readme/parallel.png" alt="An agent's terminal on the laptop, the phone's list of every computer's tasks, and an agent waiting on a permission prompt" width="100%">
+<img src="docs/readme/parallel.png" alt="An agent's terminal on the laptop, the phone's list of every computer's tasks, and an agent waiting on a permission prompt" width="100%">
 
 ### Files, browser and terminals in one window
 
 Each task has an editor, a browser and terminal panels beside its agent.
 
-<img src="https://github.com/zabealbe/octopus/raw/assets/readme/window.png" alt="The laptop with the task's browser on its pull request beside the agent, and the same browser on the phone" width="100%">
+<img src="docs/readme/window.png" alt="The laptop with the task's browser on its pull request beside the agent, and the same browser on the phone" width="100%">
 
 ### Pair a server, share it
 
 Pair a device by scanning a server's QR code or pasting its invite. Hand the same invite to a teammate and their account gets in, every device of theirs with it. The server's menu lists each account, and any of them can be revoked.
 
-<img src="https://github.com/zabealbe/octopus/raw/assets/readme/share.png" alt="The laptop showing a server's one-time pairing code, and a teammate's phone that read it, about to pair" width="100%">
+<img src="docs/readme/share.png" alt="The laptop showing a server's one-time pairing code, and a teammate's phone that read it, about to pair" width="100%">
 
 ### And
 
