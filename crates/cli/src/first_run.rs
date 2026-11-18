@@ -3,7 +3,7 @@
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail};
 use octopus_client::servers::{Address, Config, Server, Servers};
@@ -17,6 +17,8 @@ use crate::install::{self, ServerRun, Service};
 const PATIENCE: Duration = Duration::from_secs(1);
 /// The rest between asks while the installed server starts.
 const ANSWER_POLL: Duration = Duration::from_millis(100);
+/// How long the installed server has to answer once the service manager starts it.
+const ANSWER_DEADLINE: Duration = Duration::from_secs(30);
 
 /// Lists this machine's server, and returns its install when no server answers on its socket yet.
 pub fn list_this_machine() -> anyhow::Result<Option<Install>> {
@@ -49,13 +51,17 @@ pub fn list_this_machine() -> anyhow::Result<Option<Install>> {
 }
 
 /// Installs the service and waits until its server answers on `socket`. A server the service manager sees exit first
-/// fails the install with the last error line it wrote to `log`.
+/// fails the install with the last error line it wrote to `log`, and one still silent at the deadline fails it too.
 fn install_answered(service: &Service, socket: &Path, log: &Path) -> anyhow::Result<()> {
     let logged = std::fs::metadata(log).map_or(0, |written| written.len());
     install::install(service)?;
+    let started = Instant::now();
     while !local::answers(socket, PATIENCE) {
         if install::exited(service)? {
             bail!(last_error(log, logged).unwrap_or_else(|| "the server exited before it answered".into()));
+        }
+        if started.elapsed() >= ANSWER_DEADLINE {
+            bail!("the server didn't answer within {} seconds", ANSWER_DEADLINE.as_secs());
         }
         std::thread::sleep(ANSWER_POLL);
     }

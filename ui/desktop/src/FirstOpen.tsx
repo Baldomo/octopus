@@ -346,7 +346,7 @@ function Scene() {
           <Show when={failure()} fallback={<span>setting up {setup()?.server}…</span>}>
             {(error) => (
               <div class="octo-failed">
-                <span class="err">{error()}</span>
+                <span class="cause">{error()}</span>
                 <span class="log">{setup()?.log}</span>
                 <button class="btn live" onClick={() => desktop.setupRetry().catch(report)}>
                   Retry

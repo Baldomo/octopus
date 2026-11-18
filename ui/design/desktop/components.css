@@ -328,7 +328,7 @@ button.path-field{width:100%;margin:0;cursor:pointer}
 .octo-check{position:absolute;left:0;right:0;bottom:var(--s6);width:fit-content;margin:0 auto;pointer-events:auto;color:var(--octo-navy);--check-mark:var(--octo-paper);opacity:0;visibility:hidden;transition:opacity var(--t-paper) var(--ease),visibility var(--t-paper)}
 .octo-check.shown{opacity:1;visibility:visible}
 .octo-failed{display:flex;flex-direction:column;align-items:center;gap:var(--s2);max-width:560px;text-align:center;pointer-events:auto}
-.octo-failed .err{font-weight:500;user-select:text}
+.octo-failed .cause{font-weight:600;user-select:text}
 .octo-failed .log{font-family:var(--mono);font-size:var(--fs-micro);opacity:.7;user-select:text}
 .carried{position:absolute;left:0;top:0;display:flex;align-items:center;gap:8px;width:240px;height:var(--hit);padding:0 11px;border:1px solid var(--accent-line);border-radius:var(--r2);background:var(--raised);font-size:var(--fs-small);white-space:nowrap;overflow:hidden;box-shadow:0 13px 33px -9px var(--shadow)}
 .carried .spin{width:8px;height:8px;flex:none;border-radius:50%;background:var(--accent)}
