@@ -44,9 +44,7 @@ Pair a device by scanning a server's QR code or pasting its invite. Hand the sam
 
 ## Download
 
-The [Releases page](https://github.com/zabealbe/octopus/releases) has the app for macOS (universal `.dmg`) and Linux (x64 and arm64 `.AppImage` and `.deb`), the Android app (`.apk`), and the headless CLI and server for macOS and Linux (`.tar.gz`).
-
-macOS builds are ad-hoc signed until notarized builds ship, so open the app the first time with right-click → Open. On macOS 15 and later, open it once, then choose Open Anyway in System Settings → Privacy & Security.
+The [Releases page](https://github.com/zabealbe/octopus/releases) has the app for macOS (universal `.dmg`) and Linux (amd64 and arm64 `.deb`), the Android app (`.apk`), and the headless CLI and server for Linux (x86_64 and aarch64 `.tar.gz`). On a Mac, the app carries the same `octopus` command, at `octopus.app/Contents/MacOS/octopus`.
 
 Verify a download against the build that made it, then check it against the release's `SHA256SUMS`, which sits beside it in the same folder:
 
