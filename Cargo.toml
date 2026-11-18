@@ -46,3 +46,7 @@ all = { level = "deny", priority = -1 }
 # Stripping after the link would drop the signature scripts/link-signed gives.
 [profile.release]
 strip = false
+
+# x86_64 verifies signatures on curve25519-dalek's AVX2 path, which unoptimized outweighs the work a test times.
+[profile.dev.package.curve25519-dalek]
+opt-level = 3

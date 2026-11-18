@@ -410,9 +410,9 @@ where
     }
 }
 
-/// Input from a client without the lock is dropped: only the holder types. A stream the client finishes stops it
-/// showing the terminal; one that breaks went with its connection. Input is read first, so a finish that arrives
-/// with the client's hang-up still reads as a finish.
+/// Input from a client without the lock is dropped: only the holder types. A local client's stream counts as a close
+/// however it ends; a paired client's counts as one when the client finishes it, and one that breaks went with its
+/// connection. Input is read first, so a finish that arrives with the client's hang-up still reads as a finish.
 async fn relay_terminal<R, W>(
     server: Arc<Server>,
     client: Client,
@@ -430,7 +430,7 @@ async fn relay_terminal<R, W>(
         write.shutdown().await
     });
     let mut buffer = [0u8; INPUT_BYTES];
-    let closed_cleanly = loop {
+    let finished = loop {
         tokio::select! {
             biased;
             read = input.read(&mut buffer) => match read {
@@ -449,6 +449,7 @@ async fn relay_terminal<R, W>(
         }
     };
     output.abort();
+    let closed_cleanly = finished || matches!(client, Client::Local(_));
     blocking(&server, move |server| {
         server.stopped_showing(&client, terminal, closed_cleanly);
         server.client_disconnected(&client);

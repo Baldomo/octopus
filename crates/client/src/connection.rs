@@ -164,7 +164,7 @@ impl Control {
                 true
             }
             Ok(Err(error)) => {
-                self.close(format!("a ping failed: {error}"));
+                self.close(format!("a ping failed: {error:#}"));
                 false
             }
             Err(_) => {
@@ -300,7 +300,7 @@ impl Connection {
         let reader = Task(tokio::spawn(read_frames(read, Arc::downgrade(&control), pushes.clone())));
         let client = me.name();
         let hello = SessionHello { client: client.clone() };
-        control.call(&hello).await.map_err(|error| anyhow!("{address}: {error}"))?;
+        control.call(&hello).await.map_err(|error| anyhow!("{address}: {error:#}"))?;
         let local = matches!(address, Address::Local { .. });
         let server = sync(&control, me, local).await.map_err(|error| anyhow!("{address}: {error:#}"))?;
         let heartbeat = Task(tokio::spawn(heartbeat(Arc::downgrade(&control))));
