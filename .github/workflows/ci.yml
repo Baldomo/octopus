@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(vars.CI_RUNNERS || '["ubuntu-latest", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +35,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - if: runner.environment == 'github-hosted'
+        uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - if: runner.os == 'Linux'
         run: cargo fmt --all --check
