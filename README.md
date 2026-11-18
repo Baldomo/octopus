@@ -10,6 +10,8 @@
   <a href="docs/privacy.md">Privacy</a>
 </p>
 
+<img src="docs/readme/hero.webp" alt="octopus on the laptop: the sidebar with every workspace and its tasks, the task's browser on Supabase Studio, and the agent's terminal writing the migration it shows" width="100%">
+
 ### One terminal, many screens
 
 Open the same task on your laptop and your phone. A visible lock shows which device types into the terminal, and any other takes over with one tap.
@@ -46,10 +48,10 @@ The [Releases page](https://github.com/zabealbe/octopus/releases) has the app fo
 
 macOS builds are ad-hoc signed until notarized builds ship, so open the app the first time with right-click → Open. On macOS 15 and later, open it once, then choose Open Anyway in System Settings → Privacy & Security.
 
-Verify a download against the build that made it, and against the release's checksums:
+Verify a download against the build that made it, then check it against the release's `SHA256SUMS`, which sits beside it in the same folder:
 
 ```sh
-gh attestation verify octopus_0.1.0_universal.dmg --repo zabealbe/octopus
+gh attestation verify octopus_<version>_universal.dmg --repo zabealbe/octopus
 shasum -a 256 --check --ignore-missing SHA256SUMS
 ```
 

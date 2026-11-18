@@ -26,6 +26,13 @@ kbd{font-size:12px;color:var(--faint)}
 .btn{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:7px;height:var(--hit);padding:0 11px;border-radius:7px;font-size:var(--fs-small);color:var(--text);background:var(--raised);box-shadow:inset 0 0 0 1px var(--line2);transition:background var(--t-hover)}
 .btn:hover{background:var(--hover)}
 .btn.live{color:var(--accent);background:var(--accent-ink);box-shadow:inset 0 0 0 1px var(--accent-line)}
+/* checkbox: a box in the text's color, filled with a check in --check-mark when on; a muted line may follow its label */
+.check{display:inline-flex;align-items:flex-start;gap:var(--s2);font-size:var(--fs-ui);line-height:var(--lh-ui);cursor:pointer;user-select:none;--check-mark:var(--raised)}
+.check input{appearance:none;flex:none;display:grid;place-items:center;width:15px;height:15px;margin:3px 0 0;border:1.5px solid currentColor;border-radius:4px;cursor:pointer}
+.check input:checked{background:currentColor}
+.check input:checked::after{content:"";width:7px;height:3.5px;margin-top:-2px;border:solid var(--check-mark);border-width:0 0 1.5px 1.5px;rotate:-45deg}
+.check input:focus-visible{outline:2px solid var(--accent-line);outline-offset:2px}
+.check small{display:block;font-size:var(--fs-micro);opacity:.7}
 .seg{display:inline-flex;height:var(--hit);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:2px}
 .seg button{all:unset;cursor:pointer;font-size:var(--fs-small);color:var(--dim);padding:0 11px;border-radius:var(--r1)}
 .seg button.on{background:var(--raised);color:var(--text);box-shadow:inset 0 0 0 1px var(--line2)}
@@ -116,9 +123,7 @@ kbd{font-size:12px;color:var(--faint)}
 .addws{all:unset;box-sizing:border-box;display:flex;align-items:center;justify-content:center;gap:8px;width:calc(100% - 12px);margin:15px 6px 0;height:var(--hit);padding:0 11px;border:1px dashed var(--line2);border-radius:8px;color:var(--faint);font-size:13px;cursor:pointer;transition:color var(--t-hover),border-color var(--t-hover),background var(--t-hover)}
 .addws:hover{color:var(--text);border-color:var(--faint);background:var(--hover)}
 .rename{flex:1;min-width:0;font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--accent-line);border-radius:var(--r1);padding:1px 7px;outline:none;box-shadow:0 0 0 3px var(--accent-ink)}
-.card{--ws:var(--faint);margin:15px 6px 0;padding:11px;border:1px solid var(--line2);border-radius:var(--r2);background:var(--raised);display:flex;flex-direction:column;gap:10px}
-.card .ttl{display:flex;align-items:center;gap:8px;font-size:var(--fs-small);font-weight:600}
-.card .ttl i,.menu .mh b i{width:9px;height:9px;flex:none;border-radius:50%;background:var(--ws)}
+.menu .mh b i{width:9px;height:9px;flex:none;border-radius:50%;background:var(--ws)}
 .field{display:flex;flex-direction:column;gap:4px}
 .field > span{font-size:12px;color:var(--faint);font-weight:500}
 .field input{font:var(--fs-small) var(--ui);color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:6px 9px;outline:none}
@@ -129,10 +134,7 @@ kbd{font-size:12px;color:var(--faint)}
 .pick .host{color:var(--faint)}
 .pick .host.on{color:var(--text)}
 .pick .host:disabled{opacity:.45;cursor:default}
-.card .row,.confirm .row{display:flex;gap:7px;justify-content:flex-end}
-.card .btn{background:var(--bg)}
-.card .btn:hover{background:var(--hover)}
-.card .btn.go{color:light-dark(var(--raised),var(--bg));background:var(--ws);box-shadow:none;font-weight:550}
+.confirm .row{display:flex;gap:7px;justify-content:flex-end}
 .err{color:var(--err);font-size:var(--fs-micro)}
 
 /* color matrix: 12 hues across, 4 tones down */
@@ -197,7 +199,7 @@ button.path-field{width:100%;margin:0;cursor:pointer}
 .confirm{margin:4px;padding:9px;border-radius:var(--r1);background:color-mix(in srgb,var(--err) 6%,transparent);border:1px solid color-mix(in srgb,var(--err) 25%,transparent);color:var(--dim);font-size:var(--fs-micro);display:flex;flex-direction:column;gap:9px}
 .confirm .row .btn{height:24px;font-size:var(--fs-micro)}
 .btn.danger{color:var(--err);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--err) 35%,transparent);background:color-mix(in srgb,var(--err) 8%,transparent)}
-.toast{position:absolute;left:50%;bottom:57px;transform:translateX(-50%);background:var(--raised);border:1px solid var(--line2);border-radius:var(--r2);padding:7px 11px;font-size:var(--fs-micro);color:var(--dim);box-shadow:0 13px 33px -9px var(--shadow);white-space:nowrap;max-width:calc(100% - 2 * var(--s3));overflow:hidden;text-overflow:ellipsis;opacity:0;transition:opacity var(--t-hover);pointer-events:none;z-index:6}
+.toast{position:absolute;left:0;right:0;bottom:57px;width:fit-content;margin:0 auto;background:var(--raised);border:1px solid var(--line2);border-radius:var(--r2);padding:7px 11px;font-size:var(--fs-micro);color:var(--dim);box-shadow:0 13px 33px -9px var(--shadow);white-space:nowrap;max-width:calc(100% - 2 * var(--s3));overflow:hidden;text-overflow:ellipsis;opacity:0;transition:opacity var(--t-hover);pointer-events:none;z-index:6}
 .toast.on{opacity:1}
 .toast b{color:var(--text);font-weight:550}
 
@@ -313,3 +315,30 @@ button.path-field{width:100%;margin:0;cursor:pointer}
 .url b{color:var(--text);font-weight:500}
 .status{height:var(--status-h);display:flex;align-items:center;gap:18px;padding:0 15px 0 20px;color:var(--faint);font-size:13px;font-family:var(--mono);background:var(--bg)}
 .status .live{color:var(--accent)}
+/* first open: saffron washi paper over everything below the title bar, and one canvas over the whole window where the film's octopus rests, reaches and lands in the title bar's mark */
+.first-open{position:fixed;inset:0;z-index:20;pointer-events:none}
+.first-open .paper{position:absolute;inset:var(--title-h,var(--chrome-h)) 0 0;pointer-events:auto;background:var(--octo-paper)}
+.first-open .paper::before{content:"";position:absolute;inset:0;background:url("fibre.webp") var(--octo-paper);background-blend-mode:multiply;opacity:var(--printed,0)}
+.first-open.leaving .paper{pointer-events:none}
+.first-open canvas{position:absolute;inset:0}
+.octo-line{position:absolute;left:0;right:0;display:grid;justify-items:center;color:var(--octo-navy);font-size:var(--fs-ui)}
+.octo-line > *{grid-area:1/1;opacity:0;visibility:hidden;transition:opacity var(--t-paper) var(--ease),visibility var(--t-paper)}
+.octo-line > .shown{opacity:1;visibility:visible}
+.first-open.leaving .octo-line > *{opacity:0;visibility:hidden}
+.octo-check{position:absolute;left:0;right:0;bottom:var(--s6);width:fit-content;margin:0 auto;pointer-events:auto;color:var(--octo-navy);--check-mark:var(--octo-paper);opacity:0;visibility:hidden;transition:opacity var(--t-paper) var(--ease),visibility var(--t-paper)}
+.octo-check.shown{opacity:1;visibility:visible}
+.octo-failed{display:flex;flex-direction:column;align-items:center;gap:var(--s2);max-width:560px;text-align:center;pointer-events:auto}
+.octo-failed .err{font-weight:500;user-select:text}
+.octo-failed .log{font-family:var(--mono);font-size:var(--fs-micro);opacity:.7;user-select:text}
+.carried{position:absolute;left:0;top:0;display:flex;align-items:center;gap:8px;width:240px;height:var(--hit);padding:0 11px;border:1px solid var(--accent-line);border-radius:var(--r2);background:var(--raised);font-size:var(--fs-small);white-space:nowrap;overflow:hidden;box-shadow:0 13px 33px -9px var(--shadow)}
+.carried .spin{width:8px;height:8px;flex:none;border-radius:50%;background:var(--accent)}
+.chrome .mark{width:18px;height:18px;border-radius:5px;transition:opacity var(--t-hover) var(--ease)}
+.chrome .mark.away{opacity:0;transition:none}
+/* the sidebar the tentacle pulls out, holding "+ workspace" alone in its place */
+.sidebar.offering{transition-duration:var(--t-pull),var(--t-sidebar);transition-timing-function:var(--ease-pull),var(--ease)}
+.sidebar :is(.sb-head,.servers){transition:opacity var(--t-paper) var(--ease),visibility var(--t-paper)}
+.sidebar.offering :is(.sb-head,.servers){visibility:hidden;opacity:0}
+.sidebar .anchor{position:relative}
+.sidebar .folder-pick{left:1px;right:1px}
+.folder-pick .mi .tag{margin-left:auto}
+.folder-pick .servers-pick{padding:5px 9px 8px}

@@ -9,20 +9,23 @@ use crate::browser::{HOVERED_EVENT, Hovered};
 use crate::commands::Outside;
 use crate::layers::{FLOAT, title_bar_height};
 use crate::menu::{COMMAND_EVENT, MenuCommand, MenuGroup, MenuKey};
+use crate::setup::{Progress, SETUP_EVENT, SetupView};
 
 /// Where the rendered file lives, relative to the workspace root.
 pub const PATH: &str = "ui/desktop/src/generated.ts";
 
 pub fn render() -> String {
     let config = Config::default().with_large_int("number");
-    let declarations = octopus_shell::declarations!(&config, Hovered, Outside, MenuCommand, MenuGroup, MenuKey);
+    let declarations =
+        octopus_shell::declarations!(&config, Hovered, Outside, MenuCommand, MenuGroup, MenuKey, Progress, SetupView);
     let events = json!({
         "browserHovered": HOVERED_EVENT,
         "menuCommand": COMMAND_EVENT,
+        "setup": SETUP_EVENT,
     });
     let constants = [
         constant("FLOAT_LAYER", &FLOAT),
-        constant("FLOAT_TOP", &title_bar_height()),
+        constant("TITLE_H", &title_bar_height()),
         constant("EVENTS", &events),
         constant("COMMANDS", &crate::COMMANDS),
     ];

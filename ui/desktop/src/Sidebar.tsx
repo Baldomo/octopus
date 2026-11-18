@@ -25,8 +25,10 @@ import { AddWorkspace, holdsKeyboard, isRenaming, RenameInput, startRename } fro
 import { ServerMenu } from "@octopus/shared/ServerMenu.tsx";
 import { newTaskIn, SectionMenu, TaskMenu } from "@octopus/shared/TaskMenus.tsx";
 import { Toast } from "@octopus/shared/Toast.tsx";
+import { beat, holdsSidebar, offering } from "./FirstOpen";
 import {
   isOpen,
+  noWorkspaceAnywhere,
   openTask,
   sections,
   servers,
@@ -39,9 +41,11 @@ import {
   togglePin,
   ui,
 } from "@octopus/shared/state.ts";
-import { floatTop } from "./layer";
 
 const IN_SIDEBAR: Within = { stage: ".sidebar", list: ".groups", free: false };
+
+/** The sidebar stays open while pinned, while no server holds a workspace, and through the first open. */
+const held = () => ui.prefs.pinned || noWorkspaceAnywhere() || holdsSidebar();
 
 /** The sidebar's rows and its sections' parts, which slide to where each change puts them. */
 const ITEMS = ".wsh, .gh, .task, .drophint, .empty-state";
@@ -217,14 +221,13 @@ function autohide(column: HTMLElement) {
   const track = (event: PointerEvent) => (movedTo = event);
   document.addEventListener("pointermove", track);
   onCleanup(() => document.removeEventListener("pointermove", track));
-  const inColumn = ({ clientX, clientY }: PointerEvent) => {
-    const [x, y] = [clientX, clientY + floatTop()];
+  const inColumn = ({ clientX: x, clientY: y }: PointerEvent) => {
     const { offsetLeft: left, offsetTop: top, offsetWidth: width, offsetHeight: height } = column;
     return x >= left && x < left + width && y >= top && y < top + height;
   };
   const leave = () => {
     hovered = false;
-    if (!ui.prefs.pinned) showSidebar(false);
+    if (!held()) showSidebar(false);
   };
   const settled = () => ui.modal === null && !holdsKeyboard() && !lifting();
   createEffect(() => {
@@ -244,9 +247,15 @@ function autohide(column: HTMLElement) {
   column.addEventListener("pointerleave", () => hovered && settled() && leave());
 }
 
-/** The sidebar takes the pointer in its whole column and draws in its own box and shadow. */
+/**
+ * The sidebar takes the pointer in its whole column and draws in its own box and shadow. While no server holds a
+ * workspace it comes out on its own, unless the first open's tentacle is yet to pull it out.
+ */
 export function Sidebar(props: { floats: (aside: HTMLElement, column: HTMLElement) => void; shown: boolean }) {
   let column!: HTMLDivElement;
+  createEffect(() => {
+    if (noWorkspaceAnywhere() && !ui.sidebar && !["wake", "reach"].includes(beat())) showSidebar(true);
+  });
   return (
     <div
       ref={(element) => {
@@ -256,7 +265,11 @@ export function Sidebar(props: { floats: (aside: HTMLElement, column: HTMLElemen
       class="sidebar-column"
       classList={{ hidden: !props.shown }}
     >
-      <aside ref={(aside) => props.floats(aside, column)} class="sidebar" classList={{ hidden: !props.shown }}>
+      <aside
+        ref={(aside) => props.floats(aside, column)}
+        class="sidebar"
+        classList={{ hidden: !props.shown, offering: offering() }}
+      >
         <div class="sb-head">
           <div class="search" onClick={commands.search.run}>
             <span>Search</span>

@@ -56,12 +56,15 @@ pub struct Viewport {
     pub height: f64,
 }
 
-/// A surface of the float layer that is out: it takes the pointer in `input` and draws in `drawn`, shadows included.
+/// A surface of the float layer that is out: it takes the pointer in `input` and draws in `drawn`, shadows included,
+/// its opaque body filling `body` inside corners of `radius`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Floated {
     pub input: Bounds,
     pub drawn: Bounds,
+    pub body: Bounds,
+    pub radius: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -124,6 +127,22 @@ pub struct Prefs {
     pub board: Option<String>,
     pub appearance: Appearance,
     pub zoom: Zoom,
+    /// Whether the app keeps the octopus skill installed for the user's Claude Code, which the first open asks.
+    pub skill: bool,
+}
+
+/// The prefs a client kept before the first open asked about the skill; they keep no skill.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrefsBeforeSkill {
+    pinned: bool,
+    surface: Surface,
+    split: Split,
+    view: View,
+    open: Option<String>,
+    board: Option<String>,
+    appearance: Appearance,
+    zoom: Zoom,
 }
 
 /// The prefs a client kept while they held the settings its account now holds.
@@ -203,6 +222,9 @@ pub enum UiAct {
     ToggleClientMenu,
     SetAppearance {
         appearance: Appearance,
+    },
+    SetSkill {
+        skill: bool,
     },
     Zoom {
         step: ZoomStep,
@@ -295,6 +317,7 @@ impl State {
             UiAct::ShowClientMenu { shown } => ui.show_client_menu(shown),
             UiAct::ToggleClientMenu => ui.show_client_menu(!ui.client_menu),
             UiAct::SetAppearance { appearance } => ui.prefs.appearance = appearance,
+            UiAct::SetSkill { skill } => ui.prefs.skill = skill,
             UiAct::Zoom { step } => ui.prefs.zoom = ui.prefs.zoom.step(step),
             UiAct::ShowModal { modal } => ui.show_modal(modal),
             UiAct::Float { surface, at, modal } => drop(out.insert(surface, Out { at, modal })),
@@ -355,11 +378,19 @@ pub struct UiStore {
     follower: OnceLock<Follower>,
 }
 
-/// Prefs that still hold settings give them to the account once, older than every value a device of it sets.
+/// Prefs that still hold settings give them to the account once, older than every value a device of it sets. Prefs
+/// from before the skill was asked keep no skill.
 fn load_prefs(config: &Config, me: &Identity) -> anyhow::Result<Prefs> {
     let path = config.file(PREFS_FILE);
     let Some(text) = read_text(&path)? else { return Ok(Prefs::default()) };
     let parsed = serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()));
+    if let Ok(PrefsBeforeSkill { pinned, surface, split, view, open, board, appearance, zoom }) =
+        serde_json::from_str(&text)
+    {
+        let prefs = Prefs { pinned, surface, split, view, open, board, appearance, zoom, skill: false };
+        save_prefs(config, &prefs)?;
+        return Ok(prefs);
+    }
     let Ok(old) = serde_json::from_str::<PrefsWithSettings>(&text) else { return parsed };
     let PrefsWithSettings {
         pinned,
@@ -384,7 +415,7 @@ fn load_prefs(config: &Config, me: &Identity) -> anyhow::Result<Prefs> {
             settings.seed(&me.key, setting);
         }
     })?;
-    let prefs = Prefs { pinned, surface, split, view, open, board, appearance, zoom };
+    let prefs = Prefs { pinned, surface, split, view, open, board, appearance, zoom, skill: false };
     save_prefs(config, &prefs)?;
     Ok(prefs)
 }
@@ -514,6 +545,10 @@ mod tests {
         assert_eq!(settings.collapsed, ["kept"], "a value set stands over the prefs'");
         assert_eq!(settings.agent_flags["claude-code"].args(), ["--model", "opus"]);
         assert_eq!(load_prefs(&config, &me).expect("load again"), prefs, "the prefs file now holds prefs alone");
+        let mut asked = serde_json::to_value(&prefs).expect("prefs serialize");
+        asked.as_object_mut().expect("an object").remove("skill");
+        std::fs::write(config.file(PREFS_FILE), asked.to_string()).expect("write the prefs");
+        assert!(!load_prefs(&config, &me).expect("load prefs from before the skill").skill, "they keep no skill");
         std::fs::remove_dir_all(&dir).expect("clean up");
     }
 

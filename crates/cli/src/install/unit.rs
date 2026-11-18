@@ -107,6 +107,15 @@ impl Service {
         Ok(service)
     }
 
+    /// The command that runs this service's server by hand, each word quoted for a POSIX shell.
+    pub fn command(&self) -> String {
+        let quoted = |word: &String| {
+            let plain = word.chars().all(|c| c.is_ascii_alphanumeric() || "/._-:=,+@".contains(c));
+            if plain { word.clone() } else { format!("'{}'", word.replace('\'', "'\\''")) }
+        };
+        self.argv().iter().map(quoted).collect::<Vec<_>>().join(" ")
+    }
+
     fn argv(&self) -> Vec<String> {
         let mut argv = vec![self.program.display().to_string(), "server".into(), "run".into()];
         for (flag, value) in self.run.flags() {

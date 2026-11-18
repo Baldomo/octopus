@@ -19,10 +19,14 @@ export type MenuGroup = { title: string, commands: Array<MenuCommand>, };
 
 export type MenuKey = { key: string, inPage: boolean, };
 
+export type Progress = { "state": "installing" } | { "state": "failed", error: string, } | { "state": "installed" };
+
+export type SetupView = { server: string, log: string, progress: Progress, };
+
 export const FLOAT_LAYER = "float" as const;
 
-export const FLOAT_TOP = 38.0 as const;
+export const TITLE_H = 38.0 as const;
 
-export const EVENTS = {"browserHovered":"browser_hovered","menuCommand":"menu_command"} as const;
+export const EVENTS = {"browserHovered":"browser_hovered","menuCommand":"menu_command","setup":"setup"} as const;
 
-export const COMMANDS = ["title_bar_double_click","browser_load","browser_show_page","browser_go","browser_find","browser_forget","app_menu","file_outside","haptic_alignment"] as const;
+export const COMMANDS = ["title_bar_double_click","browser_load","browser_show_page","browser_go","browser_find","browser_forget","app_menu","file_outside","haptic_alignment","setup","setup_retry","skill_install"] as const;

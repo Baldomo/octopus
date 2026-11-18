@@ -68,11 +68,15 @@ pub fn main() -> ExitCode {
     };
     let outcome = match matches.subcommand() {
         #[cfg(feature = "desktop")]
-        Some(("app", _)) => octopus_desktop::run(
-            first_run::list_or_install_this_machine()
-                .err()
-                .map(|error| format!("list this machine's server: {error:#}")),
-        ),
+        Some(("app", _)) => {
+            let skill = || octopus_desktop::Skill(skill::install);
+            match first_run::list_this_machine() {
+                Ok(install) => octopus_desktop::run(None, install, skill()),
+                Err(error) => {
+                    octopus_desktop::run(Some(format!("list this machine's server: {error:#}")), None, skill())
+                }
+            }
+        }
         _ => tokio::runtime::Runtime::new()
             .context("start the runtime")
             .and_then(|runtime| runtime.block_on(commands::run(&matches))),

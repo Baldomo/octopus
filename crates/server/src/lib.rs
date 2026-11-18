@@ -30,10 +30,10 @@ pub(crate) use octopus_proto::lock;
 pub use octopus_proto::now;
 use octopus_proto::ops::{
     AccountSync, BrowserClose, BrowserMove, BrowserOpen, BrowserReport, Done, Entries, FileCopy, FileCreate,
-    FileDelete, FileList, FileMove, FileSearch, FileWrite, FolderGet, HarnessSet, Matches, Offer, PairingForget,
-    PairingList, PairingOffer, Revised, SessionHello, SessionPing, SessionSync, Snapshot, TaskArchive, TaskCreate,
-    TaskFocus, TaskGet, TaskMove, TaskRename, TaskSetParent, TaskSetSession, TaskSetWorkspace, TermClaim, TermClose,
-    TermOpen, TermResize, TermSend, TermTakeLock, Welcome, WorkspaceAdd, WorkspaceList, WorkspaceRemove,
+    FileDelete, FileList, FileMove, FileSearch, FileWrite, FolderGet, HarnessCheck, HarnessSet, Matches, Offer,
+    PairingForget, PairingList, PairingOffer, Revised, SessionHello, SessionPing, SessionSync, Snapshot, TaskArchive,
+    TaskCreate, TaskFocus, TaskGet, TaskMove, TaskRename, TaskSetParent, TaskSetSession, TaskSetWorkspace, TermClaim,
+    TermClose, TermOpen, TermResize, TermSend, TermTakeLock, Welcome, WorkspaceAdd, WorkspaceList, WorkspaceRemove,
     WorkspaceRename, WorkspaceSetColor, Workspaces, Written,
 };
 use octopus_proto::remote::{Connection, RelayUrl};
@@ -77,6 +77,8 @@ pub struct Server {
     relay: RelayUrl,
     offers: Mutex<Offers>,
     worktrees: PathBuf,
+    /// The Claude Code plugin carrying the octopus skill.
+    plugin: PathBuf,
     host: Arc<HostClient>,
     state: Mutex<State>,
     clients: Mutex<HashMap<Client, usize>>,
@@ -116,7 +118,8 @@ fn nonempty(what: &str, text: &str) -> Result<(), Error> {
 
 impl Server {
     /// Reattaches the hosted terminals the store records and ends the ones it doesn't. With `microphone`, every
-    /// terminal gets a virtual microphone its lock holder feeds.
+    /// terminal gets a virtual microphone its lock holder feeds. Every Claude Code agent loads the plugin at
+    /// `plugin`.
     pub fn open(
         name: &str,
         store: &Path,
@@ -124,6 +127,7 @@ impl Server {
         host: &TerminalHost,
         relay: RelayUrl,
         microphone: bool,
+        plugin: &Path,
     ) -> Result<Arc<Self>, Error> {
         let mut store = Store::open(store)?;
         let device = store.device_key()?;
@@ -147,6 +151,7 @@ impl Server {
             relay,
             offers: Mutex::default(),
             worktrees: worktrees.to_path_buf(),
+            plugin: plugin.to_path_buf(),
             host,
             state: Mutex::new(State {
                 store,
@@ -226,6 +231,7 @@ impl Server {
             WorkspaceRemove::NAME => call::<WorkspaceRemove>(args, |op| self.workspace_remove(op)),
             FolderGet::NAME => call::<FolderGet>(args, folders::folder_get),
             HarnessSet::NAME => call::<HarnessSet>(args, |op| self.harness_set(op)),
+            HarnessCheck::NAME => call::<HarnessCheck>(args, |op| self.harness_check(op)),
             TaskCreate::NAME => call::<TaskCreate>(args, |op| self.task_create(op)),
             TaskMove::NAME => call::<TaskMove>(args, |op| self.task_move(op)),
             TaskSetParent::NAME => call::<TaskSetParent>(args, |op| self.task_set_parent(op)),

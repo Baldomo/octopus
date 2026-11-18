@@ -25,11 +25,17 @@ function FolderPath(props: { lead: string; tag: string | null; children: JSX.Ele
 }
 
 /**
- * The folder picker floating where the folder field was: the path typed under the workspace's root above a list of
- * the folders completing it. Arrows point at a folder, Tab or a click goes into it, Enter or Choose takes the path, and
- * Escape or a press outside cancels.
+ * The folder picker floating where its field was: `head` over the path typed under the root above a list of the
+ * folders completing it, each git repo's top tagged while `repos` holds, and `refusal` under the list. Arrows point at
+ * a folder, Tab or a click goes into it, Enter or Choose takes the path, and Escape or a press outside cancels.
  */
-function FolderPick(props: { picker: FolderPicker; gone: () => void }) {
+export function FolderPick(props: {
+  picker: FolderPicker;
+  gone: () => void;
+  head?: JSX.Element;
+  repos?: boolean;
+  refusal?: string | null;
+}) {
   const picker = props.picker;
   const [pointed, setPointed] = createSignal(-1);
   let panel!: HTMLDivElement;
@@ -76,6 +82,7 @@ function FolderPick(props: { picker: FolderPicker; gone: () => void }) {
       role="dialog"
       onMouseDown={(event) => event.target instanceof HTMLInputElement || event.preventDefault()}
     >
+      {props.head}
       <label class="search path-field">
         <FolderPath lead={picker.prefix()} tag={picker.tag()}>
           <input
@@ -99,6 +106,9 @@ function FolderPick(props: { picker: FolderPicker; gone: () => void }) {
               onClick={() => type(row.into)}
             >
               <span class="name">{row.name}/</span>
+              <Show when={props.repos && row.repo}>
+                <span class="tag">git</span>
+              </Show>
             </button>
           )}
         </For>
@@ -110,6 +120,7 @@ function FolderPick(props: { picker: FolderPicker; gone: () => void }) {
           )}
         </Show>
       </div>
+      <Show when={props.refusal}>{(refusal) => <div class="mlabel err">{refusal()}</div>}</Show>
       <div class="sep" />
       <div class="pick-foot">
         <span>⇥ goes in · ⏎ chooses · esc cancels</span>
@@ -210,6 +221,7 @@ export function NewTask() {
           <Segments options={TASK_STATES} value={draft.state()} choose={draft.setState} />
         </Field>
         <TextField label="harness" value={draft.harness()} change={draft.setHarness} />
+        <Show when={draft.harnessMissing()}>{(missing) => <div class="mlabel missing">{missing()}</div>}</Show>
         <TextField
           label="session"
           value={draft.session()}

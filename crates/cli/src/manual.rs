@@ -17,7 +17,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::commands::SERVER_HELP;
 use crate::install::{self, ServerRun, Service};
-use crate::{account, attach, call, call_error, connect, print};
+use crate::{account, attach, call, call_error, connect, print, skill};
 
 #[derive(Subcommand)]
 pub enum ServerVerb {
@@ -76,8 +76,11 @@ impl ServerVerb {
                 let ServerRun { name, socket, store, worktrees, terminal_host, udp, relay, microphone } = run;
                 let local = Listener::bind(&socket).with_context(|| format!("bind {}", socket.display()))?;
                 let host = TerminalHost { program: std::env::current_exe()?, address: terminal_host };
-                let server = octopus_server::Server::open(&name, &store, &worktrees, &host, relay.clone(), microphone)
-                    .map_err(|error| anyhow!("{error}"))?;
+                let plugin = store.with_file_name(skill::PLUGIN_DIR);
+                skill::write_plugin(&plugin)?;
+                let server =
+                    octopus_server::Server::open(&name, &store, &worktrees, &host, relay.clone(), microphone, &plugin)
+                        .map_err(|error| anyhow!("{error}"))?;
                 let endpoint = remote::listen(udp, relay.clone(), server.device()).await?;
                 let key = server.device().public();
                 eprintln!(

@@ -11,7 +11,7 @@ use super::unit::launchd_plist;
 #[cfg(target_os = "linux")]
 use super::unit::systemd_unit;
 
-pub use platform::{register, unit_file, unregister};
+pub use platform::{NAME, register, unit_file, unregister};
 
 fn remove_unit(path: &Path) -> anyhow::Result<()> {
     std::fs::remove_file(path).with_context(|| format!("remove {}", path.display()))
@@ -42,6 +42,7 @@ pub fn unit_path(id: &str) -> anyhow::Result<PathBuf> {
 mod platform {
     use super::*;
 
+    pub const NAME: &str = "launchd";
     pub const EXTENSION: &str = ".plist";
 
     pub fn unit_directory() -> anyhow::Result<PathBuf> {
@@ -79,6 +80,7 @@ mod platform {
 mod platform {
     use super::*;
 
+    pub const NAME: &str = "systemd user manager";
     pub const EXTENSION: &str = ".service";
 
     pub fn unit_directory() -> anyhow::Result<PathBuf> {

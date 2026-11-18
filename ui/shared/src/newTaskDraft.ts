@@ -1,8 +1,8 @@
-import { createEffect, createMemo, createSignal, on } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, on } from "solid-js";
 import { backend } from "./backend";
 import { folderPicker, prefixOf, readFolder, readingOf, relative, repoTag } from "./folderPath";
 import { FRESH_SESSION, type Folder, type Mode, type TaskState, type WorkspaceRef } from "./generated";
-import { model, openView, serverView, workspaces } from "./state";
+import { model, openView, serverLabel, serverView, workspaces } from "./state";
 
 export const workspaceKey = (workspace: WorkspaceRef) => `${workspace.server}/${workspace.workspace}`;
 
@@ -76,6 +76,23 @@ export function newTaskDraft(section: string | null) {
     );
   const [state, setState] = createSignal<TaskState>("temporary");
   const [harness, setHarness] = createSignal(current?.task.harness ?? "claude-code");
+  /** The harness checked on the workspace's server, as each of them changes. */
+  const [checked] = createResource(
+    () => {
+      const [on, id] = [chosen()?.server, harness().trim()];
+      return on === undefined || id === "" ? false : { on, id };
+    },
+    ({ on, id }) => backend.harnessCheck(on, id).then((status) => ({ on, id, status })),
+  );
+  /** What the form says while the harness cannot start its agent on the workspace's server. */
+  const harnessMissing = () => {
+    const check = checked.state === "errored" ? undefined : checked.latest;
+    if (check === undefined) return null;
+    const server = serverLabel(check.on);
+    if (check.status === null) return `${server} has no harness ${check.id}`;
+    if (check.status.installed) return null;
+    return `${check.status.program} is not installed on ${server}. Install it with ${check.status.install}`;
+  };
   const [session, setSession] = createSignal("");
   const [refusal, setRefusal] = createSignal<string | null>(null);
   const [creating, setCreating] = createSignal(false);
@@ -143,6 +160,7 @@ export function newTaskDraft(section: string | null) {
     setState,
     harness,
     setHarness,
+    harnessMissing,
     session,
     setSession,
     refusal,

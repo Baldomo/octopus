@@ -10,8 +10,10 @@ use serde::Deserialize;
 use tauri::{AppHandle, State};
 use ts_rs::TS;
 
+use crate::Skill;
 use crate::browser::Browsers;
 use crate::menu::MenuGroup;
+use crate::setup::{Setup, SetupView};
 
 type Hubbed<'a> = State<'a, Arc<Hub>>;
 type Browsing<'a> = State<'a, Browsers>;
@@ -106,6 +108,24 @@ pub(crate) fn title_bar_double_click(window: tauri::Window) -> Result<(), String
         _ => window.maximize(),
     };
     done.map_err(|error| error.to_string())
+}
+
+/// The install of this machine's server this launch runs, if any.
+#[tauri::command]
+pub(crate) fn setup(setup: State<'_, Setup>) -> Option<SetupView> {
+    setup.view()
+}
+
+/// Installs this machine's server again after a failed install.
+#[tauri::command]
+pub(crate) fn setup_retry(setup: State<'_, Setup>) {
+    setup.retry();
+}
+
+/// Writes the octopus skill for the user's Claude Code, as `octopus skill install` does.
+#[tauri::command]
+pub(crate) fn skill_install(skill: State<'_, Skill>) -> Result<(), String> {
+    (skill.0)().map(drop).map_err(|error| format!("{error:#}"))
 }
 
 /// Taps the trackpad the way macOS marks a dragged item lining up; elsewhere does nothing.

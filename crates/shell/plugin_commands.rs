@@ -30,6 +30,7 @@ plugin_commands![
     task_archive,
     task_create,
     folder_get,
+    harness_check,
     term_attach,
     term_input,
     term_detach,

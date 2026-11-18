@@ -17,10 +17,11 @@ use octopus_proto::account::Change;
 use octopus_proto::device::PublicKey;
 use octopus_proto::ops::{
     AccountSync, BrowserClose, BrowserMove, BrowserOpen, BrowserReport, Done, FileCopy, FileCreate, FileDelete,
-    FileList, FileMove, FileSearch, FileWrite, FolderGet, HarnessSet, Offer, PairingForget, PairingList, PairingOffer,
-    SessionHello, SessionPing, SessionSync, Synced, TaskArchive, TaskCreate, TaskFocus, TaskGet, TaskMove, TaskRename,
-    TaskSetParent, TaskSetSession, TaskSetWorkspace, TermClaim, TermClose, TermOpen, TermResize, TermSend,
-    TermTakeLock, Welcome, WorkspaceAdd, WorkspaceList, WorkspaceRemove, WorkspaceRename, WorkspaceSetColor,
+    FileList, FileMove, FileSearch, FileWrite, FolderGet, HarnessCheck, HarnessSet, HarnessStatus, Offer,
+    PairingForget, PairingList, PairingOffer, SessionHello, SessionPing, SessionSync, Synced, TaskArchive, TaskCreate,
+    TaskFocus, TaskGet, TaskMove, TaskRename, TaskSetParent, TaskSetSession, TaskSetWorkspace, TermClaim, TermClose,
+    TermOpen, TermResize, TermSend, TermTakeLock, Welcome, WorkspaceAdd, WorkspaceList, WorkspaceRemove,
+    WorkspaceRename, WorkspaceSetColor,
 };
 use octopus_proto::remote::{self, RelayUrl};
 use octopus_proto::types::{PtyId, ReadDir, Stream};
@@ -162,6 +163,7 @@ impl Demo {
             WorkspaceRemove => |op| world.workspace_remove(op);
             FolderGet => |op| world.folder_get(op);
             HarnessSet => |op| Ok(world.harness_set(op.id));
+            HarnessCheck => |_| Ok(HarnessStatus { program: "claude".into(), installed: true, install: String::new() });
             TaskCreate => |op| world.task_create(op);
             TaskSetSession => |op| world.task_set_session(op);
             TaskMove => |op| world.task_move(op);

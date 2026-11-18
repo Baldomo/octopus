@@ -6,8 +6,9 @@
 //! and the shadows end there. The keyboard sits in float while a modal is open and in base otherwise.
 //!
 //! A webview's native rect and the content it draws change in different processes, so no frame may depend on both
-//! changing at once. The float layer's top-left corner never moves: its surfaces lay out in window coordinates, and
-//! the layer only grows and shrinks from that corner. It never hides either, because a hidden webview stops rendering
+//! changing at once. The float layer's top-left corner is the window's and never moves, so its surfaces lay out in
+//! window coordinates, and the layer only grows and shrinks from that corner. WebKitGTK repaints a webview offset from
+//! the window's top off by that offset, showing the window's background in its bottom rows. It never hides either, because a hidden webview stops rendering
 //! and shows a stale frame when it returns; it collapses to nothing at its corner instead. The page layer swaps one
 //! page for another in a single turn of the main thread, so no frame shows both or neither.
 //!
@@ -42,7 +43,7 @@ fn points(bounds: Bounds, zoom: Zoom) -> Bounds {
     Bounds { x: bounds.x * scale, y: bounds.y * scale, width: bounds.width * scale, height: bounds.height * scale }
 }
 
-/// The float layer's corner sits on the window's left edge at this height in points, just below the title bar.
+/// The title bar's height in points, which every zoom keeps.
 pub(crate) fn title_bar_height() -> f64 {
     env!("OCTOPUS_CHROME_H").parse().expect("build.rs emits --chrome-h in px")
 }
@@ -57,16 +58,24 @@ fn traffic_lights() -> ConfigPosition {
     ConfigPosition { x: TRAFFIC_LIGHTS_INSET, y: midline - APPKIT_LIGHT_BELOW_GIVEN_Y }
 }
 
-/// The float layer's rect, from its corner to the far edges of every surface in the UI's CSS pixels at `zoom`, and
-/// the rects in it that take the pointer.
-pub(crate) fn float_cover(surfaces: &[Floated], zoom: Zoom) -> (Bounds, Vec<Bounds>) {
-    let top = title_bar_height() / zoom.scale();
+/// The float layer's rect, from the window's corner to the far edges of every surface, in the UI's CSS pixels.
+pub(crate) fn float_cover(surfaces: &[Floated]) -> Bounds {
     let drawn = surfaces.iter().flat_map(|surface| [surface.input, surface.drawn]);
-    let (right, bottom) = drawn.fold((0.0_f64, top), |(right, bottom), rect| {
+    let (right, bottom) = drawn.fold((0.0_f64, 0.0_f64), |(right, bottom), rect| {
         (right.max(rect.x + rect.width), bottom.max(rect.y + rect.height))
     });
-    let cover = Bounds { x: 0.0, y: top, width: right, height: bottom - top };
-    (cover, surfaces.iter().map(|surface| surface.input).collect())
+    Bounds { x: 0.0, y: 0.0, width: right, height: bottom }
+}
+
+/// Each surface's rects in window points.
+fn floated_points(surfaces: &[Floated], zoom: Zoom) -> Vec<Floated> {
+    let floated = |surface: &Floated| Floated {
+        input: points(surface.input, zoom),
+        drawn: points(surface.drawn, zoom),
+        body: points(surface.body, zoom),
+        radius: surface.radius * zoom.scale(),
+    };
+    surfaces.iter().map(floated).collect()
 }
 
 /// Whether `url` is the UI's own page or a frame it renders in place, the only places a UI layer may be.
@@ -177,7 +186,9 @@ impl Layers {
         host::adopt_base(&base)?;
         let float =
             WebviewBuilder::new(FLOAT, WebviewUrl::App("index.html".into())).transparent(true).on_navigation(the_ui);
-        let float = add_child(&window, float, Some(points(float_cover(&native.surfaces, native.zoom).0, native.zoom)))?;
+        let cover = points(float_cover(&native.surfaces), native.zoom);
+        let float = add_child(&window, float, Some(cover))?;
+        host::adopt_float(&float, cover)?;
         float.set_zoom(native.zoom.scale())?;
         #[cfg(target_os = "macos")]
         {
@@ -235,14 +246,12 @@ impl Layers {
             self.float.set_zoom(after.zoom.scale())?;
             self.place_page(after.zoom)?;
         }
-        let ((was, took), (float, input)) =
-            (float_cover(&before.surfaces, before.zoom), float_cover(&after.surfaces, after.zoom));
+        let (was, float) = (float_cover(&before.surfaces), float_cover(&after.surfaces));
         if zoomed || float != was {
             host::place(&self.float, Some(points(float, after.zoom)))?;
         }
-        if zoomed || input != took {
-            let input = input.into_iter().map(|input| points(input, after.zoom)).collect();
-            host::take_input(&self.float, points(float, after.zoom), input)?;
+        if zoomed || after.surfaces != before.surfaces {
+            host::shape(&self.float, points(float, after.zoom), floated_points(&after.surfaces, after.zoom))?;
         }
         if after.appearance != before.appearance {
             appear(&self.window, &self.base, after.appearance)?;
@@ -263,7 +272,7 @@ impl Layers {
     /// A webview takes its rect in device pixels, so a new scale re-applies every layer's rect.
     fn replace(&self) -> tauri::Result<()> {
         let native = self.ui.native();
-        host::place(&self.float, Some(points(float_cover(&native.surfaces, native.zoom).0, native.zoom)))?;
+        host::place(&self.float, Some(points(float_cover(&native.surfaces), native.zoom)))?;
         self.place_page(native.zoom)
     }
 
@@ -316,10 +325,11 @@ impl Layers {
 mod host {
     use tauri::{LogicalPosition, LogicalSize, PhysicalPosition, Rect, Webview, Window};
 
-    use super::Bounds;
+    use super::{Bounds, Floated};
 
-    /// The webview at `bounds` takes the pointer only in `input`, rects of the window.
-    pub fn take_input(webview: &Webview, bounds: Bounds, input: Vec<Bounds>) -> tauri::Result<()> {
+    /// The webview at `bounds` takes the pointer only in its surfaces' input rects, rects of the window.
+    pub fn shape(webview: &Webview, bounds: Bounds, surfaces: Vec<Floated>) -> tauri::Result<()> {
+        let input = surfaces.into_iter().map(|surface| surface.input).collect();
         webview.with_webview(move |_| super::pointer::take_input(bounds, input))
     }
 
@@ -328,6 +338,10 @@ mod host {
     }
 
     pub fn adopt(_: &Webview) -> tauri::Result<()> {
+        Ok(())
+    }
+
+    pub fn adopt_float(_: &Webview, _: Bounds) -> tauri::Result<()> {
         Ok(())
     }
 
@@ -357,19 +371,35 @@ mod host {
 /// Tauri packs a window's webviews side by side into its `gtk::Box`, where no webview takes a position. octopus
 /// moves the base webview into a `gtk::Overlay` in its place and every other webview onto that overlay, which puts
 /// each child at the rect octopus holds for it and stacks them in the overlay's order.
+///
+/// WebKit leaves the base webview unpainted wherever a window of the overlay covers it, so the float webview sits in a
+/// viewport the overlay holds at the bounding box of its surfaces' bodies, the webview staying at its corner inside it.
+/// WebKit also paints a webview's transparent pixels over whatever lies beneath it, so float paints only inside the
+/// bodies, and the shadows end there.
 #[cfg(target_os = "linux")]
 mod host {
-    use std::cell::{OnceCell, RefCell};
+    use std::cell::{Cell, OnceCell, RefCell};
     use std::collections::HashMap;
 
+    use gtk::cairo::{RectangleInt, Region};
+    use gtk::gdk::Rectangle;
     use gtk::prelude::*;
     use tauri::{Webview, Window};
 
-    use super::Bounds;
+    use super::{Bounds, Floated};
+
+    /// The float webview, in its viewport, at its rect in the window, and the region of the webview it paints.
+    struct Float {
+        viewport: gtk::Fixed,
+        webview: gtk::Widget,
+        rect: Cell<Rectangle>,
+        bodies: RefCell<Region>,
+    }
 
     thread_local! {
         static OVERLAY: OnceCell<gtk::Overlay> = const { OnceCell::new() };
-        static RECTS: RefCell<HashMap<gtk::Widget, gtk::gdk::Rectangle>> = RefCell::new(HashMap::new());
+        static RECTS: RefCell<HashMap<gtk::Widget, Rectangle>> = RefCell::new(HashMap::new());
+        static FLOAT: OnceCell<Float> = const { OnceCell::new() };
     }
 
     fn overlay() -> gtk::Overlay {
@@ -382,6 +412,66 @@ mod host {
 
     fn packed_box(widget: &gtk::Widget) -> gtk::Box {
         widget.parent().and_then(|parent| parent.downcast().ok()).expect("tauri packs a webview into its window's box")
+    }
+
+    /// Whether `widget` is the float webview, which takes its rect and stacks through its viewport.
+    fn is_float(widget: &gtk::Widget) -> bool {
+        FLOAT.with(|float| float.get().is_some_and(|float| float.webview == *widget))
+    }
+
+    fn whole(bounds: Bounds) -> Rectangle {
+        let (left, top) = (bounds.x.round() as i32, bounds.y.round() as i32);
+        let (right, bottom) = ((bounds.x + bounds.width).round() as i32, (bounds.y + bounds.height).round() as i32);
+        Rectangle::new(left, top, right - left, bottom - top)
+    }
+
+    /// Each rect of the window as a region of the webview at `bounds`, grown to whole pixels.
+    fn region(bounds: Bounds, rects: impl Iterator<Item = Bounds>) -> Region {
+        let region = Region::create();
+        for rect in rects {
+            let (x, y) = (rect.x - bounds.x, rect.y - bounds.y);
+            let (left, top) = (x.floor() as i32, y.floor() as i32);
+            let (right, bottom) = ((x + rect.width).ceil() as i32, (y + rect.height).ceil() as i32);
+            region.union_rectangle(&RectangleInt::new(left, top, right - left, bottom - top)).expect("cairo unions");
+        }
+        region
+    }
+
+    /// The rows of pixels a box with corners of `radius` fills, a rect each.
+    fn rounded(body: Bounds, radius: f64) -> impl Iterator<Item = Bounds> {
+        let radius = radius.min(body.width / 2.0).min(body.height / 2.0).max(0.0);
+        let rows = radius.ceil() as usize;
+        let corners = (0..rows).flat_map(move |row| {
+            let rise = radius - row as f64 - 0.5;
+            let inset = (radius - (radius * radius - rise * rise).max(0.0).sqrt()).round();
+            let top =
+                Bounds { x: body.x + inset, y: body.y + row as f64, width: body.width - 2.0 * inset, height: 1.0 };
+            [top, Bounds { y: body.y + body.height - 1.0 - row as f64, ..top }]
+        });
+        let middle = Bounds { y: body.y + rows as f64, height: body.height - 2.0 * rows as f64, ..body };
+        corners.chain(std::iter::once(middle))
+    }
+
+    /// The smallest rect holding every rect of `region`, empty at the origin for an empty region.
+    fn extents(region: &Region) -> Rectangle {
+        let rects: Vec<RectangleInt> = (0..region.num_rectangles()).map(|index| region.rectangle(index)).collect();
+        let left = rects.iter().map(RectangleInt::x).min().unwrap_or(0);
+        let top = rects.iter().map(RectangleInt::y).min().unwrap_or(0);
+        let right = rects.iter().map(|rect| rect.x() + rect.width()).max().unwrap_or(0);
+        let bottom = rects.iter().map(|rect| rect.y() + rect.height()).max().unwrap_or(0);
+        Rectangle::new(left, top, right - left, bottom - top)
+    }
+
+    /// Holds the viewport over the columns of the bodies, as tall as the webview, which WebKit draws from its bottom
+    /// edge, and the webview at its rect inside it, in one layout.
+    fn arrange(float: &Float) {
+        let (rect, bodies) = (float.rect.get(), extents(&float.bodies.borrow()));
+        let held = Rectangle::new(bodies.x(), 0, bodies.width(), rect.height());
+        float.webview.set_size_request(rect.width(), rect.height());
+        float.viewport.move_(&float.webview, -held.x(), -held.y());
+        let held = Rectangle::new(rect.x() + held.x(), rect.y() + held.y(), held.width(), held.height());
+        RECTS.with(|rects| rects.borrow_mut().insert(float.viewport.clone().upcast(), held));
+        overlay().queue_resize();
     }
 
     pub(crate) fn adopt_base(base: &Webview) -> tauri::Result<()> {
@@ -407,17 +497,53 @@ mod host {
         })
     }
 
+    /// Moves the adopted float webview at `bounds` into its viewport, which paints only the bodies of its surfaces.
+    pub fn adopt_float(webview: &Webview, bounds: Bounds) -> tauri::Result<()> {
+        with_widget(webview, move |widget| {
+            let overlay = overlay();
+            overlay.remove(&widget);
+            RECTS.with(|rects| rects.borrow_mut().remove(&widget));
+            let viewport = gtk::Fixed::new();
+            viewport.put(&widget, 0, 0);
+            overlay.add_overlay(&viewport);
+            overlay.set_overlay_pass_through(&viewport, true);
+            viewport.show();
+            widget.connect_draw(|_, cr| {
+                FLOAT.with(|float| {
+                    let bodies = float.get().expect("the float webview is adopted").bodies.borrow();
+                    for index in 0..bodies.num_rectangles() {
+                        let rect = bodies.rectangle(index);
+                        cr.rectangle(rect.x().into(), rect.y().into(), rect.width().into(), rect.height().into());
+                    }
+                });
+                cr.clip();
+                gtk::glib::Propagation::Proceed
+            });
+            let float = Float {
+                viewport,
+                webview: widget,
+                rect: Cell::new(whole(bounds)),
+                bodies: RefCell::new(Region::create()),
+            };
+            arrange(&float);
+            FLOAT.with(|cell| assert!(cell.set(float).is_ok(), "one float webview"));
+        })
+    }
+
     pub fn place(webview: &Webview, bounds: Option<Bounds>) -> tauri::Result<()> {
         with_widget(webview, move |widget| {
+            if is_float(&widget) {
+                let rect = whole(bounds.expect("the float layer never hides"));
+                return FLOAT.with(|float| {
+                    let float = float.get().expect("the float webview is adopted");
+                    float.rect.set(rect);
+                    widget.show();
+                    arrange(float);
+                });
+            }
             match bounds {
                 Some(bounds) => {
-                    let rect = gtk::gdk::Rectangle::new(
-                        bounds.x.round() as i32,
-                        bounds.y.round() as i32,
-                        bounds.width.round() as i32,
-                        bounds.height.round() as i32,
-                    );
-                    RECTS.with(|rects| rects.borrow_mut().insert(widget.clone(), rect));
+                    RECTS.with(|rects| rects.borrow_mut().insert(widget.clone(), whole(bounds)));
                     widget.show();
                 }
                 None => widget.hide(),
@@ -426,20 +552,18 @@ mod host {
         })
     }
 
-    /// The webview's window takes the pointer only in `input`, rects of the window, and the overlay passes every
-    /// other point to the child beneath.
-    pub fn take_input(webview: &Webview, bounds: Bounds, input: Vec<Bounds>) -> tauri::Result<()> {
+    /// The float webview at `bounds` takes the pointer only in its surfaces' input rects, the overlay passing every
+    /// other point to the child beneath, and paints only their bodies.
+    pub fn shape(webview: &Webview, bounds: Bounds, surfaces: Vec<Floated>) -> tauri::Result<()> {
         with_widget(webview, move |widget| {
-            let region = gtk::cairo::Region::create();
-            for rect in input {
-                let (x, y) = (rect.x - bounds.x, rect.y - bounds.y);
-                let (left, top) = (x.floor() as i32, y.floor() as i32);
-                let (right, bottom) = ((x + rect.width).ceil() as i32, (y + rect.height).ceil() as i32);
-                let local = gtk::cairo::RectangleInt::new(left, top, right - left, bottom - top);
-                region.union_rectangle(&local).expect("cairo unions rectangles into a region it created");
-            }
-            overlay().set_overlay_pass_through(&widget, true);
-            widget.input_shape_combine_region(Some(&region));
+            widget.input_shape_combine_region(Some(&region(bounds, surfaces.iter().map(|surface| surface.input))));
+            FLOAT.with(|float| {
+                let float = float.get().expect("the float webview is adopted");
+                let bodies = surfaces.iter().flat_map(|surface| rounded(surface.body, surface.radius));
+                float.bodies.replace(region(bounds, bodies));
+                arrange(float);
+            });
+            widget.queue_draw();
         })
     }
 
@@ -447,7 +571,12 @@ mod host {
     pub(crate) fn raise(_: &Window, webview: &Webview) -> tauri::Result<()> {
         with_widget(webview, |widget| {
             let overlay = overlay();
-            overlay.reorder_overlay(&widget, -1);
+            let child = if is_float(&widget) {
+                FLOAT.with(|float| float.get().expect("the float webview is adopted").viewport.clone().upcast())
+            } else {
+                widget
+            };
+            overlay.reorder_overlay(&child, -1);
             overlay.queue_resize();
         })
     }
@@ -627,21 +756,17 @@ mod pointer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use octopus_shell::client_menu::ZOOMS;
 
     #[test]
-    fn the_float_layer_hangs_from_the_title_bar_and_takes_the_pointer_only_where_its_surfaces_do() {
+    fn the_float_layer_grows_from_the_windows_corner_to_cover_what_its_surfaces_draw() {
         let y = title_bar_height();
-        for zoom in ZOOMS.map(|percent| Zoom::try_from(percent).expect("a step")) {
-            assert_eq!(points(float_cover(&[], zoom).0, zoom).y, y);
-        }
         let column = Bounds { x: 0.0, y, width: 294.0, height: 828.0 };
-        let sidebar = Floated { input: column, drawn: Bounds { x: -40.0, y: 22.0, width: 382.0, height: 900.0 } };
+        let drawn = Bounds { x: -40.0, y: 22.0, width: 382.0, height: 900.0 };
+        let sidebar = Floated { input: column, drawn, body: column, radius: 13.0 };
         let scrim = Bounds { x: 0.0, y, width: 1440.0, height: 862.0 };
-        let modal = Floated { input: scrim, drawn: scrim };
-        let cover = |surfaces: &[Floated]| float_cover(surfaces, Zoom::default());
-        assert_eq!(cover(&[]).0, Bounds { x: 0.0, y, width: 0.0, height: 0.0 });
-        assert_eq!(cover(&[sidebar]), (Bounds { x: 0.0, y, width: 342.0, height: 922.0 - y }, vec![column]));
-        assert_eq!(cover(&[sidebar, modal]), (Bounds { height: 922.0 - y, ..scrim }, vec![column, scrim]));
+        let modal = Floated { input: scrim, drawn: scrim, body: scrim, radius: 0.0 };
+        assert_eq!(float_cover(&[]), Bounds { x: 0.0, y: 0.0, width: 0.0, height: 0.0 });
+        assert_eq!(float_cover(&[sidebar]), Bounds { x: 0.0, y: 0.0, width: 342.0, height: 922.0 });
+        assert_eq!(float_cover(&[sidebar, modal]), Bounds { x: 0.0, y: 0.0, width: 1440.0, height: 922.0 });
     }
 }

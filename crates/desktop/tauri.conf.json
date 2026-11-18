@@ -26,7 +26,9 @@
   "bundle": {
     "icon": ["icons/icon.png"],
     "macOS": {
-      "minimumSystemVersion": "14.5"
+      "minimumSystemVersion": "14.5",
+      "infoPlist": "../cli/octopus.plist",
+      "entitlements": "octopus.entitlements"
     }
   }
 }

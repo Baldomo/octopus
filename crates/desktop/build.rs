@@ -28,7 +28,7 @@ fn main() {
         .unwrap_or_else(|| panic!("--bg is light-dark(#rrggbb,#rrggbb), not {bg}"));
     println!("cargo:rustc-env=OCTOPUS_BG_LIGHT={light}");
     println!("cargo:rustc-env=OCTOPUS_BG_DARK={dark}");
-    // The traffic lights center on the title bar, and the float layer hangs from its bottom edge.
+    // The traffic lights center on the title bar, which keeps its height at every zoom.
     let chrome = token(&tokens, "chrome-h");
     println!("cargo:rustc-env=OCTOPUS_CHROME_H={}", chrome.strip_suffix("px").expect("--chrome-h is in px"));
     tauri_build::build();

@@ -198,6 +198,13 @@ impl Project {
             }
         };
         let branch = repo.as_ref().map(|_| "main".to_string());
-        Ok(Folder { folder: if trimmed.is_empty() { "/".into() } else { trimmed.into() }, repo, branch, folders })
+        let repos = if trimmed == PARENT { folders.clone() } else { Vec::new() };
+        Ok(Folder {
+            folder: if trimmed.is_empty() { "/".into() } else { trimmed.into() },
+            repo,
+            branch,
+            folders,
+            repos,
+        })
     }
 }

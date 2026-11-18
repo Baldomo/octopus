@@ -9,6 +9,7 @@ use octopus_proto::Error;
 use octopus_proto::ops::{Folder, FolderGet};
 
 use crate::git::{git_command, run_git};
+use crate::login;
 
 /// A root or folder, `what` naming which: an absolute path to a directory, its symlinks, `.` and `..` resolved.
 pub(crate) fn directory(what: &str, path: &str) -> Result<String, Error> {
@@ -46,17 +47,24 @@ fn head_branch(repo: &Path) -> Result<Option<String>, Error> {
     Ok(output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim_end().to_string()))
 }
 
+/// `~` reads the home folder of the server's user.
 pub(crate) fn folder_get(op: FolderGet) -> Result<Folder, Error> {
-    let folder = directory("folder", &op.folder)?;
+    let asked = match op.folder.as_str() {
+        "~" => login::home()?.to_string_lossy().into_owned(),
+        path => path.to_string(),
+    };
+    let folder = directory("folder", &asked)?;
     let repo = repo(Path::new(&folder))?;
     let branch = repo.as_deref().map(head_branch).transpose()?.flatten();
     let repo = repo.map(|repo| repo.to_string_lossy().into_owned());
     let listed = std::fs::read_dir(&folder).map_err(|error| Error::invalid(format!("folder {folder}: {error}")))?;
-    let mut folders: Vec<String> = listed
+    let mut inside: Vec<(String, bool)> = listed
         .flatten()
         .filter(|entry| entry.path().is_dir())
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .map(|entry| (entry.file_name().to_string_lossy().into_owned(), entry.path().join(".git").exists()))
         .collect();
-    folders.sort();
-    Ok(Folder { folder, repo, branch, folders })
+    inside.sort();
+    let repos = inside.iter().filter(|(_, top)| *top).map(|(name, _)| name.clone()).collect();
+    let folders = inside.into_iter().map(|(name, _)| name).collect();
+    Ok(Folder { folder, repo, branch, folders, repos })
 }

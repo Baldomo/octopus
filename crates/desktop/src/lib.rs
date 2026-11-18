@@ -2,8 +2,10 @@ mod browser;
 mod commands;
 mod layers;
 mod menu;
+mod setup;
 pub mod types;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -17,6 +19,8 @@ use tauri::{Manager, Runtime};
 
 use crate::browser::Browsers;
 use crate::layers::Layers;
+pub use crate::setup::Install;
+use crate::setup::Setup;
 
 /// The app's config, assets and capabilities, on any runtime.
 fn context<R: Runtime>() -> tauri::Context<R> {
@@ -44,10 +48,18 @@ app_commands![
     app_menu,
     file_outside,
     haptic_alignment,
+    setup,
+    setup_retry,
+    skill_install,
 ];
 
-/// Opens the window and blocks until it closes.
-pub fn run(launch_problem: Option<String>) -> anyhow::Result<()> {
+/// Writes the octopus skill for the user's Claude Code, returning where.
+pub struct Skill(pub fn() -> anyhow::Result<PathBuf>);
+
+/// Opens the window, installs this machine's server meanwhile when given one to install, and blocks until the window
+/// closes. While the user keeps the skill, every launch writes it again, so it follows the installed octopus; the
+/// first open asks before writing it.
+pub fn run(launch_problem: Option<String>, install: Option<Install>, skill: Skill) -> anyhow::Result<()> {
     let config = Config::user()?;
     let client = Client {
         me: Identity::load(&config)?,
@@ -65,7 +77,15 @@ pub fn run(launch_problem: Option<String>) -> anyhow::Result<()> {
             menu::relay(app.handle());
             let ui = Arc::clone(app.state::<Arc<UiStore>>().inner());
             app.manage(BrowserPages::new(app.handle().clone()));
+            if install.is_none()
+                && ui.ui().prefs.skill
+                && let Err(error) = (skill.0)()
+            {
+                ui.report(format!("write the octopus skill: {error:#}"));
+            }
+            app.manage(skill);
             app.manage(Browsers::new(app.handle().clone(), Layers::open(app, ui)?));
+            app.manage(Setup::start(app.handle().clone(), install));
             Ok(())
         })
         .run(context())

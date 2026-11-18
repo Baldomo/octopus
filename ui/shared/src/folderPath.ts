@@ -4,8 +4,9 @@ import { backend } from "./backend";
 import type { Folder } from "./generated";
 import type { Toward } from "./motion";
 
-/** A folder completing the path: its name, the path picking it leads to, and the path completing into it. */
-type Completion = { name: string; pick: string; into: string };
+/** A folder completing the path: its name, the path picking it leads to, the path completing into it, and whether it
+ * is the top of a git repo. */
+type Completion = { name: string; pick: string; into: string; repo: boolean };
 
 /** What the list shows while no folder completes the path: why, and whether the server refused to read the folder. */
 type Note = { text: string; refused: boolean };
@@ -68,10 +69,10 @@ export type FolderPicker = ReturnType<typeof folderPicker>;
 /**
  * A folder picker on `server` holding its own path, typed under `root` and opening on the folder `from` names with a
  * slash after it, read through `folder.get` as it changes: the folder it names, and the folders completing its last
- * segment. `choose` hands the folder to `chosen` once the server reads it as a directory and ends the picker;
- * `cancel` ends it leaving everything as it was.
+ * segment. `choose` hands the folder to `chosen` once the server reads it as a directory and ends the picker, unless
+ * `chosen` refuses it with false; `cancel` ends it leaving everything as it was.
  */
-export function folderPicker(server: string, root: string, from: string, chosen: (folder: string) => void) {
+export function folderPicker(server: string, root: string, from: string, chosen: (folder: string) => boolean | void) {
   return createRoot((end) => {
     const [path, setPath] = createSignal(from === "" || from.endsWith("/") ? from : `${from}/`);
     const reading = (typed: string) => readingOf(server, absolute(typed, root));
@@ -113,10 +114,10 @@ export function folderPicker(server: string, root: string, from: string, chosen:
           .filter(
             (name) => name.toLowerCase().startsWith(typedStem) && (typedStem.startsWith(".") || !name.startsWith(".")),
           )
-          .map((name) => ({ name, pick: `${listedPath()}${name}` }));
+          .map((name) => ({ name, pick: `${listedPath()}${name}`, repo: listed.repos.includes(name) }));
         const up =
           typedStem === "" && listed.folder !== "/"
-            ? [{ name: "..", pick: relative(parentOf(listed.folder), root) }]
+            ? [{ name: "..", pick: relative(parentOf(listed.folder), root), repo: false }]
             : [];
         const rows = [...up, ...named].map((each) => ({
           ...each,
@@ -155,8 +156,7 @@ export function folderPicker(server: string, root: string, from: string, chosen:
     }, null);
     const choose = () => {
       const now = folder();
-      if (now === undefined) return false;
-      chosen(now.folder);
+      if (now === undefined || chosen(now.folder) === false) return false;
       end();
       return true;
     };

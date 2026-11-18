@@ -26,6 +26,7 @@ export const [model, setModel] = createStore<Model>({
   version: -1,
   lists: { sections: [], workspaces: [] },
   tasks: {},
+  unread: [],
 });
 
 /** The order a section being dragged shows the sections in, which stands over the saved one until it lands. */
@@ -56,6 +57,7 @@ const [ui, setUi] = createStore<Ui>({
     board: null,
     appearance: "system",
     zoom: 100,
+    skill: false,
   },
   recent: [],
   sidebar: false,
@@ -159,6 +161,9 @@ export const tasksOn = (section: Section, server: string) =>
 export const isLive = (state: TaskState) => LIVE_STATES.some((live) => live === state);
 
 export const isLocal = (name: string) => serverView(name)?.relay === null;
+
+/** Every server this client lists has answered, and none holds a workspace. */
+export const noWorkspaceAnywhere = () => model.unread.length === 0 && model.lists.workspaces.length === 0;
 
 export const serverLabel = (name: string) => serverView(name)?.label ?? name;
 

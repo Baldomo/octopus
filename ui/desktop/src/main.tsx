@@ -9,6 +9,7 @@ import { mount } from "@octopus/shared/mount.ts";
 import { applyBoot, applyModel, applyUi, report, setAccount, setServers } from "@octopus/shared/state.ts";
 import { applyFilesChanged } from "@octopus/shared/taskFiles.ts";
 import { setWindowShown, windowFocused } from "@octopus/shared/terminalSession.ts";
+import { followSetup } from "./FirstOpen";
 import { bindKeys } from "./keys";
 import { layer } from "./layer";
 import { Docked, Floating } from "./layers";
@@ -26,6 +27,7 @@ async function start() {
     events.windowShown(setWindowShown),
     events.windowFocused(windowFocused),
     layer === "base" && events.fileDrag(fileDragged),
+    followSetup(),
   ]);
   applyBoot(await backend.boot());
   mount(() => (layer === "float" ? <Floating /> : <Docked />), document.body);

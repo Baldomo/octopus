@@ -9,9 +9,9 @@ use octopus_proto::account::{AccountId, Link};
 use octopus_proto::device::PublicKey;
 use octopus_proto::ops::{
     BrowserClose, BrowserMove, BrowserOpen, Entry, EntryKind, FileCopy, FileCreate, FileDelete, FileList, FileMove,
-    FileSearch, FileWrite, Folder, FolderGet, Match, Offer, PairedAccount, PairingForget, PairingList, PairingOffer,
-    TaskArchive, TaskCreate, TaskMove, TaskRename, TaskSetParent, TaskSetWorkspace, TermClaim, TermClose, TermOpen,
-    TermResize, TermTakeLock, WorkspaceAdd, WorkspaceRemove,
+    FileSearch, FileWrite, Folder, FolderGet, HarnessCheck, HarnessStatus, Match, Offer, PairedAccount, PairingForget,
+    PairingList, PairingOffer, TaskArchive, TaskCreate, TaskMove, TaskRename, TaskSetParent, TaskSetWorkspace,
+    TermClaim, TermClose, TermOpen, TermResize, TermTakeLock, WorkspaceAdd, WorkspaceRemove,
 };
 use octopus_proto::pairing::Invite;
 use octopus_proto::settings::Setting;
@@ -272,6 +272,16 @@ pub async fn task_create(hub: Hubbed<'_>, task: NewTask) -> Result<String, Strin
 #[tauri::command]
 pub async fn folder_get(hub: Hubbed<'_>, server: String, folder: String) -> Result<Folder, String> {
     hub.call(&server, &FolderGet { folder }).await
+}
+
+/// None when the server has no such harness.
+#[tauri::command]
+pub async fn harness_check(hub: Hubbed<'_>, server: String, harness: String) -> Result<Option<HarnessStatus>, String> {
+    match hub.connected(&server).await?.call(&HarnessCheck { id: harness }).await {
+        Ok(status) => Ok(Some(status)),
+        Err(CallError::Server(Error::NotFound { .. })) => Ok(None),
+        Err(error) => Err(hub.failure(&server, error)),
+    }
 }
 
 #[tauri::command]

@@ -12,6 +12,7 @@ use serde_json::Value;
 
 use crate::account::AccountVerb;
 use crate::manual::{FileVerb, PairingVerb, ServerVerb, TermVerb};
+use crate::skill::SkillVerb;
 use crate::{call, connect, print, server_error};
 
 pub(crate) const SERVER_FLAG: &str = "server";
@@ -97,9 +98,11 @@ pub fn tree() -> Command {
     extend(&mut nouns, "file", FileVerb::augment_subcommands);
     extend(&mut nouns, "pairing", PairingVerb::augment_subcommands);
     extend(&mut nouns, "account", AccountVerb::augment_subcommands);
+    extend(&mut nouns, "skill", SkillVerb::augment_subcommands);
     #[cfg(feature = "desktop")]
     nouns.insert(0, Command::new("app").about("Open the window onto every server in this client's list."));
     Command::new("octopus")
+        .version(env!("CARGO_PKG_VERSION"))
         .about("Drive octopus servers. Every flag is required, and a success prints JSON.")
         .subcommand_required(true)
         .subcommands(nouns)
@@ -172,6 +175,7 @@ pub async fn run(matches: &ArgMatches) -> anyhow::Result<()> {
         "file" => FileVerb::from_arg_matches(verbs)?.run().await,
         "pairing" => PairingVerb::from_arg_matches(verbs)?.run().await,
         "account" => AccountVerb::from_arg_matches(verbs)?.run().await,
+        "skill" => SkillVerb::from_arg_matches(verbs)?.run(),
         _ => unreachable!("the tree declares no verb {noun} {verb}"),
     }
 }

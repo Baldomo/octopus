@@ -5,7 +5,7 @@ use std::sync::{Arc, Weak};
 
 use octopus_proto::Error;
 use octopus_proto::Event;
-use octopus_proto::ops::{HarnessSet, Revised, TaskFocus};
+use octopus_proto::ops::{HarnessCheck, HarnessSet, HarnessStatus, Revised, TaskFocus};
 use octopus_proto::types::{AGENT_PANEL, AgentStatus, PtyId, TaskId};
 
 use crate::program_status::ProgramStatus;
@@ -81,6 +81,17 @@ impl Server {
         let rev = state.store.set_harness(&op.id, &harness)?;
         self.publish(&state, rev, Event::HarnessUpdated { harness: op.id });
         Ok(Revised { rev })
+    }
+
+    /// Looks the program up on the login PATH from the home folder, as an agent's start does from its directory.
+    pub(crate) fn harness_check(&self, op: HarnessCheck) -> Result<HarnessStatus, Error> {
+        let harness = lock(&self.state).store.harness(&op.id)?;
+        let Harness { argv, install, .. } = harness.ok_or_else(|| Error::not_found(format!("harness {}", op.id)))?;
+        let program = argv.into_iter().next().expect("harness.set rejects an empty argv");
+        let home = login::home()?;
+        let path = login::search_path(&login::resolve(&home)?)?;
+        let installed = which::which_in(&program, Some(path), &home).is_ok();
+        Ok(HarnessStatus { program, installed, install })
     }
 
     /// The agent in `terminal`, which shows idle until its program reports otherwise.
@@ -178,8 +189,11 @@ impl Server {
             return Ok(AgentSlot::HarnessNotInstalled { install: harness.install });
         };
         let session_args = if row.session.started { &harness.resume } else { &harness.start };
+        let plugin = (row.harness == harness::CLAUDE_CODE)
+            .then(|| ["--plugin-dir".to_string(), self.plugin.to_string_lossy().into_owned()]);
         let argv = std::iter::once(program.to_string_lossy().into_owned())
             .chain(args.iter().cloned())
+            .chain(plugin.into_iter().flatten())
             .chain(focus_args)
             .chain(session_args.iter().map(|arg| arg.replace(harness::SESSION, &row.session.id.0)))
             .collect();

@@ -18,7 +18,8 @@ import { Toast, toasting } from "@octopus/shared/Toast.tsx";
 import { act, model, openView, report, serverView, showModal, showSidebar, ui, uiAct } from "@octopus/shared/state.ts";
 import { dormant } from "@octopus/shared/Glyph.tsx";
 import { windowShown } from "@octopus/shared/terminalSession.ts";
-import { floatTop } from "./layer";
+import { FirstOpen, FirstOpenFloat } from "./FirstOpen";
+import { titleHeight } from "./layer";
 import { liftOnDrag } from "./lift";
 import { StatusBar } from "./StatusBar";
 import { TaskSplit } from "./TaskSplit";
@@ -66,16 +67,21 @@ const NO_INPUT: Bounds = { x: 0, y: 0, width: 0, height: 0 };
 
 /**
  * A surface of the float layer: while it is `out`, and until its exit transition ends, the app covers what `element`
- * draws with the float layer, which takes the pointer in `input`, and a surface holds the keyboard while it is `modal`.
- * It is `shown` from the moment the webview holds it, so it never draws where the window cannot show it yet.
+ * draws with the float layer, which takes the pointer in `input` and paints `body`, and a surface holds the keyboard
+ * while it is `modal`. It is `shown` from the moment the webview holds it, so it never draws where the window cannot
+ * show it yet.
  */
 function floating(surface: { name: string; modal: () => boolean; out: () => boolean }) {
   const { name, modal, out } = surface;
   const sink = () => uiAct({ do: "sink", surface: name });
   /** The surface's far corner in this webview's coordinates. */
   const [reach, setReach] = createSignal<{ right: number; bottom: number } | null>(null);
-  /** A null `input` takes no pointer. */
-  const ref = (element: HTMLElement, input: HTMLElement | null = element) => {
+  /** A null `input` takes no pointer, and a null `body` paints nothing. */
+  const ref = (
+    element: HTMLElement,
+    input: HTMLElement | null = element,
+    body: () => HTMLElement | null = () => element,
+  ) => {
     /** Ticks whenever the surface's content changes its size, as a menu growing a QR code does. */
     const [resized, setResized] = createSignal(0);
     const observer = new ResizeObserver(() => setResized((ticks) => ticks + 1));
@@ -83,15 +89,21 @@ function floating(surface: { name: string; modal: () => boolean; out: () => bool
     onCleanup(() => observer.disconnect());
     createEffect(
       on(
-        () => [out(), modal(), ui.viewport.width, ui.viewport.height, resized()] as const,
-        ([isOut, isModal]) => {
+        () => [out(), modal(), ui.viewport.width, ui.viewport.height, resized(), body()] as const,
+        ([isOut, isModal, , , , painted]) => {
+          if (painted !== null) observer.observe(painted);
           const rect = box(element);
-          setReach({ right: rect.x + rect.width, bottom: rect.y + rect.height - floatTop() });
+          setReach({ right: rect.x + rect.width, bottom: rect.y + rect.height });
           if (isOut)
             uiAct({
               do: "float",
               surface: name,
-              at: { input: input === null ? NO_INPUT : box(input), drawn: drawnBox(element) },
+              at: {
+                input: input === null ? NO_INPUT : box(input),
+                drawn: drawnBox(element),
+                body: painted === null ? NO_INPUT : box(painted),
+                radius: painted === null ? 0 : parseFloat(getComputedStyle(painted).borderTopLeftRadius) || 0,
+              },
               modal: isModal,
             });
           else if (element.getAnimations().length === 0) sink();
@@ -133,6 +145,18 @@ export function Docked() {
       if (key !== null && (asleep || before?.[0] !== key)) act(backend.taskFocus(openView()!.at));
     }),
   );
+  /**
+   * A press below the title bar that the float layer lets through to this layer while a modal floats closes the
+   * modal, as a press on its scrim does.
+   */
+  const closeModal = (event: PointerEvent) => {
+    if (ui.modal === null || event.clientY < titleHeight()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    showModal(null);
+  };
+  document.addEventListener("pointerdown", closeModal, { capture: true });
+  onCleanup(() => document.removeEventListener("pointerdown", closeModal, { capture: true }));
   createEffect(
     on(
       () => ui.reveal?.nth,
@@ -182,6 +206,7 @@ export function Docked() {
       <StatusBar />
       {/* A pointer back from a page reaches the edge with no pointerenter, as this webview never saw it leave. */}
       <div class="edge" classList={{ handle: !ui.sidebar }} onPointerMove={() => ui.sidebar || showSidebar(true)} />
+      <FirstOpen />
     </div>
   );
 }
@@ -228,13 +253,17 @@ const MODALS: Record<ModalName, () => JSX.Element> = {
   shortcuts: Shortcuts,
 };
 
+/** The scrim takes the pointer over the whole window and paints nothing; the dialog over it paints. */
 function Modal(props: { modal: ModalName }) {
   const scrim = floating({ name: "modal", modal: () => true, out: () => true });
+  const [dialog, setDialog] = createSignal<HTMLElement | null>(null);
   return (
     <>
-      <div class="scrim" ref={scrim.ref} onClick={() => showModal(null)} />
+      <div class="scrim" ref={(element) => scrim.ref(element, element, dialog)} onClick={() => showModal(null)} />
       <Show when={scrim.shown()}>
-        <Dynamic component={MODALS[props.modal]} />
+        <div ref={(holder) => queueMicrotask(() => setDialog(holder.firstElementChild as HTMLElement | null))}>
+          <Dynamic component={MODALS[props.modal]} />
+        </div>
       </Show>
     </>
   );
@@ -248,6 +277,7 @@ export function Floating() {
   const sidebar = floating({ name: "sidebar", modal: holdsKeyboard, out: () => ui.sidebar });
   return (
     <div class="float-layer" style={{ width: `${ui.viewport.width}px`, height: `${ui.viewport.height}px` }}>
+      <FirstOpenFloat />
       <PageStatus />
       <Sidebar floats={sidebar.ref} shown={sidebar.shown()} />
       <Show when={!ui.sidebar}>

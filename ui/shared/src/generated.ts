@@ -90,7 +90,25 @@ branch: string | null,
 /**
  * The names of the folders directly inside it, in name order.
  */
-folders: Array<string>, };
+folders: Array<string>, 
+/**
+ * The names of those folders that are the top of a git repo, in name order.
+ */
+repos: Array<string>, };
+
+export type HarnessStatus = { 
+/**
+ * The program the harness's argv starts.
+ */
+program: string, 
+/**
+ * Whether the PATH of the user's login environment holds the program.
+ */
+installed: boolean, 
+/**
+ * The command that installs the program.
+ */
+install: string, };
 
 export type Offer = { invite: string, 
 /**
@@ -236,7 +254,12 @@ export type Model = {
 /**
  * Raised by every model built, so the UI drops one that arrives after a newer one.
  */
-version: number, lists: Lists, tasks: { [key in string]: TaskView }, };
+version: number, lists: Lists, tasks: { [key in string]: TaskView }, 
+/**
+ * The servers this client lists that have not answered since the app started, whose workspaces and tasks the
+ * lists cannot hold yet.
+ */
+unread: Array<string>, };
 
 export type FilesChanged = { key: string, paths: Array<string>, };
 
@@ -268,7 +291,11 @@ open: string | null,
 /**
  * The section the Tasks board shows.
  */
-board: string | null, appearance: Appearance, zoom: Zoom, };
+board: string | null, appearance: Appearance, zoom: Zoom, 
+/**
+ * Whether the app keeps the octopus skill installed for the user's Claude Code, which the first open asks.
+ */
+skill: boolean, };
 
 export type Reveal = { 
 /**
@@ -298,7 +325,7 @@ viewport: Viewport,
  */
 float_input: Array<Bounds>, };
 
-export type UiAct = { "do": "open_task", key: string, } | { "do": "show_view", view: View, } | { "do": "show_board", section: string, } | { "do": "show_surface", surface: Surface, } | { "do": "set_split", split: Split, } | { "do": "reset_split" } | { "do": "toggle_pin" } | { "do": "show_sidebar", shown: boolean, } | { "do": "toggle_sidebar" } | { "do": "show_client_menu", shown: boolean, } | { "do": "toggle_client_menu" } | { "do": "set_appearance", appearance: Appearance, } | { "do": "zoom", step: ZoomStep, } | { "do": "show_modal", modal: Modal | null, } | { "do": "float", surface: string, at: Floated, modal: boolean, } | { "do": "sink", surface: string, } | { "do": "reveal", task: string, path: string, } | { "do": "report", problem: string, };
+export type UiAct = { "do": "open_task", key: string, } | { "do": "show_view", view: View, } | { "do": "show_board", section: string, } | { "do": "show_surface", surface: Surface, } | { "do": "set_split", split: Split, } | { "do": "reset_split" } | { "do": "toggle_pin" } | { "do": "show_sidebar", shown: boolean, } | { "do": "toggle_sidebar" } | { "do": "show_client_menu", shown: boolean, } | { "do": "toggle_client_menu" } | { "do": "set_appearance", appearance: Appearance, } | { "do": "set_skill", skill: boolean, } | { "do": "zoom", step: ZoomStep, } | { "do": "show_modal", modal: Modal | null, } | { "do": "float", surface: string, at: Floated, modal: boolean, } | { "do": "sink", surface: string, } | { "do": "reveal", task: string, path: string, } | { "do": "report", problem: string, };
 
 export type Viewport = { width: number, height: number, };
 
@@ -320,7 +347,7 @@ session: string, };
 
 export type Bounds = { x: number, y: number, width: number, height: number, };
 
-export type Floated = { input: Bounds, drawn: Bounds, };
+export type Floated = { input: Bounds, drawn: Bounds, body: Bounds, radius: number, };
 
 export type FileDrag = { "kind": "over", x: number, y: number, } | { "kind": "drop", paths: Array<string>, x: number, y: number, } | { "kind": "leave" };
 
@@ -372,6 +399,6 @@ export const HOLDER_GRACE_MS = 10000 as const;
 
 export const VERSION = "0.0.0" as const;
 
-export const COMMANDS = ["boot","ready","ui_act","quit","server_pair","server_offer","server_accounts","server_revoke","account_link","account_join","settings_set","account_remove","account_leave","account_start_over","servers_refresh","server_rename","server_forget","workspace_add","workspace_remove","section_rename","section_color","auto_color","task_focus","task_resume","task_move","task_set_parent","task_set_workspace","task_rename","task_archive","task_create","folder_get","term_attach","term_input","term_detach","term_open","term_close","term_claim","term_take_lock","term_resize","browser_open","browser_close","browser_move","file_list","file_root_url","file_write","file_create","file_move","file_copy","file_delete","file_upload","file_upload_content","file_search"] as const;
+export const COMMANDS = ["boot","ready","ui_act","quit","server_pair","server_offer","server_accounts","server_revoke","account_link","account_join","settings_set","account_remove","account_leave","account_start_over","servers_refresh","server_rename","server_forget","workspace_add","workspace_remove","section_rename","section_color","auto_color","task_focus","task_resume","task_move","task_set_parent","task_set_workspace","task_rename","task_archive","task_create","folder_get","harness_check","term_attach","term_input","term_detach","term_open","term_close","term_claim","term_take_lock","term_resize","browser_open","browser_close","browser_move","file_list","file_root_url","file_write","file_create","file_move","file_copy","file_delete","file_upload","file_upload_content","file_search"] as const;
 
 export const EVENTS = {"account":"account","browserDownloaded":"browser_downloaded","browserFailed":"browser_failed","browserHeld":"browser_held","browserOpened":"browser_opened","browserPaged":"browser_paged","fileDrag":"file-drag","filesChanged":"files_changed","microphoneDenied":"microphone_denied","model":"model","servers":"servers","ui":"ui","windowFocused":"window-focused","windowShown":"window-shown"} as const;

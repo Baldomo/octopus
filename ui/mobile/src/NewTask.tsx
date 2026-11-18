@@ -7,7 +7,7 @@ import { feel } from "./feel";
 import { Icon } from "./Icon";
 import { unfold } from "./motion";
 import { openTask, raiseSheet, showInSheet } from "./nav";
-import { Chev, Field, Flab, Gap, Para, Secondary, sectionColor, Seg, Slot } from "./parts";
+import { Chev, Field, Flab, Gap, Note, Para, Secondary, sectionColor, Seg, Slot } from "./parts";
 import { Sheet, SheetHead } from "./Sheet";
 
 /**
@@ -139,6 +139,7 @@ export function NewTask(props: { section: string | null }) {
         />
         <Flab>harness</Flab>
         <Field value={draft.harness()} input={draft.setHarness} mono />
+        <Show when={draft.harnessMissing()}>{(missing) => <Note err>{missing()}</Note>}</Show>
         <Flab>session</Flab>
         <Field value={draft.session()} input={draft.setSession} placeholder="fresh session, or an id to resume" />
         <Gap n={2} />

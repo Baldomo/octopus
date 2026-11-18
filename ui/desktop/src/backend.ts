@@ -2,7 +2,15 @@ import { invoke as invokeAny, type InvokeArgs } from "@tauri-apps/api/core";
 import { on } from "@octopus/shared/backend.ts";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { BrowserId, Go, OnScreen, TaskRef } from "@octopus/shared/generated.ts";
-import { COMMANDS, EVENTS, type Hovered, type MenuGroup, type MenuKey, type Outside } from "./generated";
+import {
+  COMMANDS,
+  EVENTS,
+  type Hovered,
+  type MenuGroup,
+  type MenuKey,
+  type Outside,
+  type SetupView,
+} from "./generated";
 
 const invoke = <T>(command: (typeof COMMANDS)[number], args?: InvokeArgs) => invokeAny<T>(command, args);
 
@@ -20,6 +28,12 @@ export const desktop = {
   /** Reveals or opens an entry of a task whose server runs on this machine. */
   fileOutside: (at: TaskRef, path: string, how: Outside) => invoke<void>("file_outside", { at, path, how }),
   hapticAlignment: () => invoke<void>("haptic_alignment"),
+  /** The install of this machine's server this launch runs, if any. */
+  setup: () => invoke<SetupView | null>("setup"),
+  /** Installs this machine's server again after a failed install. */
+  setupRetry: () => invoke<void>("setup_retry"),
+  /** Writes the octopus skill for the user's Claude Code. */
+  skillInstall: () => invoke<void>("skill_install"),
   /** Opens an `http` or `https` URL in the system's browser. */
   openOutside: openUrl,
 };
@@ -27,4 +41,5 @@ export const desktop = {
 export const desktopEvents = {
   browserHovered: on<Hovered | null>(EVENTS.browserHovered),
   menuCommand: on<MenuKey>(EVENTS.menuCommand),
+  setup: on<SetupView | null>(EVENTS.setup),
 };

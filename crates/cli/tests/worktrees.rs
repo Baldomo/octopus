@@ -92,11 +92,13 @@ async fn a_folder_shows_its_repo_branch_and_the_folders_inside_it_and_an_in_plac
             folder: canonical.clone(),
             repo: Some(canonical),
             branch: Some("main".into()),
-            folders: vec![".git".into(), "src".into()]
+            folders: vec![".git".into(), "src".into()],
+            repos: vec![],
         }
     );
     let outside = laptop.call(&get(dir.path())).await.expect("folder.get");
-    assert_eq!((outside.repo, outside.branch, outside.folders.contains(&"repo".to_string())), (None, None, true));
+    let listed = (outside.folders.contains(&"repo".to_string()), outside.repos.contains(&"repo".to_string()));
+    assert_eq!((outside.repo, outside.branch, listed), (None, None, (true, true)), "a repo's top is listed as one");
     for folder in [Path::new("repo"), &repo.join("README.md")] {
         assert!(matches!(refused(laptop.call(&get(folder)).await), Error::InvalidArgs { .. }));
     }

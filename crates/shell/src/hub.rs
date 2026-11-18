@@ -83,6 +83,9 @@ pub struct Model {
     pub version: u64,
     pub lists: Lists,
     pub tasks: BTreeMap<String, TaskView>,
+    /// The servers this client lists that have not answered since the app started, whose workspaces and tasks the
+    /// lists cannot hold yet.
+    pub unread: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -662,7 +665,8 @@ impl Hub {
         let version = self.versions.fetch_add(1, Ordering::Relaxed);
         let tasks =
             task_views(&state.caches, &state.waking, |server, holder| state.held_here(&self.me, server, holder));
-        Model { version, lists: lists(&state.caches, &state.waking), tasks }
+        let unread = state.links.keys().filter(|server| !state.caches.contains_key(*server)).cloned().collect();
+        Model { version, lists: lists(&state.caches, &state.waking), tasks, unread }
     }
 
     /// Focuses the task with the account's flags for its harness, its agent waking until the server's answer reaches

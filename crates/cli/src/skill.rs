@@ -1,6 +1,13 @@
-//! The octopus skill: every command and flag of the command tree, rendered for an agent to read.
+//! The octopus skill: every command and flag of the command tree, rendered for an agent to read, installed for the
+//! user's Claude Code, and laid out as the plugin a server hands its agents.
 
-use clap::Command;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, anyhow};
+use clap::{Command, Subcommand};
+use serde::Serialize;
+
+use crate::print;
 
 /// Where the rendered skill lives, relative to the workspace root.
 pub const PATH: &str = "skills/octopus/SKILL.md";
@@ -66,6 +73,70 @@ pub fn render(tree: &Command) -> String {
     let mut out = HEAD.to_string();
     render_tree("", tree, &mut out);
     out
+}
+
+/// The Claude Code plugin a server hands its agents, beside the server's store.
+pub const PLUGIN_DIR: &str = "claude-plugin";
+const PLUGIN_MANIFEST: &str = r#"{ "name": "octopus", "description": "The octopus skill, for agents octopus runs." }
+"#;
+
+/// Writes `text` to `path`, making its folders.
+fn write(path: &Path, text: &str) -> anyhow::Result<()> {
+    let folder = path.parent().expect("a skill file sits in a folder");
+    std::fs::create_dir_all(folder).with_context(|| format!("create {}", folder.display()))?;
+    std::fs::write(path, text).with_context(|| format!("write {}", path.display()))
+}
+
+/// Lays out at `dir` a Claude Code plugin carrying the skill this binary renders.
+pub fn write_plugin(dir: &Path) -> anyhow::Result<()> {
+    write(&dir.join(".claude-plugin/plugin.json"), PLUGIN_MANIFEST)?;
+    write(&dir.join("skills/octopus/SKILL.md"), &render(&crate::commands::tree()))
+}
+
+/// The folder Claude Code reads the user's octopus skill from.
+fn user_skill() -> anyhow::Result<PathBuf> {
+    Ok(dirs::home_dir().ok_or_else(|| anyhow!("no home directory"))?.join(".claude/skills/octopus"))
+}
+
+#[derive(Serialize)]
+struct Placed {
+    path: PathBuf,
+}
+
+/// Writes the skill this binary renders to `~/.claude/skills/octopus/SKILL.md`, returning the file's path.
+pub fn install() -> anyhow::Result<PathBuf> {
+    let path = user_skill()?.join("SKILL.md");
+    write(&path, &render(&crate::commands::tree()))?;
+    Ok(path)
+}
+
+/// Removes the skill's folder from `~/.claude/skills`, returning its path.
+fn uninstall() -> anyhow::Result<PathBuf> {
+    let folder = user_skill()?;
+    match std::fs::remove_dir_all(&folder) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            Err(error).with_context(|| format!("remove {}", folder.display()))
+        }
+        _ => Ok(folder),
+    }
+}
+
+#[derive(Subcommand)]
+pub enum SkillVerb {
+    /// Write the octopus skill, rendered from this octopus's commands, to ~/.claude/skills/octopus/SKILL.md for Claude Code.
+    Install,
+    /// Remove the octopus skill from ~/.claude/skills.
+    Uninstall,
+}
+
+impl SkillVerb {
+    pub fn run(self) -> anyhow::Result<()> {
+        let path = match self {
+            Self::Install => install()?,
+            Self::Uninstall => uninstall()?,
+        };
+        print(&Placed { path })
+    }
 }
 
 #[cfg(all(test, feature = "desktop"))]

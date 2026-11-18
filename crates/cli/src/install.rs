@@ -39,7 +39,13 @@ pub fn install(service: &Service) -> anyhow::Result<Registration> {
     if let microphone::Outcome::Failed { reason } = &microphone {
         eprintln!("octopus: installed without the Octopus Microphone: {reason}");
     }
-    manager::register(&service.id, &unit)?;
+    manager::register(&service.id, &unit).with_context(|| {
+        let run = service.command();
+        format!(
+            "the {} did not start the server: start one in this session, or run the server by hand with `{run}`",
+            manager::NAME
+        )
+    })?;
     Ok(Registration { service: service.id.clone(), unit, microphone })
 }
 

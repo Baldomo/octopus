@@ -254,13 +254,33 @@ pub struct Folder {
     pub branch: Option<String>,
     /// The names of the folders directly inside it, in name order.
     pub folders: Vec<String>,
+    /// The names of those folders that are the top of a git repo, in name order.
+    pub repos: Vec<String>,
 }
 
 op!(
     /// Show a folder on the server's machine, for a new task to pick: the git repo and branch it sits in and the folders inside it.
     FolderGet = "folder.get" -> Folder {
-        /// The folder, as an absolute path.
+        /// The folder, as an absolute path, or ~ for the home folder of the server's user.
         folder: String,
+    }
+);
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct HarnessStatus {
+    /// The program the harness's argv starts.
+    pub program: String,
+    /// Whether the PATH of the user's login environment holds the program.
+    pub installed: bool,
+    /// The command that installs the program.
+    pub install: String,
+}
+
+op!(
+    /// Show whether a harness's program is installed on the server, and the command that installs it.
+    HarnessCheck = "harness.check" -> HarnessStatus {
+        /// The harness's id, which tasks name.
+        id: String,
     }
 );
 op!(
@@ -653,6 +673,7 @@ pub fn commands() -> Vec<Command> {
         command::<WorkspaceRemove>(),
         command::<FolderGet>(),
         command::<HarnessSet>(),
+        command::<HarnessCheck>(),
         command::<TaskCreate>(),
         command::<TaskMove>(),
         command::<TaskSetParent>(),

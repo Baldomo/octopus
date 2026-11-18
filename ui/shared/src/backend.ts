@@ -11,6 +11,7 @@ import type {
   FileDrag,
   FilesChanged,
   Folder,
+  HarnessStatus,
   Match,
   Model,
   NewTask,
@@ -90,6 +91,9 @@ export const backend = {
     invoke<void>(octopus("task_set_workspace"), { at, workspace }),
   /** The folder on `server`, resolved, with the git repo it sits in and the folders inside it. */
   folderGet: (server: string, folder: string) => invoke<Folder>(octopus("folder_get"), { server, folder }),
+  /** Whether the harness's program is installed on `server`; null when the server has no such harness. */
+  harnessCheck: (server: string, harness: string) =>
+    invoke<HarnessStatus | null>(octopus("harness_check"), { server, harness }),
   taskRename: (at: TaskRef, title: string) => invoke<void>(octopus("task_rename"), { at, title }),
   taskArchive: (at: TaskRef) => invoke<void>(octopus("task_archive"), { at }),
   /** Resolves to the created task's key. */

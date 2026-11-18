@@ -54,7 +54,7 @@ Remove a workspace with no live task, with every task in it; their worktrees go 
 Show a folder on the server's machine, for a new task to pick: the git repo and branch it sits in and the folders inside it.
 
 - `--server <server>`: The paired server's name.
-- `--folder <folder>`: The folder, as an absolute path.
+- `--folder <folder>`: The folder, as an absolute path, or ~ for the home folder of the server's user.
 
 ## `octopus harness set`
 
@@ -66,6 +66,13 @@ Declare how a harness starts its agent.
 - `--start <start>`: The args appended to argv on a session's first start, with {session} for the session id, e.g. ["--session-id","{session}"].
 - `--resume <resume>`: The args appended to argv on every later start, with {session} for the session id, e.g. ["--resume","{session}"].
 - `--install <install>`: The command that installs the agent, shown when it is missing.
+
+## `octopus harness check`
+
+Show whether a harness's program is installed on the server, and the command that installs it.
+
+- `--server <server>`: The paired server's name.
+- `--id <id>`: The harness's id, which tasks name.
 
 ## `octopus task create`
 
@@ -419,3 +426,11 @@ Leave this account for a fresh one of this device's own, keeping its servers.
 ## `octopus account start-over`
 
 Start a fresh account with no servers, as a device its account removed does.
+
+## `octopus skill install`
+
+Write the octopus skill, rendered from this octopus's commands, to ~/.claude/skills/octopus/SKILL.md for Claude Code.
+
+## `octopus skill uninstall`
+
+Remove the octopus skill from ~/.claude/skills.

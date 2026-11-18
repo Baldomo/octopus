@@ -11,13 +11,21 @@ pub fn search_path(environment: &[(String, String)]) -> Result<OsString, Error> 
     path.ok_or_else(|| Error::internal("the login environment sets no PATH"))
 }
 
-/// The account's login shell, which a shell panel runs.
-pub fn shell() -> Result<PathBuf, Error> {
+fn account() -> Result<nix::unistd::User, Error> {
     use nix::unistd::{User, getuid};
 
     let uid = getuid();
-    let account = User::from_uid(uid).map_err(Error::internal)?;
-    Ok(account.ok_or_else(|| Error::internal(format!("uid {uid} has no account")))?.shell)
+    User::from_uid(uid).map_err(Error::internal)?.ok_or_else(|| Error::internal(format!("uid {uid} has no account")))
+}
+
+/// The account's login shell, which a shell panel runs.
+pub fn shell() -> Result<PathBuf, Error> {
+    Ok(account()?.shell)
+}
+
+/// The account's home folder.
+pub fn home() -> Result<PathBuf, Error> {
+    Ok(account()?.dir)
 }
 
 /// Runs the account's login shell interactively, as a terminal window does, in `directory`, so whatever the

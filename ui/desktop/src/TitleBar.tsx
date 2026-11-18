@@ -3,6 +3,7 @@ import { commands, hint, mac } from "@octopus/shared/commands.ts";
 import { act, me, openView, serverLabel, serverView, toggleClientMenu, ui } from "@octopus/shared/state.ts";
 import { Gear } from "@octopus/shared/Gear.tsx";
 import { desktop } from "./backend";
+import { Mark } from "./FirstOpen";
 
 function Crumbs(props: { crumbs: string[] }) {
   return (
@@ -35,6 +36,7 @@ export function TitleBar() {
       <Show when={mac}>
         <div class="lights" data-tauri-drag-region />
       </Show>
+      <Mark />
       <Crumbs crumbs={crumbs()} />
       <div class="spacer" data-tauri-drag-region />
       <Show when={ui.prefs.view === "task" && openView()}>

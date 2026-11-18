@@ -110,7 +110,7 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       TARGETS: ${{ matrix.targets }}
       ARCH: ${{ matrix.arch }}
-      DESKTOP_BUNDLE_CONFIG: '{"mainBinaryName":"octopus","bundle":{"macOS":{"infoPlist":"../cli/octopus.plist"}}}'
+      DESKTOP_BUNDLE_CONFIG: '{"mainBinaryName":"octopus"}'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

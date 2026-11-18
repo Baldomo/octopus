@@ -25,11 +25,11 @@ body {
 [data-layer="float"] body {
   background: transparent;
 }
-/* The float layer's webview hangs from the title bar's bottom edge, and its surfaces lay out in window coordinates
-   in a box that never scrolls. */
+/* The float layer's webview starts at the window's corner, so its surfaces lay out in window coordinates in a box
+   that never scrolls. */
 .float-layer {
   position: fixed;
-  top: calc(-1 * var(--title-h));
+  top: 0;
   left: 0;
 }
 
@@ -310,11 +310,13 @@ body {
   position: absolute;
   inset: var(--title-h) 0 0;
 }
+/* Centered by its margins, so its box is where it draws and the float layer paints it. */
 .dialog {
   position: absolute;
   top: calc(var(--title-h) + var(--s6) * 2);
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  margin: 0 auto;
   width: 616px;
   max-height: 60vh;
   display: flex;

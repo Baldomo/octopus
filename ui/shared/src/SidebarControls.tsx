@@ -1,8 +1,10 @@
 import { createResource, createSignal, For, Show } from "solid-js";
 import { backend } from "./backend";
+import { baseName, folderPicker } from "./folderPath";
 import type { Swatch } from "./generated";
 import { anyMenuOpen } from "./Menu";
 import { act, model, serverLabel, servers } from "./state";
+import { FolderPick } from "./NewTask";
 import { pickSwatch, sameSwatch, SWATCHES } from "./swatches";
 import { swatchColor } from "./tokens";
 import { toast } from "./Toast";
@@ -64,130 +66,85 @@ const [adding, setAdding] = createSignal(false);
 
 export const holdsKeyboard = () => anyMenuOpen() || renaming() !== null || adding();
 
+/** "+ workspace", which raises the folder picker in its place. */
 export function AddWorkspace() {
   return (
-    <Show
-      when={adding()}
-      fallback={
-        <button class="addws" onClick={() => setAdding(true)}>
-          <span>+</span>workspace
-        </button>
-      }
-    >
-      <WorkspaceCard />
-    </Show>
+    <div class="anchor">
+      <button class="addws" onClick={() => setAdding(true)}>
+        <span>+</span>workspace
+      </button>
+      <Show when={adding()}>
+        <AddPick />
+      </Show>
+    </div>
   );
 }
 
-function WorkspaceCard() {
-  const [server, setServer] = createSignal(servers().find((server) => server.reachable)?.name ?? "");
-  const [name, setName] = createSignal("");
-  const [root, setRoot] = createSignal("");
-  /** Null until the user picks a color other than auto. */
-  const [picked, setPicked] = createSignal<Swatch | null>(null);
-  const [auto] = createResource(() => name().trim(), backend.autoColor);
-  const color = () => {
-    const swatch = picked() ?? auto();
-    return swatch && swatchColor(swatch);
-  };
-  const [error, setError] = createSignal<string | null>(null);
-  const [sending, setSending] = createSignal(false);
-  const submit = () => {
-    if (sending()) return;
-    const [chosen, named, rooted] = [server(), name().trim(), root().trim()];
-    const [swatch, resolved] = [picked(), auto.state === "ready" ? auto() : undefined];
-    const stored = swatch && pickSwatch(swatch, resolved);
-    const needs = [
-      chosen === "" && "a server",
-      named === "" && "name",
-      !rooted.startsWith("/") && "an absolute root",
-    ].filter((field) => field !== false);
-    if (needs.length > 0) return setError(`Needs ${needs.join(" and ")}.`);
-    if (model.lists.workspaces.some((workspace) => workspace.server === chosen && workspace.name === named)) {
-      return setError(`${serverLabel(chosen)} already has ${named}.`);
+/** This machine's server while it is reachable, else the first reachable server. */
+const startingServer = () =>
+  (
+    servers().find((server) => server.reachable && server.relay === null) ??
+    servers().find((server) => server.reachable)
+  )?.name;
+
+/**
+ * The folder picker on a reachable server's home folder, the reachable servers to switch between above its path.
+ * Choosing a folder adds a workspace named after it, rooted in it, colored auto; a name the server holds is refused
+ * in the picker, and the server's refusal shows as a toast.
+ */
+function AddPick() {
+  const [server, setServer] = createSignal(startingServer());
+  const [refusal, setRefusal] = createSignal<string | null>(null);
+  const [home] = createResource(server, (on) => backend.folderGet(on, "~"));
+  const add = (on: string, folder: string) => {
+    const name = baseName(folder);
+    if (model.lists.workspaces.some((workspace) => workspace.server === on && workspace.name === name)) {
+      setRefusal(`${serverLabel(on)} already has ${name}.`);
+      return false;
     }
-    setSending(true);
-    backend
-      .workspaceAdd(chosen, named, rooted, stored)
-      .then(
-        () => {
-          setAdding(false);
-          toast(
-            <>
-              Added <b>{named}</b> on {chosen}
-            </>,
-          );
-        },
-        (refused) => setError(String(refused)),
-      )
-      .finally(() => setSending(false));
+    backend.workspaceAdd(on, name, folder, null).then(
+      () =>
+        toast(
+          <>
+            Added <b>{name}</b> on {serverLabel(on)}
+          </>,
+        ),
+      (refused) => toast(String(refused)),
+    );
   };
-  const keys = (event: KeyboardEvent) => {
-    if (event.key === "Enter" && event.target instanceof HTMLInputElement) submit();
-    if (event.key === "Escape") setAdding(false);
-  };
-  return (
-    <div class="card" style={{ "--ws": color() }} onKeyDown={keys}>
-      <div class="ttl">
-        <i />
-        Add a workspace
-      </div>
-      <div class="field">
-        <span>Server</span>
-        <div class="pick">
-          <For each={servers()}>
-            {(option) => (
-              <button
-                class="host"
-                classList={{ on: server() === option.name }}
-                disabled={!option.reachable}
-                title={option.reachable ? undefined : "unreachable"}
-                onClick={() => setServer(option.name)}
-              >
-                <span class="dot" classList={{ off: !option.reachable }} />
-                <span class="name">{option.label}</span>
-              </button>
-            )}
-          </For>
-        </div>
-      </div>
-      <label class="field">
-        <span>Name</span>
-        <input
-          ref={(input) => requestAnimationFrame(() => input.focus())}
-          spellcheck={false}
-          placeholder="octopus"
-          value={name()}
-          onInput={(event) => setName(event.currentTarget.value)}
-        />
-      </label>
-      <label class="field">
-        <span>Root</span>
-        <input
-          class="mono"
-          spellcheck={false}
-          placeholder="/Users/you/src/octopus"
-          value={root()}
-          onInput={(event) => setRoot(event.currentTarget.value)}
-        />
-      </label>
-      <Show when={auto()}>
-        {(auto) => (
-          <div class="field">
-            <span>Color</span>
-            <Matrix current={picked() ?? auto()} auto={auto()} pick={setPicked} />
-          </div>
+  const head = (
+    <div class="pick servers-pick">
+      <For each={servers()}>
+        {(option) => (
+          <button
+            type="button"
+            class="host"
+            classList={{ on: server() === option.name }}
+            disabled={!option.reachable}
+            title={option.reachable ? undefined : "unreachable"}
+            onClick={() => {
+              setRefusal(null);
+              setServer(option.name);
+            }}
+          >
+            <span class="dot" classList={{ off: !option.reachable }} />
+            <span class="name">{option.label}</span>
+          </button>
         )}
-      </Show>
-      <Show when={error()}>{(message) => <div class="err">{message()}</div>}</Show>
-      <div class="row">
-        <button class="btn" onClick={() => setAdding(false)}>
-          Cancel
-        </button>
-        <button class="btn go" onClick={submit}>
-          Add
-        </button>
-      </div>
+      </For>
     </div>
+  );
+  return (
+    <Show when={server() !== undefined && home.state === "ready" && { on: server()!, root: home().folder }} keyed>
+      {({ on, root }) => (
+        <FolderPick
+          picker={folderPicker(on, root, "", (folder) => add(on, folder))}
+          gone={() => setAdding(false)}
+          head={head}
+          repos
+          refusal={refusal()}
+        />
+      )}
+    </Show>
   );
 }

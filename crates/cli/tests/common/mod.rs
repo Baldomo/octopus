@@ -67,8 +67,16 @@ async fn serve_on(dir: &Path, socket: &str, host: &str, relay: Option<iroh_relay
     let url: RelayUrl = url.parse().expect("a URL");
     let socket = dir.join(socket);
     let host = TerminalHost { program: OCTOPUS.into(), address: dir.join(host) };
-    let server = Server::open(SERVER, &dir.join("store.db"), &dir.join("worktrees"), &host, url.clone(), false)
-        .expect("open server");
+    let server = Server::open(
+        SERVER,
+        &dir.join("store.db"),
+        &dir.join("worktrees"),
+        &host,
+        url.clone(),
+        false,
+        &dir.join("plugin"),
+    )
+    .expect("open server");
     let endpoint = remote::listen(([127, 0, 0, 1], 0).into(), url, server.device()).await.expect("bind iroh");
     tokio::spawn(serve(Arc::clone(&server), Listener::bind(&socket).expect("bind"), endpoint));
     Running { server, socket, host: host.address, relay }
