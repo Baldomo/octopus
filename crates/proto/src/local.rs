@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::frames::{Outcome, REPLY_BUFFER, decode_reply, line};
+use crate::frames::{Op, Outcome, REPLY_BUFFER, Request, decode_reply, line};
+use crate::ops::SessionPing;
 
 const ACCEPT_RETRY: Duration = Duration::from_millis(100);
 
@@ -83,4 +84,19 @@ pub async fn connect(address: &Path) -> io::Result<Stream> {
 
 pub fn connect_blocking(address: &Path) -> io::Result<BlockingStream> {
     BlockingStream::connect(address)
+}
+
+/// Whether a server serves `address`: it replies within `patience` to a ping, with the refusal a ping before
+/// `session.hello` draws. A socket whose process is still starting takes the connection and replies only once it
+/// serves.
+pub fn answers(address: &Path, patience: Duration) -> bool {
+    let args = serde_json::to_value(SessionPing {}).expect("ops serialize");
+    let ping = Request { id: 0, op: SessionPing::NAME.to_string(), args };
+    let replied = |mut stream: BlockingStream| -> io::Result<bool> {
+        stream.set_read_timeout(Some(patience))?;
+        stream.write_all(line(&ping).as_bytes())?;
+        let mut reply = Vec::new();
+        Ok(io::BufReader::new(stream).read_until(b'\n', &mut reply)? > 0)
+    };
+    connect_blocking(address).and_then(replied).unwrap_or(false)
 }

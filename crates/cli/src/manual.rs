@@ -83,9 +83,11 @@ impl ServerVerb {
                         .map_err(|error| anyhow!("{error}"))?;
                 let endpoint = remote::listen(udp, relay.clone(), server.device()).await?;
                 let key = server.device().public();
+                let bound: Vec<String> = endpoint.bound_sockets().iter().map(ToString::to_string).collect();
                 eprintln!(
-                    "octopus server {name} listening on {}, and as {key} on UDP {udp} and {relay}",
-                    socket.display()
+                    "octopus server {name} listening on {}, and as {key} on UDP {} and {relay}",
+                    socket.display(),
+                    bound.join(", ")
                 );
                 if udp.ip().is_loopback() {
                     eprintln!(

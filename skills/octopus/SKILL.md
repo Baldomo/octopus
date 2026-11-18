@@ -353,7 +353,7 @@ Run this machine's server in the foreground.
 - `--store <store>`: The SQLite file the server keeps its state in.
 - `--worktrees <worktrees>`: Where task worktrees live: <worktrees>/<repo>/<task>.
 - `--terminal-host <terminal-host>`: Socket of the terminal host, the process that keeps this server's terminals running across restarts; started if nothing answers there.
-- `--udp <udp>`: The UDP address clients on other machines reach this server on directly, e.g. 0.0.0.0:7300, which takes IPv6 on the same port too.
+- `--udp <udp>`: The UDP address clients on other machines reach this server on directly: 0.0.0.0:0 for a free port the OS picks at each start, or a fixed one like 0.0.0.0:7300 to forward on a router. 0.0.0.0 takes IPv6 too, on the same port when it is fixed.
 - `--relay <relay>`: The iroh relay this server is homed on, which clients on other machines dial it through: one of n0's, e.g. https://euc1-1.relay.n0.iroh.link./, or one of your own.
 - `--microphone true|false`: Give each terminal a virtual microphone that its lock holder feeds.
 
@@ -366,7 +366,7 @@ Run the server at every login as a user service (launchd or systemd --user).
 - `--store <store>`: The SQLite file the server keeps its state in.
 - `--worktrees <worktrees>`: Where task worktrees live: <worktrees>/<repo>/<task>.
 - `--terminal-host <terminal-host>`: Socket of the terminal host, the process that keeps this server's terminals running across restarts; started if nothing answers there.
-- `--udp <udp>`: The UDP address clients on other machines reach this server on directly, e.g. 0.0.0.0:7300, which takes IPv6 on the same port too.
+- `--udp <udp>`: The UDP address clients on other machines reach this server on directly: 0.0.0.0:0 for a free port the OS picks at each start, or a fixed one like 0.0.0.0:7300 to forward on a router. 0.0.0.0 takes IPv6 too, on the same port when it is fixed.
 - `--relay <relay>`: The iroh relay this server is homed on, which clients on other machines dial it through: one of n0's, e.g. https://euc1-1.relay.n0.iroh.link./, or one of your own.
 - `--microphone true|false`: Give each terminal a virtual microphone that its lock holder feeds.
 - `--log <log>`: The file the service's output is appended to.

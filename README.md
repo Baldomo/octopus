@@ -74,7 +74,7 @@ cargo install --locked --path crates/cli --no-default-features
 octopus server install --name mac-mini \
   --socket ~/.octopus/server.sock --store ~/.octopus/store.db \
   --worktrees ~/.octopus/worktrees --terminal-host ~/.octopus/host.sock \
-  --udp 0.0.0.0:7300 --relay https://euc1-1.relay.n0.iroh.link./ \
+  --udp 0.0.0.0:0 --relay https://euc1-1.relay.n0.iroh.link./ \
   --microphone false --log ~/.octopus/server.log
 octopus server add --name mac-mini --socket ~/.octopus/server.sock
 octopus pairing offer --server mac-mini

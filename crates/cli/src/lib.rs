@@ -17,6 +17,7 @@ use serde::Serialize;
 
 /// A malformed call exits with clap's usage status; a call the server or transport fails exits 1.
 const USAGE: u8 = 2;
+const ERROR_PREFIX: &str = "error: ";
 
 async fn connect(server: &str) -> anyhow::Result<Connection> {
     let config = Config::user()?;
@@ -60,7 +61,7 @@ pub fn main() -> ExitCode {
         Ok(matches) => matches,
         Err(error) => match commands::missing_flags(&error, &argv) {
             Some(missing) => {
-                eprintln!("error: {missing}");
+                eprintln!("{ERROR_PREFIX}{missing}");
                 return ExitCode::from(USAGE);
             }
             None => error.exit(),
@@ -84,7 +85,7 @@ pub fn main() -> ExitCode {
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("error: {error:#}");
+            eprintln!("{ERROR_PREFIX}{error:#}");
             ExitCode::FAILURE
         }
     }

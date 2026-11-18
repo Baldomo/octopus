@@ -1,8 +1,10 @@
-import { createResource, createSignal, For, Show } from "solid-js";
+import { createMemo, createResource, createSignal, For, onMount, Show, type JSX } from "solid-js";
 import { backend } from "./backend";
+import { commands } from "./commands";
 import { baseName, folderPicker } from "./folderPath";
 import type { Swatch } from "./generated";
-import { anyMenuOpen } from "./Menu";
+import { anyMenuOpen, dismissible } from "./Menu";
+import { floatPanel } from "./motion";
 import { act, model, serverLabel, servers } from "./state";
 import { FolderPick } from "./NewTask";
 import { pickSwatch, sameSwatch, SWATCHES } from "./swatches";
@@ -90,10 +92,12 @@ const startingServer = () =>
 /**
  * The folder picker on a reachable server's home folder, the reachable servers to switch between above its path.
  * Choosing a folder adds a workspace named after it, rooted in it, colored auto; a name the server holds is refused
- * in the picker, and the server's refusal shows as a toast.
+ * in the picker, and the server's refusal shows as a toast. While no server answers it offers pairing one, and it
+ * opens on the first server that answers.
  */
 function AddPick() {
-  const [server, setServer] = createSignal(startingServer());
+  const [picked, setServer] = createSignal<string>();
+  const server = createMemo<string | undefined>((kept) => picked() ?? kept ?? startingServer());
   const [refusal, setRefusal] = createSignal<string | null>(null);
   const [home] = createResource(server, (on) => backend.folderGet(on, "~"));
   const add = (on: string, folder: string) => {
@@ -135,16 +139,50 @@ function AddPick() {
     </div>
   );
   return (
-    <Show when={server() !== undefined && home.state === "ready" && { on: server()!, root: home().folder }} keyed>
-      {({ on, root }) => (
-        <FolderPick
-          picker={folderPicker(on, root, "", (folder) => add(on, folder))}
-          gone={() => setAdding(false)}
-          head={head}
-          repos
-          refusal={refusal()}
-        />
-      )}
+    <Show when={server() !== undefined} fallback={<NoServer head={head} />}>
+      <Show when={home.state === "ready" && { on: server()!, root: home().folder }} keyed>
+        {({ on, root }) => (
+          <FolderPick
+            picker={folderPicker(on, root, "", (folder) => add(on, folder))}
+            gone={() => setAdding(false)}
+            head={head}
+            repos
+            refusal={refusal()}
+          />
+        )}
+      </Show>
     </Show>
+  );
+}
+
+/** The picker's place while no server answers: what the user can do, and the button that does it. */
+function NoServer(props: { head: JSX.Element }) {
+  let panel!: HTMLDivElement;
+  let leaving = false;
+  const leave = (then?: () => void) => {
+    if (leaving) return;
+    leaving = true;
+    const gone = () => {
+      setAdding(false);
+      then?.();
+    };
+    void floatPanel(panel, true).then(gone, gone);
+  };
+  onMount(() => {
+    void floatPanel(panel);
+    dismissible(panel, () => leave());
+  });
+  return (
+    <div ref={panel} class="menu folder-pick" role="dialog">
+      {props.head}
+      <div class="mlabel">No server answers. Pair one to add a workspace on it.</div>
+      <div class="sep" />
+      <div class="pick-foot">
+        <span>esc cancels</span>
+        <button type="button" class="btn live" onClick={() => leave(commands.pairServer.run)}>
+          {commands.pairServer.label}
+        </button>
+      </div>
+    </div>
   );
 }

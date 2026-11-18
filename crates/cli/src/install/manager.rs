@@ -11,6 +11,8 @@ use super::unit::launchd_plist;
 #[cfg(target_os = "linux")]
 use super::unit::systemd_unit;
 
+#[cfg(feature = "desktop")]
+pub use platform::exited;
 pub use platform::{NAME, register, unit_file, unregister};
 
 fn remove_unit(path: &Path) -> anyhow::Result<()> {
@@ -74,6 +76,16 @@ mod platform {
         unload_if_loaded(id)?;
         remove_unit(unit)
     }
+
+    /// Registering loads the service afresh, so any exit launchd recorded came since then.
+    #[cfg(feature = "desktop")]
+    pub fn exited(id: &str) -> anyhow::Result<bool> {
+        let printed = run("launchctl", &["print", &format!("{}/{id}", domain())])?;
+        Ok(printed.lines().map(str::trim).any(|line| {
+            line.starts_with("last terminating signal = ")
+                || line.strip_prefix("last exit code = ").is_some_and(|code| code != "(never exited)")
+        }))
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -107,5 +119,16 @@ mod platform {
         systemctl(&["disable", "--now", &format!("{id}.service")])?;
         remove_unit(unit)?;
         systemctl(&["daemon-reload"])
+    }
+
+    /// Registering restarts the service by hand, which zeroes its count of restarts, so a restart since then, or a
+    /// service that restarted too often and failed, is an exit.
+    #[cfg(feature = "desktop")]
+    pub fn exited(id: &str) -> anyhow::Result<bool> {
+        let file = format!("{id}.service");
+        let shown = run("systemctl", &["--user", "show", &file, "--property=NRestarts,ActiveState"])?;
+        Ok(shown.lines().any(|line| {
+            line == "ActiveState=failed" || line.strip_prefix("NRestarts=").is_some_and(|count| count != "0")
+        }))
     }
 }

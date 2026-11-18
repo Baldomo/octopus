@@ -49,6 +49,11 @@ pub fn install(service: &Service) -> anyhow::Result<Registration> {
     Ok(Registration { service: service.id.clone(), unit, microphone })
 }
 
+#[cfg(feature = "desktop")]
+pub fn exited(service: &Service) -> anyhow::Result<bool> {
+    manager::exited(&service.id)
+}
+
 /// The terminal host and its agents keep running; they end with the machine. The user's input comes back, and the
 /// Octopus Microphone goes with the machine's last server.
 pub fn uninstall(name: &str) -> anyhow::Result<Registration> {

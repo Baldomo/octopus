@@ -25,8 +25,9 @@ pub struct ServerRun {
     /// started if nothing answers there.
     #[arg(long)]
     pub terminal_host: PathBuf,
-    /// The UDP address clients on other machines reach this server on directly, e.g. 0.0.0.0:7300, which takes IPv6
-    /// on the same port too.
+    /// The UDP address clients on other machines reach this server on directly: 0.0.0.0:0 for a free port the OS
+    /// picks at each start, or a fixed one like 0.0.0.0:7300 to forward on a router. 0.0.0.0 takes IPv6 too, on the
+    /// same port when it is fixed.
     #[arg(long)]
     pub udp: SocketAddr,
     /// The iroh relay this server is homed on, which clients on other machines dial it through: one of n0's,
