@@ -53,6 +53,9 @@ fn print(value: &impl Serialize) -> anyhow::Result<()> {
 /// The app owns the main thread, which the macOS event loop requires; every other command runs on tokio.
 pub fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().collect();
+    // Finder, the Dock and desktop entries start the app's executable with no arguments.
+    #[cfg(feature = "desktop")]
+    let argv = if argv.len() == 1 { vec![argv[0].clone(), "app".to_string()] } else { argv };
     let matches = match commands::tree().try_get_matches_from(&argv) {
         Ok(matches) => matches,
         Err(error) => match commands::missing_flags(&error, &argv) {

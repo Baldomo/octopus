@@ -8,11 +8,11 @@
     "mobile"
   ],
   "scripts": {
-    "build": "npm --workspace desktop run build && npm --workspace mobile run build",
+    "build": "bun run --cwd desktop build && bun run --cwd mobile build",
     "typecheck": "tsc --noEmit -p shared && tsc --noEmit -p desktop && tsc --noEmit -p mobile",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "node --experimental-strip-types --conditions=browser --test shared/src/*.test.ts desktop/src/*.test.ts mobile/src/*.test.ts"
+    "test": "bun test --conditions=browser"
   },
   "overrides": {
     "dompurify": "3.4.17"

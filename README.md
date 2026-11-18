@@ -40,12 +40,25 @@ Pair a device by scanning a server's QR code or pasting its invite. Hand the sam
 - **A phone app for iOS and Android.** Pair it with your servers by scanning a QR code, then check on agents and answer them from anywhere.
 - **Your machines.** Tasks run on your laptop, and on any Mac mini or Linux box you install the server on. Other devices reach them through an iroh relay that forwards packets it cannot read: n0's public one or your own.
 
-## Quick start
+## Download
 
-Install the app, the CLI and a server on your laptop (macOS or Linux, with Rust and Node):
+The [Releases page](https://github.com/zabealbe/octopus/releases) has the app for macOS (universal `.dmg`) and Linux (x64 and arm64 `.AppImage` and `.deb`), the Android app (`.apk`), and the headless CLI and server for macOS and Linux (`.tar.gz`).
+
+macOS builds are ad-hoc signed until notarized builds ship, so open the app the first time with right-click → Open. On macOS 15 and later, open it once, then choose Open Anyway in System Settings → Privacy & Security.
+
+Verify a download against the build that made it, and against the release's checksums:
 
 ```sh
-npm --prefix ui ci && npm --prefix ui run build
+gh attestation verify octopus_0.1.0_universal.dmg --repo zabealbe/octopus
+shasum -a 256 --check --ignore-missing SHA256SUMS
+```
+
+## Quick start
+
+Install the app, the CLI and a server on your laptop (macOS or Linux, with Rust and Bun):
+
+```sh
+bun install --cwd ui --frozen-lockfile && bun run --cwd ui build
 cargo install --locked --path crates/cli
 octopus app
 ```
@@ -67,6 +80,6 @@ octopus server add --name mac-mini --socket ~/.octopus/server.sock
 octopus pairing offer --server mac-mini
 ```
 
-Paste the invite into **Pair a server** (the `+` after the server names in the sidebar), or scan its QR code with the phone app. The phone app builds from source.
+Paste the invite into **Pair a server** (the `+` after the server names in the sidebar), or scan its QR code with the phone app. The iOS app builds from source.
 
 Developers start at [CONTRIBUTING.md](docs/CONTRIBUTING.md).

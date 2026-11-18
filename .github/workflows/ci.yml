@@ -18,23 +18,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libasound2-dev
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
-      - run: npm ci
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
         working-directory: ui
       - if: runner.os == 'Linux'
-        run: npm run typecheck
+        run: bun run typecheck
         working-directory: ui
       - if: runner.os == 'Linux'
-        run: npm run format:check
+        run: bun run format:check
         working-directory: ui
       - if: runner.os == 'Linux'
-        run: npm test
+        run: bun run test
         working-directory: ui
-      - run: npm run build
+      - run: bun run build
         working-directory: ui
       - uses: dtolnay/rust-toolchain@stable
         with:

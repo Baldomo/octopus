@@ -1,5 +1,5 @@
 **/dist
 **/node_modules
 **/generated.ts
-package-lock.json
+bun.lock
 design
