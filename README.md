@@ -4,6 +4,10 @@
   <a href="#quick-start">Quick start</a>
   ·
   <a href="docs/CONTRIBUTING.md">Contributing</a>
+  ·
+  <a href="docs/support.md">Support</a>
+  ·
+  <a href="docs/privacy.md">Privacy</a>
 </p>
 
 ### One terminal, many screens
