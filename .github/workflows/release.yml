@@ -3,6 +3,8 @@ name: release
 on:
   push:
     branches: [main]
+  schedule:
+    - cron: "17 5 * * 1,4"
   workflow_dispatch:
     inputs:
       sha:
@@ -13,12 +15,16 @@ on:
 permissions: {}
 
 concurrency:
-  group: release
+  group: ${{ github.event_name == 'schedule' && 'warm' || 'release' }}
   cancel-in-progress: false
 
 defaults:
   run:
     shell: bash
+
+env:
+  CARGO_INCREMENTAL: 0
+  DESKTOP_BUNDLE_CONFIG: '{"mainBinaryName":"octopus"}'
 
 jobs:
   version:
@@ -53,120 +59,216 @@ jobs:
             echo "$delimiter"
           } >>"$GITHUB_OUTPUT"
 
-  draft:
+  macos:
     needs: version
     if: github.repository == 'zabealbe/octopus' && needs.version.outputs.version != ''
-    runs-on: ubuntu-24.04
+    runs-on: macos-15
     permissions:
-      contents: write
-    steps:
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          VERSION: ${{ needs.version.outputs.version }}
-          SHA: ${{ needs.version.outputs.sha }}
-          NOTES: ${{ needs.version.outputs.notes }}
-        run: |
-          if gh release view "v$VERSION" >/dev/null 2>&1; then
-            echo "v$VERSION exists, so this run uploads into it"
-            exit 0
-          fi
-          printf '%s\n' "$NOTES" >"$RUNNER_TEMP/notes.md"
-          gh release create "v$VERSION" --draft --target "$SHA" --title "v$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
-
-  build:
-    needs: [version, draft]
-    if: github.repository == 'zabealbe/octopus' && needs.version.outputs.version != ''
-    environment: release
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: macos
-            runner: macos-15
-            targets: aarch64-apple-darwin x86_64-apple-darwin
-            cli: true
-          - platform: linux
-            runner: ubuntu-22.04
-            targets: x86_64-unknown-linux-gnu
-            arch: amd64
-            cli: true
-          - platform: linux
-            runner: ubuntu-24.04-arm
-            targets: aarch64-unknown-linux-gnu
-            arch: arm64
-            cli: true
-          - platform: android
-            runner: ubuntu-24.04
-            targets: aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
-            cli: false
-    runs-on: ${{ matrix.runner }}
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
     env:
-      CARGO_INCREMENTAL: 0
-      VERSION: ${{ needs.version.outputs.version }}
-      TARGETS: ${{ matrix.targets }}
-      ARCH: ${{ matrix.arch }}
-      DESKTOP_BUNDLE_CONFIG: '{"mainBinaryName":"octopus"}'
+      BUILD_TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.version.outputs.sha }}
           persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          version: ${{ needs.version.outputs.version }}
+          target: ${{ matrix.target }}
+      - run: |
+          MACOSX_DEPLOYMENT_TARGET=$(jq -r .bundle.macOS.minimumSystemVersion crates/desktop/tauri.conf.json)
+          export MACOSX_DEPLOYMENT_TARGET
+          cargo build --release --locked -p octopus-cli --target "$BUILD_TARGET"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/octopus
+          if-no-files-found: error
+          retention-days: 1
 
-      - if: matrix.platform == 'linux'
+  linux:
+    needs: version
+    if: github.repository == 'zabealbe/octopus' && needs.version.outputs.version != ''
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      BUILD_TARGET: ${{ matrix.target }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          version: ${{ needs.version.outputs.version }}
+          target: ${{ matrix.target }}
+          webkit: true
+      - run: |
+          cargo build --release --locked -p octopus-cli --target "$BUILD_TARGET"
+          (cd crates/desktop && cargo tauri bundle --bundles appimage,deb --target "$BUILD_TARGET" --config "$DESKTOP_BUNDLE_CONFIG")
+          mkdir dist
+          cp target/"$BUILD_TARGET"/release/bundle/appimage/*.AppImage "dist/octopus_${VERSION}_${ARCH}.AppImage"
+          cp target/"$BUILD_TARGET"/release/bundle/deb/*.deb "dist/octopus_${VERSION}_${ARCH}.deb"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-linux-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  cli:
+    needs: version
+    if: github.repository == 'zabealbe/octopus' && needs.version.outputs.version != ''
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15
+            target: x86_64-apple-darwin
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      BUILD_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          version: ${{ needs.version.outputs.version }}
+          target: ${{ matrix.target }}
+          cache-save: false
+          webkit: ${{ runner.os == 'Linux' }}
+      - name: Build the CLI on the desktop build's dependency features, so it compiles from the desktop cache
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libasound2-dev
+          if [ "$RUNNER_OS" = macOS ]; then
+            MACOSX_DEPLOYMENT_TARGET=$(jq -r .bundle.macOS.minimumSystemVersion crates/desktop/tauri.conf.json)
+            export MACOSX_DEPLOYMENT_TARGET
+          fi
+          cargo build --release --locked -p octopus-cli -p octopus-desktop --no-default-features --target "$BUILD_TARGET"
+          mkdir dist
+          tar -czf "dist/octopus-cli_${VERSION}_${BUILD_TARGET}.tar.gz" -C "target/$BUILD_TARGET/release" octopus
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-cli-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
 
-      - if: matrix.platform == 'android'
-        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+  android:
+    needs: version
+    if: github.repository == 'zabealbe/octopus' && needs.version.outputs.version != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64
+            triple: aarch64-linux-android
+            arch: arm64
+          - target: armv7
+            triple: armv7-linux-androideabi
+            arch: arm
+          - target: i686
+            triple: i686-linux-android
+            arch: x86
+          - target: x86_64
+            triple: x86_64-linux-android
+            arch: x86_64
+    env:
+      BUILD_TARGET: ${{ matrix.target }}
+      GRADLE_CACHE: |
+        ~/.gradle/caches
+        ~/.gradle/wrapper
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: 21
-
-      - run: |
-          rustup toolchain install stable --profile minimal --no-self-update
-          rustup default stable
-          read -ra targets <<<"$TARGETS"
-          rustup target add "${targets[@]}"
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - id: gradle
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          no-cache: true
+          path: ${{ env.GRADLE_CACHE }}
+          key: gradle-${{ hashFiles('crates/mobile/gen/android/**/*.gradle*', 'crates/mobile/gen/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+      - uses: ./.github/actions/setup
+        with:
+          version: ${{ needs.version.outputs.version }}
+          target: ${{ matrix.triple }}
+      - working-directory: crates/mobile
+        run: NDK_HOME="$ANDROID_NDK_LATEST_HOME" cargo tauri android build --apk --split-per-abi --target "$BUILD_TARGET"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-${{ matrix.arch }}
+          path: crates/mobile/gen/android/app/build/outputs/apk/${{ matrix.arch }}/release/app-${{ matrix.arch }}-release-unsigned.apk
+          if-no-files-found: error
+          retention-days: 1
+      - if: github.event_name == 'schedule' && matrix.target == 'aarch64' && steps.gradle.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.GRADLE_CACHE }}
+          key: ${{ steps.gradle.outputs.cache-primary-key }}
 
-      - name: Stamp the version
-        run: |
-          perl -pi -e 's/^version = "[^"]*"$/version = "$ENV{VERSION}"/' Cargo.toml
-          grep -qx "version = \"$VERSION\"" Cargo.toml
-          cargo update --workspace
-          for conf in crates/desktop/tauri.conf.json crates/mobile/tauri.conf.json; do
-            jq --arg version "$VERSION" '.version = $version' "$conf" >"$conf.stamped"
-            mv "$conf.stamped" "$conf"
-          done
-          mkdir dist
-
-      - run: bun install --cwd ui --frozen-lockfile && bun run --cwd ui build
-
-      - run: cargo install tauri-cli --version 2.12.4 --locked
-
-      - name: Build the macOS app
-        if: matrix.platform == 'macos'
-        run: |
-          MACOSX_DEPLOYMENT_TARGET=$(jq -r .bundle.macOS.minimumSystemVersion crates/desktop/tauri.conf.json)
-          export MACOSX_DEPLOYMENT_TARGET
-          for target in $TARGETS; do
-            cargo build --release --locked -p octopus-cli --target "$target"
-          done
+  macos-dmg:
+    needs: [version, macos]
+    if: github.repository == 'zabealbe/octopus' && needs.version.outputs.version != '' && github.event_name != 'schedule'
+    runs-on: macos-15
+    environment: release
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          version: ${{ needs.version.outputs.version }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: macos-*
+          path: ${{ runner.temp }}/macos
+      - run: |
           mkdir -p target/universal-apple-darwin/release
           lipo -create -output target/universal-apple-darwin/release/octopus \
-            target/aarch64-apple-darwin/release/octopus target/x86_64-apple-darwin/release/octopus
-
-      - name: Bundle the macOS dmg
-        if: matrix.platform == 'macos'
+            "$RUNNER_TEMP/macos/macos-aarch64-apple-darwin/octopus" "$RUNNER_TEMP/macos/macos-x86_64-apple-darwin/octopus"
+          chmod +x target/universal-apple-darwin/release/octopus
+      - name: Bundle, sign and notarize the dmg
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -185,72 +287,92 @@ jobs:
           fi
           unset APPLE_API_KEY_P8
           (cd crates/desktop && cargo tauri bundle --bundles dmg --target universal-apple-darwin --config "$DESKTOP_BUNDLE_CONFIG")
+          mkdir dist
           cp target/universal-apple-darwin/release/bundle/dmg/*.dmg "dist/octopus_${VERSION}_universal.dmg"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-macos
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
 
-      - name: Bundle the Linux AppImage and deb
-        if: matrix.platform == 'linux'
+  android-apk:
+    needs: [version, android]
+    if: github.repository == 'zabealbe/octopus' && needs.version.outputs.version != '' && github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: android-*
+          path: ${{ runner.temp }}/apks
+      - name: Merge the per-ABI apks into the universal apk
         run: |
-          cargo build --release --locked -p octopus-cli --target "$TARGETS"
-          (cd crates/desktop && cargo tauri bundle --bundles appimage,deb --target "$TARGETS" --config "$DESKTOP_BUNDLE_CONFIG")
-          cp target/"$TARGETS"/release/bundle/appimage/*.AppImage "dist/octopus_${VERSION}_${ARCH}.AppImage"
-          cp target/"$TARGETS"/release/bundle/deb/*.deb "dist/octopus_${VERSION}_${ARCH}.deb"
-
-      - name: Build the Android apk
-        if: matrix.platform == 'android'
-        working-directory: crates/mobile
-        run: |
-          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
-          cargo tauri android build --apk
-
-      - name: Sign the Android apk
-        if: matrix.platform == 'android'
+          cd "$RUNNER_TEMP/apks"
+          cp android-arm64/app-arm64-release-unsigned.apk universal.apk
+          for arch in arm x86 x86_64; do
+            unzip -q "android-$arch/app-$arch-release-unsigned.apk" 'lib/*' -d libs
+          done
+          (cd libs && zip -q -0 -r -D -X ../universal.apk lib)
+      - name: Align and sign the apk
         env:
           ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 | sort -V | tail -n 1)"
+          "$build_tools/zipalign" -P 16 -f 4 "$RUNNER_TEMP/apks/universal.apk" "$RUNNER_TEMP/apks/aligned.apk"
           keystore="$RUNNER_TEMP/release.jks"
           trap 'rm -f "$keystore"' EXIT
           base64 --decode <<<"$ANDROID_KEYSTORE" >"$keystore"
-          apksigner="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 | sort -V | tail -n 1)/apksigner"
-          "$apksigner" sign --ks "$keystore" --ks-key-alias "$ANDROID_KEY_ALIAS" \
+          mkdir dist
+          "$build_tools/apksigner" sign --ks "$keystore" --ks-key-alias "$ANDROID_KEY_ALIAS" \
             --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEYSTORE_PASSWORD \
-            --out "dist/octopus_${VERSION}.apk" \
-            crates/mobile/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk
-          "$apksigner" verify "dist/octopus_${VERSION}.apk"
+            --out "dist/octopus_${VERSION}.apk" "$RUNNER_TEMP/apks/aligned.apk"
+          "$build_tools/apksigner" verify "dist/octopus_${VERSION}.apk"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-android
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
 
-      - name: Build the CLI and server tarballs
-        if: matrix.cli
-        run: |
-          for target in $TARGETS; do
-            cargo build --release --locked -p octopus-cli --no-default-features --target "$target"
-            tar -czf "dist/octopus-cli_${VERSION}_${target}.tar.gz" -C "target/$target/release" octopus
-          done
-
+  publish:
+    needs: [version, linux, cli, macos-dmg, android-apk]
+    if: github.repository == 'zabealbe/octopus' && needs.version.outputs.version != '' && github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/*
-
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: gh release upload "v$VERSION" dist/* --clobber
-
-  publish:
-    needs: [version, build]
-    if: github.repository == 'zabealbe/octopus' && needs.version.outputs.version != ''
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
       - env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.version.outputs.version }}
+          SHA: ${{ needs.version.outputs.sha }}
+          NOTES: ${{ needs.version.outputs.notes }}
         run: |
-          mkdir dist
           cd dist
-          gh release download "v$VERSION" --pattern 'octopus*'
           sha256sum octopus* >SHA256SUMS
-          gh release upload "v$VERSION" SHA256SUMS --clobber
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "v$VERSION exists, so this run uploads into it"
+          else
+            printf '%s\n' "$NOTES" >"$RUNNER_TEMP/notes.md"
+            gh release create "v$VERSION" --draft --target "$SHA" --title "v$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          gh release upload "v$VERSION" octopus* SHA256SUMS --clobber
           gh release edit "v$VERSION" --draft=false --latest

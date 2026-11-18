@@ -1,0 +1,4 @@
+rules:
+  # actionlint rejects the `$/` self-repository form this rule asks for, so the workflows keep `./`.
+  self-repository:
+    disable: true

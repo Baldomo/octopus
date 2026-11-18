@@ -1,0 +1,71 @@
+name: setup
+description: Stamp the release version and install the tauri CLI, plus, for a compiling job, the Rust toolchain, its cache and the UI build.
+
+inputs:
+  version:
+    description: The release version to stamp.
+    required: true
+  target:
+    description: The Rust target the job compiles for, which also keys its Rust cache. Empty for a job that only bundles.
+    default: ""
+  cache-save:
+    description: Whether a scheduled run saves the Rust cache.
+    default: "true"
+  webkit:
+    description: Whether to install the Linux webview libraries the desktop app links.
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - if: inputs.webkit == 'true'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libasound2-dev
+
+    - if: inputs.target != ''
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        rustup toolchain install stable --profile minimal --no-self-update
+        rustup default stable
+        rustup target add "$TARGET"
+
+    - if: inputs.target != ''
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      with:
+        shared-key: ${{ inputs.target }}
+        cache-bin: false
+        save-if: ${{ github.event_name == 'schedule' && inputs.cache-save == 'true' }}
+
+    - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      with:
+        no-cache: true
+
+    - name: Stamp the version
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        perl -pi -e 's/^version = "[^"]*"$/version = "$ENV{VERSION}"/' Cargo.toml
+        grep -qx "version = \"$VERSION\"" Cargo.toml
+        cargo update --workspace
+        for conf in crates/desktop/tauri.conf.json crates/mobile/tauri.conf.json; do
+          jq --arg version "$VERSION" '.version = $version' "$conf" >"$conf.stamped"
+          mv "$conf.stamped" "$conf"
+        done
+
+    - name: Put the prebuilt tauri CLI behind cargo tauri
+      shell: bash
+      run: |
+        bun install --cwd ui --frozen-lockfile
+        bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+        mkdir -p "$bin"
+        printf '#!/bin/sh\nshift\nexec "%s/ui/node_modules/.bin/tauri" "$@"\n' "$GITHUB_WORKSPACE" >"$bin/cargo-tauri"
+        chmod +x "$bin/cargo-tauri"
+
+    - if: inputs.target != ''
+      shell: bash
+      run: bun run --cwd ui build
