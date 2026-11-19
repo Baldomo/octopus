@@ -50,14 +50,24 @@ export const windowFocused = () => setWindowFocuses((count) => count + 1);
 
 type Cells = { cols: number; rows: number };
 export type Size = { width: number; height: number };
-type Core = { _charSizeService: { measure: () => void }; _renderService: { dimensions: { css: { cell: Size } } } };
+type Core = {
+  _charSizeService: { measure: () => void };
+  _renderService: {
+    dimensions: { css: { cell: Size } };
+    _handleIntersectionChange: (entry: { intersectionRatio: number }) => void;
+  };
+};
+const core = (xterm: Terminal) => (xterm as unknown as { _core: Core })._core;
 
 /** Measures afresh, since xterm measures a terminal that opened hidden only once it sees it on screen. */
 export function cellSize(xterm: Terminal): Size {
-  const core = (xterm as unknown as { _core: Core })._core;
-  core._charSizeService.measure();
-  return core._renderService.dimensions.css.cell;
+  core(xterm)._charSizeService.measure();
+  return core(xterm)._renderService.dimensions.css.cell;
 }
+
+/** Draws a terminal just shown in the coming frame, which xterm would paint blank until its visibility observer reports. */
+const paintNextFrame = (xterm: Terminal) =>
+  core(xterm)._renderService._handleIntersectionChange({ intersectionRatio: 1 });
 
 export function terminalSession(props: { at: TaskRef; panel: () => PanelView; shown: () => boolean }) {
   const mine = createMemo(() => props.panel().held_here);
@@ -176,7 +186,8 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
     ),
   );
 
-  const streaming = createMemo(() => shown() && windowShown() && serverView(props.at.server)?.reachable === true);
+  const looking = createMemo(() => shown() && windowShown());
+  const streaming = createMemo(() => looking() && serverView(props.at.server)?.reachable === true);
   createEffect(
     on([streaming, drops], ([stream]) => {
       if (!stream) return;
@@ -191,8 +202,8 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
     xterm.options.theme = terminalTheme(scheme());
   });
   createEffect(
-    on([() => shown() && windowShown(), windowFocuses], ([looking]) => {
-      if (!looking || !streaming() || !claimable()) return;
+    on([looking, windowFocuses], ([visible]) => {
+      if (!visible || !streaming() || !claimable()) return;
       claim.looked();
       if (attached() && claim.opened()) claimIfFree();
     }),
@@ -202,6 +213,42 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
       if (visible && holding) fit();
     }),
   );
+
+  /**
+   * Off screen a terminal keeps only its screen and draws through the DOM: the next attach replays its history from
+   * the server, and its WebGL context goes back to the GPU.
+   */
+  let opened = false;
+  let webgl: WebglAddon | null = null;
+  let webglWorks = true;
+  const loadWebgl = () => {
+    try {
+      const addon = new WebglAddon();
+      addon.onContextLoss(() => {
+        addon.dispose();
+        if (webgl === addon) webgl = null;
+      });
+      xterm.loadAddon(addon);
+      webgl = addon;
+    } catch (error) {
+      webglWorks = false;
+      report(`WebGL is unavailable, so terminals draw through the DOM: ${error}`);
+    }
+  };
+  const draw = () => {
+    if (!opened) return;
+    if (looking()) {
+      xterm.options.scrollback = TERM_HISTORY_LINES;
+      if (webgl === null && webglWorks) loadWebgl();
+      paintNextFrame(xterm);
+    } else {
+      webgl?.dispose();
+      webgl = null;
+      xterm.options.scrollback = 0;
+    }
+  };
+  createEffect(on(looking, draw));
+
   onCleanup(() => {
     clearTimeout(fitting);
     detach();
@@ -233,13 +280,8 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
     fit,
     open: (pane: HTMLElement) => {
       xterm.open(pane);
-      try {
-        const webgl = new WebglAddon();
-        webgl.onContextLoss(() => webgl.dispose());
-        xterm.loadAddon(webgl);
-      } catch (error) {
-        report(`WebGL is unavailable, so terminals draw through the DOM: ${error}`);
-      }
+      opened = true;
+      draw();
     },
   };
 }
