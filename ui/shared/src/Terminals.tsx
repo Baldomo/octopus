@@ -8,21 +8,13 @@ import { chooseShell, EachPanel, openShell, taskPanels } from "./panels";
 import { commands, hint, mac } from "./commands";
 import { act, model, serverLabel, ui } from "./state";
 import { pastedPaths } from "./taskFiles";
+import { type KeyAction, keyAction } from "./keymap";
 import { toast } from "./Toast";
 import { type LinkTarget, openLinks, type OpenUrl } from "./terminalLinks";
 import { terminalSession, windowShown } from "./terminalSession";
 
-/** Shift+Enter sends ESC CR, which agents read as a newline; on macOS ⌥←/⌥→ move by word as in Terminal.app. */
-const CHORD_INPUT: Record<string, string> = {
-  "shift+Enter": "\x1b\r",
-  ...(mac && { "alt+ArrowLeft": "\x1bb", "alt+ArrowRight": "\x1bf" }),
-};
 /** Keys an input method consumes carry this code, including the one that commits the composition. */
 const IME_KEY_CODE = 229;
-const chord = (event: KeyboardEvent) =>
-  [event.ctrlKey && "ctrl", event.altKey && "alt", event.metaKey && "meta", event.shiftKey && "shift", event.key]
-    .filter(Boolean)
-    .join("+");
 
 export type OpenLink = (task: TaskView, url: string, target: LinkTarget) => void;
 
@@ -36,12 +28,17 @@ function Term(props: { task: TaskView; panel: PanelView; visible: boolean; resum
   const session = terminalSession({ at: props.task.at, panel: () => props.panel, shown: () => props.visible });
   const { xterm, mine, claimed } = session;
 
+  const perform = (action: KeyAction) => {
+    if ("write" in action) xterm.input(action.write);
+    else if (action.clipboard === "paste") act(navigator.clipboard.readText().then((text) => xterm.paste(text)));
+    else if (xterm.hasSelection()) act(navigator.clipboard.writeText(xterm.getSelection()));
+  };
   xterm.attachCustomKeyEventHandler((event) => {
-    const input = CHORD_INPUT[chord(event)];
-    if (input === undefined || event.keyCode === IME_KEY_CODE) return true;
+    const action = keyAction(event, mac ? "mac" : "linux", session.exactKeys());
+    if (action === undefined || event.keyCode === IME_KEY_CODE) return true;
     if (event.type === "keydown") {
       event.preventDefault();
-      xterm.input(input);
+      perform(action);
     }
     return false;
   });

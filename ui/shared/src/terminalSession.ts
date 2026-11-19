@@ -5,6 +5,7 @@ import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { backend, Channel } from "./backend";
 import { type PanelView, type TaskRef, TERM_HISTORY_LINES, type TermScreen } from "./generated";
 import { lockClaim } from "./lockClaim";
+import { exactKeys } from "./keymap";
 import { sgrMouse } from "./mouseReports";
 import { act, report, serverView } from "./state";
 import { colors, px, type Scheme, scheme, token } from "./tokens";
@@ -80,6 +81,7 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
     overviewRuler: { width: px("--scrollbar-w") },
   });
   const sgr = sgrMouse(xterm.parser);
+  const exact = exactKeys(xterm.parser, () => xterm.buffer.active.type);
   const pane = (): Cells | undefined => {
     const host = xterm.element?.parentElement;
     if (!host?.clientWidth || !host.clientHeight) return undefined;
@@ -109,6 +111,7 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
         xterm.write(new Uint8Array(), () => {
           xterm.reset();
           sgr.reset();
+          exact.reset();
           xterm.resize(piece.cols, piece.rows);
         });
         return;
@@ -261,6 +264,7 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
     claimed,
     shown,
     sgrMouse: sgr.on,
+    exactKeys: exact.on,
     input: (keys: string) => {
       if (attachment !== null) act(backend.termInput(attachment, keys));
     },

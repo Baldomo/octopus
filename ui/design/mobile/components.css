@@ -92,6 +92,13 @@
 .dock.typing .tail{flex:1;gap:var(--g1)}
 .dock .tail>div{display:contents}
 .dock:not(.typing) .key{flex:none;width:var(--h-btn)}
+/* --shown keys show, the last one half under the fade; the rest scroll in */
+.dock.typing{--shown:8.5}
+.keys{flex:1;min-width:0;align-self:stretch;display:flex;align-items:center;gap:var(--g1);overflow-x:auto;scrollbar-width:none;-webkit-mask:linear-gradient(90deg,#000 calc(100% - var(--g5)),transparent)}
+.keys::-webkit-scrollbar{display:none}
+.keys::after{content:"";flex:0 0 calc(var(--g5) - var(--g1))}
+.keys .key{flex:0 0 calc((100% - (var(--shown) - .5) * var(--g1)) / var(--shown))}
+.keys+.key{flex:0 0 calc((100% - (var(--shown) + .5) * var(--g1)) / (var(--shown) + 1))}
 .key{flex:1;height:var(--h-chip);border-radius:var(--r1);background:var(--fill);display:grid;place-items:center;font:400 13px/16px var(--mono-terminal);color:var(--text)}
 /* the stroke of the terminal font's arrows on the key bar */
 .key .ic{stroke-width:1.04}

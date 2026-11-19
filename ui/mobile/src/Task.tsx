@@ -9,6 +9,7 @@ import { clickReport, type ScreenCell, wheelReport } from "@octopus/shared/mouse
 import { type Incoming, pastedPaths } from "@octopus/shared/taskFiles.ts";
 import { onLoopback } from "@octopus/shared/terminalUrls.ts";
 import { cellSize, type Size, terminalSession } from "@octopus/shared/terminalSession.ts";
+import { EDITS, keyCap } from "@octopus/shared/keymap.ts";
 import { colors, scheme } from "@octopus/shared/tokens.ts";
 import { dormant } from "@octopus/shared/Glyph.tsx";
 import { feel } from "./feel";
@@ -517,34 +518,43 @@ function PhoneTerm(props: {
                 </Match>
                 <Match when={mine()}>
                   <Show when={props.typed}>
-                    <button class="key" onClick={() => send(ESC)}>
-                      esc
-                    </button>
-                    <button class="key" onClick={() => send("\t")}>
-                      tab
-                    </button>
-                    <button class="key" classList={{ on: ctrl() }} onClick={latch}>
-                      ctrl
-                    </button>
-                    <For each={ARROWS}>
-                      {([label, code]) => (
-                        <button class="key" ref={repeats(() => write(arrow(code)))}>
-                          {label}
-                        </button>
-                      )}
-                    </For>
-                    <label class="key" role="button" aria-label="Attach">
-                      <Icon name="attach" />
-                      <input
-                        type="file"
-                        multiple
-                        hidden
-                        onChange={(event) => {
-                          paste({ files: [...event.currentTarget.files!], text: "" });
-                          event.currentTarget.value = "";
-                        }}
-                      />
-                    </label>
+                    <span class="keys">
+                      <button class="key" onClick={() => send(ESC)}>
+                        esc
+                      </button>
+                      <button class="key" onClick={() => send("\t")}>
+                        tab
+                      </button>
+                      <button class="key" classList={{ on: ctrl() }} onClick={latch}>
+                        ctrl
+                      </button>
+                      <For each={ARROWS}>
+                        {([label, code]) => (
+                          <button class="key" ref={repeats(() => write(arrow(code)))}>
+                            {label}
+                          </button>
+                        )}
+                      </For>
+                      <label class="key" role="button" aria-label="Attach">
+                        <Icon name="attach" />
+                        <input
+                          type="file"
+                          multiple
+                          hidden
+                          onChange={(event) => {
+                            paste({ files: [...event.currentTarget.files!], text: "" });
+                            event.currentTarget.value = "";
+                          }}
+                        />
+                      </label>
+                      <For each={EDITS}>
+                        {(edit) => (
+                          <button class="key" ref={repeats(() => write(edit.bytes))}>
+                            {keyCap(edit)}
+                          </button>
+                        )}
+                      </For>
+                    </span>
                   </Show>
                   <button class="key" aria-label="Keyboard" onClick={toggleKeyboard}>
                     <Icon name="kbd" />
