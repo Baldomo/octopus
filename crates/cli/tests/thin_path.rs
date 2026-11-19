@@ -70,6 +70,24 @@ async fn a_focused_task_runs_its_agent_terminal_end_to_end() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn text_with_enter_arrives_as_a_bracketed_paste_then_enter() {
+    let (dir, running) = server().await;
+    let laptop = connect(&running.socket, "laptop").await;
+    let workspace = workspace(&laptop, dir.path()).await;
+    let pasting = vec!["sh".into(), "-c".into(), r"printf '\033[?2004h'; echo ready; exec cat -v".into()];
+    set_harness(&laptop, "pasting", pasting).await;
+    let id = create(&laptop, &workspace, Mode::InPlace, "pasting").await;
+    focus(&laptop, &id).await;
+    let mut live = laptop.open_data_stream(&agent(&laptop, &id).await).await.expect("attach");
+    read_until(&mut live, "ready").await;
+
+    laptop.call(&send(&id, "agent", "submit me")).await.expect("term.send");
+    read_until(&mut live, "^[[200~submit me^[[201~\r\n").await;
+    laptop.call(&send(&id, "agent", "stays\u{1b}[2\u{1b}[201~01~ inside")).await.expect("term.send");
+    read_until(&mut live, "^[[200~stays[2[201~01~ inside^[[201~\r\n").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_shell_panel_follows_the_agent_until_its_shell_exits_or_it_closes() {
     let (dir, running) = server().await;
     let laptop = connect(&running.socket, "laptop").await;

@@ -56,6 +56,10 @@ impl Emulator {
         self.term.resize(size(cols, rows));
     }
 
+    pub(crate) fn bracketed_paste(&self) -> bool {
+        self.term.mode().contains(TermMode::BRACKETED_PASTE)
+    }
+
     /// Mutable because reading the primary screen under the alternate one swaps them and back.
     pub fn screen(&mut self) -> Screen {
         let cols = u16::try_from(self.term.columns()).expect("the size came in as u16");

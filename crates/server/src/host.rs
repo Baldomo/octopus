@@ -57,6 +57,7 @@ enum HostRequest {
     WaitExit { id: PtyId },
     Activity { id: PtyId },
     Program { id: PtyId },
+    BracketedPaste { id: PtyId },
     WatchStatus { id: PtyId },
 }
 
@@ -187,6 +188,7 @@ async fn answer<R: AsyncRead + Unpin>(
             let program = find(terminals, &id)?.program().map(|pid| pid.as_raw());
             Ok((serde_json::to_value(program).map_err(Error::internal)?, Then::Close))
         }
+        HostRequest::BracketedPaste { id } => Ok((Value::Bool(find(terminals, &id)?.bracketed_paste()), Then::Close)),
         HostRequest::WatchStatus { id } => Ok((Value::Null, Then::Statuses(find(terminals, &id)?))),
     }
 }
@@ -459,6 +461,10 @@ impl HostClient {
 
     pub(crate) fn terminate(&self, id: &PtyId) -> Result<(), Error> {
         self.call(&HostRequest::Terminate { id: id.clone() })
+    }
+
+    pub(crate) fn bracketed_paste(&self, id: &PtyId) -> Result<bool, Error> {
+        self.call(&HostRequest::BracketedPaste { id: id.clone() })
     }
 
     /// Each status the terminal's program reports, the current one first, until it exits.

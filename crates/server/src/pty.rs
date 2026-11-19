@@ -198,6 +198,10 @@ impl Pty {
         Ok(Activity { output_at: self.output_at.load(Ordering::Relaxed), detached_descendant })
     }
 
+    pub(crate) fn bracketed_paste(&self) -> bool {
+        lock(&self.output).emulator.bracketed_paste()
+    }
+
     pub(crate) fn statuses(&self) -> watch::Receiver<Option<ProgramStatus>> {
         self.status.subscribe()
     }

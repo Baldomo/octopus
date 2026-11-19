@@ -21,6 +21,8 @@ use crate::store::PanelRow;
 use crate::{Server, State, files, lock, login, now, report};
 
 const WAIT_RETRY: Duration = Duration::from_secs(1);
+const PASTE_START: &str = "\x1b[200~";
+const PASTE_END: &str = "\x1b[201~";
 
 pub(crate) struct Shell {
     pub(crate) name: String,
@@ -121,6 +123,10 @@ impl Terminal {
     /// Each status the terminal's program reports, the current one first, until it exits.
     pub(crate) fn statuses(&self) -> Result<impl Iterator<Item = ProgramStatus> + use<>, Error> {
         self.host.statuses(&self.id)
+    }
+
+    pub(crate) fn bracketed_paste(&self) -> Result<bool, Error> {
+        self.host.bracketed_paste(&self.id)
     }
 
     /// Gives `client` a free lock sized to `cols`×`rows`, or resizes the one it holds; reports whether the screen
@@ -474,17 +480,22 @@ impl Server {
         }
     }
 
-    /// Writes happen after the state lock is released: a full pty buffer blocks them. A take keeps the size.
+    /// Writes happen after the state lock is released: a full pty buffer blocks them. A take keeps the size. Claude Code
+    /// reads a burst of plain text as a paste and the Enter inside it as text, so text that Enter submits is pasted.
     pub(crate) fn term_send(&self, client: &Client, op: TermSend) -> Result<Revised, Error> {
-        let mut bytes = op.text.into_bytes();
-        if op.enter {
-            bytes.push(b'\r');
-        }
         let (terminal, rev) = self.on_screen(client, &op.task, &op.panel, |terminal| {
             let screen = terminal.screen();
             if op.take_lock { terminal.take(client, screen.cols, screen.rows) } else { Ok(false) }
         })?;
-        terminal.write_as(client, &bytes).map_err(|refusal| self.refused(&terminal, refusal))?;
+        let submits_as_paste = op.enter && !op.text.is_empty() && terminal.bracketed_paste()?;
+        let bytes = if submits_as_paste {
+            [PASTE_START, &op.text.replace('\x1b', ""), PASTE_END, "\r"].concat()
+        } else if op.enter {
+            op.text + "\r"
+        } else {
+            op.text
+        };
+        terminal.write_as(client, bytes.as_bytes()).map_err(|refusal| self.refused(&terminal, refusal))?;
         Ok(Revised { rev })
     }
 
