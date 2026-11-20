@@ -31,29 +31,31 @@ pub fn unit_path(home: &Path, id: &str) -> PathBuf {
     platform::unit_directory(home).join(format!("{id}{}", platform::EXTENSION))
 }
 
-fn write_unit(unit: &Path, contents: String) -> anyhow::Result<()> {
-    let directory = unit.parent().expect("a unit sits in a directory");
-    std::fs::create_dir_all(directory).with_context(|| format!("create {}", directory.display()))?;
-    std::fs::write(unit, contents).with_context(|| format!("write {}", unit.display()))
-}
-
 fn remove_unit(path: &Path) -> anyhow::Result<()> {
     std::fs::remove_file(path).with_context(|| format!("remove {}", path.display()))
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code, reason = "ServiceManagement's SMAppService and libproc's proc_pidpath have no safe binding")]
 mod platform {
+    use std::os::unix::ffi::OsStringExt;
     use std::process::Command;
 
+    use objc2_foundation::NSString;
+    use objc2_service_management::{SMAppService, SMAppServiceStatus};
+
     use super::*;
-    use crate::install::binary::transient;
-    use crate::install::unit::launchd_plist;
+    use crate::install::binary::{bundle, transient};
+    use crate::install::unit::BUNDLED_PLIST;
 
     pub const NAME: &str = "launchd";
     pub const EXTENSION: &str = ".plist";
     /// What `launchctl bootout` exits with for a job launchd doesn't hold.
     const NOT_LOADED: i32 = 3;
+    /// The manager `launchctl print` names for a job an app registered through SMAppService.
+    const LOGIN_ITEMS: &str = "managed_by = com.apple.xpc.ServiceManagement";
 
+    /// Where earlier installs wrote their agents.
     pub fn unit_directory(home: &Path) -> PathBuf {
         home.join("Library").join("LaunchAgents")
     }
@@ -62,82 +64,131 @@ mod platform {
         format!("gui/{}/{id}", nix::unistd::getuid())
     }
 
-    fn bootout(id: &str) -> anyhow::Result<()> {
-        let output = Command::new("launchctl").args(["bootout", &target(id)]).output().context("run launchctl")?;
-        if !output.status.success() && output.status.code() != Some(NOT_LOADED) {
-            bail!("launchctl bootout {}: {}", target(id), String::from_utf8_lossy(&output.stderr).trim());
-        }
-        Ok(())
+    fn printed() -> Option<String> {
+        run("launchctl", &["print", &target(ID)]).ok()
     }
 
-    /// This machine's server as launchd holds it: the agent in `~/Library/LaunchAgents`, read once per launch.
+    fn login_item() -> objc2::rc::Retained<SMAppService> {
+        // SAFETY: a plist name is all agentServiceWithPlistName reads.
+        unsafe { SMAppService::agentServiceWithPlistName(&NSString::from_str(BUNDLED_PLIST)) }
+    }
+
+    fn status() -> SMAppServiceStatus {
+        // SAFETY: status reads the login item's state.
+        unsafe { login_item().status() }
+    }
+
+    /// The executable process `pid` runs, as the kernel resolved it.
+    fn executable(pid: libc::pid_t) -> Option<PathBuf> {
+        let mut path = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        // SAFETY: proc_pidpath writes at most the buffer's size into it and returns how many bytes it wrote.
+        let written = unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
+        let written = usize::try_from(written).ok().filter(|&written| written > 0)?;
+        path.truncate(written);
+        Some(PathBuf::from(std::ffi::OsString::from_vec(path)))
+    }
+
+    /// This machine's server as the Mac app's login item, read once per launch.
     pub struct Service {
-        unit: PathBuf,
-        written: Option<Vec<u8>>,
+        bundle: PathBuf,
+        /// The pid of the server launchd runs for the login item; None while the login item runs none.
+        pid: Option<libc::pid_t>,
+        login_item: bool,
     }
 
     impl Service {
-        pub fn read(home: &Path) -> Self {
-            let unit = unit_path(home, ID);
-            Self { written: std::fs::read(&unit).ok(), unit }
+        /// Only the running app reaches its own login item, so a binary outside any app manages no server.
+        pub fn read(_home: &Path) -> anyhow::Result<Option<Self>> {
+            let Some(bundle) = bundle(&std::env::current_exe()?).map(Path::to_path_buf) else { return Ok(None) };
+            let printed = printed().unwrap_or_default();
+            let lines = || printed.lines().map(str::trim);
+            Ok(Some(Self {
+                bundle,
+                pid: lines().find_map(|line| line.strip_prefix("pid = ")?.parse().ok()),
+                login_item: lines().any(|line| line == LOGIN_ITEMS),
+            }))
         }
 
         pub fn registered(&self) -> bool {
-            self.written.is_some()
+            self.login_item
         }
 
-        /// The program the agent runs, while the agent is as this install writes it and the program is there to
-        /// stay.
+        /// The binary the login item's server runs, while that one is there to stay. Launchd finds the bundle
+        /// wherever it moves, so the login item always runs the plist the bundle carries.
         pub fn binary(&self) -> Option<PathBuf> {
-            let argv =
-                run("plutil", &["-extract", "ProgramArguments.0", "raw", "-o", "-", &self.unit.display().to_string()]);
-            Some(PathBuf::from(argv.ok()?)).filter(|program| {
-                self.written.as_deref() == Some(launchd_plist(program).as_bytes())
-                    && program.is_file()
-                    && !transient(program)
-            })
+            executable(self.pid?).filter(|program| program.is_file() && !transient(program))
         }
 
-        /// The agent runs the launching binary where it is, which must stay there.
+        /// The login item runs this app, which must stay where it is.
         pub fn put(&self, source: &Path) -> anyhow::Result<PathBuf> {
+            if bundle(source) != Some(self.bundle.as_path()) {
+                bail!("{} is a newer octopus; open it to repair this machine's server", source.display());
+            }
             if transient(source) {
                 bail!(
-                    "{} runs from a disk image or a translocated copy; move octopus to Applications and open it there",
+                    "{} runs from a disk image, a translocated copy or the Trash; move octopus to Applications and open it there",
                     source.display()
                 );
             }
             Ok(source.to_path_buf())
         }
 
-        /// Writes the agent running the server from `program` and has launchd start it afresh.
-        pub fn register(&self, program: &Path) -> anyhow::Result<PathBuf> {
-            write_unit(&self.unit, launchd_plist(program))?;
-            bootout(ID)?;
-            run(
-                "launchctl",
-                &["bootstrap", &format!("gui/{}", nix::unistd::getuid()), &self.unit.display().to_string()],
-            )?;
-            Ok(self.unit.clone())
+        /// Registers this app's login item afresh, so launchd runs this bundle wherever it sits now. A login item
+        /// the user turned off fails it, opening System Settings at Login Items.
+        pub fn register(&self, _program: &Path) -> anyhow::Result<PathBuf> {
+            self.unregister()?;
+            // SAFETY: registering the app's own login item.
+            let registered = unsafe { login_item().registerAndReturnError() };
+            if status() == SMAppServiceStatus::RequiresApproval {
+                // SAFETY: opens System Settings at Login Items.
+                unsafe { SMAppService::openSystemSettingsLoginItems() };
+                bail!("octopus is off in System Settings > General > Login Items; turn it on there");
+            }
+            registered.map_err(|error| anyhow!("register the login item: {error}"))?;
+            Ok(self.plist())
         }
 
+        /// A login item that never registered reads NotFound, and unregistering it is refused.
         pub fn unregister(&self) -> anyhow::Result<PathBuf> {
-            unregister_unit(ID, &self.unit)?;
-            Ok(self.unit.clone())
+            if [SMAppServiceStatus::Enabled, SMAppServiceStatus::RequiresApproval].contains(&status()) {
+                // SAFETY: unregistering the app's own login item.
+                unsafe { login_item().unregisterAndReturnError() }
+                    .map_err(|error| anyhow!("unregister the login item: {error}"))?;
+            }
+            Ok(self.plist())
+        }
+
+        fn plist(&self) -> PathBuf {
+            self.bundle.join("Contents/Library/LaunchAgents").join(BUNDLED_PLIST)
         }
     }
 
     pub fn unregister_unit(id: &str, unit: &Path) -> anyhow::Result<()> {
-        bootout(id)?;
+        let output = Command::new("launchctl").args(["bootout", &target(id)]).output().context("run launchctl")?;
+        if !output.status.success() && output.status.code() != Some(NOT_LOADED) {
+            bail!("launchctl bootout {}: {}", target(id), String::from_utf8_lossy(&output.stderr).trim());
+        }
         remove_unit(unit)
     }
 
-    /// Registering loads the service afresh, so any exit launchd recorded came since then.
+    /// Registering loads the service afresh, so any exit launchd recorded came since then. A login item launchd has
+    /// yet to load has not exited.
     pub fn exited() -> anyhow::Result<bool> {
-        let printed = run("launchctl", &["print", &target(ID)])?;
-        Ok(printed.lines().map(str::trim).any(|line| {
-            line.starts_with("last terminating signal = ")
-                || line.strip_prefix("last exit code = ").is_some_and(|code| code != "(never exited)")
+        Ok(printed().is_some_and(|printed| {
+            printed.lines().map(str::trim).any(|line| {
+                line.starts_with("last terminating signal = ")
+                    || line.strip_prefix("last exit code = ").is_some_and(|code| code != "(never exited)")
+            })
         }))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn a_process_resolves_to_the_executable_it_runs() {
+            let pid = libc::pid_t::try_from(std::process::id()).expect("a pid fits");
+            assert_eq!(super::executable(pid), Some(std::env::current_exe().expect("this test's binary")));
+        }
     }
 }
 
@@ -154,6 +205,12 @@ mod platform {
         home.join(".config").join("systemd").join("user")
     }
 
+    fn write_unit(unit: &Path, contents: String) -> anyhow::Result<()> {
+        let directory = unit.parent().expect("a unit sits in a directory");
+        std::fs::create_dir_all(directory).with_context(|| format!("create {}", directory.display()))?;
+        std::fs::write(unit, contents).with_context(|| format!("write {}", unit.display()))
+    }
+
     fn systemctl(args: &[&str]) -> anyhow::Result<()> {
         run("systemctl", &[&["--user"], args].concat()).map(drop)
     }
@@ -166,9 +223,9 @@ mod platform {
     }
 
     impl Service {
-        pub fn read(home: &Path) -> Self {
+        pub fn read(home: &Path) -> anyhow::Result<Option<Self>> {
             let unit = unit_path(home, ID);
-            Self { home: home.to_path_buf(), written: std::fs::read(&unit).ok(), unit }
+            Ok(Some(Self { home: home.to_path_buf(), written: std::fs::read(&unit).ok(), unit }))
         }
 
         pub fn registered(&self) -> bool {

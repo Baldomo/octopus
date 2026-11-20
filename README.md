@@ -55,15 +55,7 @@ shasum -a 256 --check --ignore-missing SHA256SUMS
 
 ## Quick start
 
-Install the app, the CLI and a server on your laptop (macOS or Linux, with Rust and Bun):
-
-```sh
-bun install --cwd ui --frozen-lockfile && bun run --cwd ui build
-cargo install --locked --path crates/cli
-octopus app
-```
-
-On Linux, first install `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libasound2-dev`.
+Download the app from the Releases page and open it; on macOS it offers to move itself to Applications first.
 
 Every start of the app checks this machine's server and repairs it: registered as a login service, running the installed binary, and answering with at least this version.
 

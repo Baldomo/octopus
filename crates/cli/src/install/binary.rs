@@ -1,5 +1,5 @@
 //! The binary this machine's server runs. On Linux it is the server's own copy in `~/.octopus/bin`, linked from
-//! `~/.local/bin` so the CLI is on the PATH; on macOS it is the binary that installed it.
+//! `~/.local/bin` so the CLI is on the PATH; on macOS it is the main binary of the app whose login item runs it.
 
 use std::path::Path;
 #[cfg(target_os = "linux")]
@@ -58,9 +58,24 @@ fn same_file(one: &Path, other: &Path) -> bool {
     matches!((one.canonicalize(), other.canonicalize()), (Ok(one), Ok(other)) if one == other)
 }
 
-/// A program on a mounted disk image, or in the read-only copy macOS translocates a downloaded app to, is gone once
-/// the image is ejected or the app is moved.
+/// A program on a mounted disk image, in the read-only copy macOS translocates a downloaded app to, or in the Trash
+/// is gone once the image is ejected, the app is moved or the Trash is emptied.
 #[cfg(target_os = "macos")]
 pub fn transient(program: &Path) -> bool {
-    program.starts_with("/Volumes") || program.components().any(|part| part.as_os_str() == "AppTranslocation")
+    program.starts_with("/Volumes")
+        || program.components().any(|part| matches!(part.as_os_str().to_str(), Some(".Trash" | "AppTranslocation")))
+}
+
+/// The app bundle `program` is the main binary of, `<name>.app/Contents/MacOS/octopus`.
+#[cfg(target_os = "macos")]
+pub fn bundle(program: &Path) -> Option<&Path> {
+    let macos = program.parent().filter(|macos| macos.ends_with("Contents/MacOS"))?;
+    macos.parent()?.parent().filter(|bundle| bundle.extension().is_some_and(|extension| extension == "app"))
+}
+
+/// The app bundle this binary is the main binary of, when it runs from somewhere it won't stay.
+#[cfg(all(target_os = "macos", feature = "desktop"))]
+pub fn transient_bundle() -> Option<std::path::PathBuf> {
+    let program = std::env::current_exe().ok()?;
+    bundle(&program).filter(|bundle| transient(bundle)).map(Path::to_path_buf)
 }

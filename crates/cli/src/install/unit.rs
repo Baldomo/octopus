@@ -75,36 +75,11 @@ pub fn command(program: &Path) -> String {
     argv(program).iter().map(quoted).collect::<Vec<_>>().join(" ")
 }
 
+/// The login item's plist, `crates/desktop/server.plist`, which the app bundle carries in
+/// `Contents/Library/LaunchAgents` and launchd finds wherever the app moves. `AbandonProcessGroup` keeps launchd from
+/// ending the terminal host along with the server.
 #[cfg(any(target_os = "macos", test))]
-fn xml(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
-}
-
-/// `AbandonProcessGroup` keeps launchd from ending the terminal host along with the server.
-#[cfg(any(target_os = "macos", test))]
-pub fn launchd_plist(program: &Path) -> String {
-    let arguments: String = argv(program).iter().map(|word| format!("\t\t<string>{}</string>\n", xml(word))).collect();
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>Label</key>
-	<string>{ID}</string>
-	<key>ProgramArguments</key>
-	<array>
-{arguments}	</array>
-	<key>RunAtLoad</key>
-	<true/>
-	<key>KeepAlive</key>
-	<true/>
-	<key>AbandonProcessGroup</key>
-	<true/>
-</dict>
-</plist>
-"#
-    )
-}
+pub const BUNDLED_PLIST: &str = "octopus.plist";
 
 #[cfg(any(target_os = "linux", test))]
 fn systemd_word(word: &str) -> String {
@@ -136,14 +111,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_launchd_agent_starts_the_server_at_login_and_spares_its_terminal_host() {
-        let plist = launchd_plist(Path::new("/Applications/octopus & co.app/Contents/MacOS/octopus"));
-        let array = "\t\t<string>/Applications/octopus &amp; co.app/Contents/MacOS/octopus</string>\n\t\t<string>server</string>\n\t\t<string>start</string>\n";
-        assert!(plist.contains(&format!("<key>ProgramArguments</key>\n\t<array>\n{array}\t</array>")), "{plist}");
-        for key in ["RunAtLoad", "KeepAlive", "AbandonProcessGroup"] {
-            assert!(plist.contains(&format!("<key>{key}</key>\n\t<true/>")), "{key} in {plist}");
+    fn the_app_bundles_a_login_item_that_starts_the_server_and_spares_its_terminal_host() {
+        let plist = include_str!("../../../desktop/server.plist");
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../../../desktop/tauri.conf.json")).expect("tauri.conf.json is JSON");
+        let identifier = conf["identifier"].as_str().expect("an identifier");
+        let arguments: String =
+            ["octopus", "server", "start"].map(|word| format!("\t\t<string>{word}</string>\n")).concat();
+        for entry in [
+            format!("<key>Label</key>\n\t<string>{ID}</string>"),
+            "<key>BundleProgram</key>\n\t<string>Contents/MacOS/octopus</string>".into(),
+            format!("<key>ProgramArguments</key>\n\t<array>\n{arguments}\t</array>"),
+            format!("<key>AssociatedBundleIdentifiers</key>\n\t<array>\n\t\t<string>{identifier}</string>"),
+            "<key>RunAtLoad</key>\n\t<true/>".into(),
+            "<key>KeepAlive</key>\n\t<true/>".into(),
+            "<key>AbandonProcessGroup</key>\n\t<true/>".into(),
+        ] {
+            assert!(plist.contains(&entry), "{entry} in {plist}");
         }
-        assert!(plist.contains("<key>Label</key>\n\t<string>octopus</string>"));
+        let files = &conf["bundle"]["macOS"]["files"];
+        assert_eq!(files[format!("Library/LaunchAgents/{BUNDLED_PLIST}")], "server.plist", "the bundle carries it");
     }
 
     #[test]

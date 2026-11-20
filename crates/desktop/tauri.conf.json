@@ -28,7 +28,10 @@
     "macOS": {
       "minimumSystemVersion": "14.5",
       "infoPlist": "../cli/octopus.plist",
-      "entitlements": "octopus.entitlements"
+      "entitlements": "octopus.entitlements",
+      "files": {
+        "Library/LaunchAgents/octopus.plist": "server.plist"
+      }
     }
   }
 }

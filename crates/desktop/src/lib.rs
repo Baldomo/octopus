@@ -2,6 +2,8 @@ mod browser;
 mod commands;
 mod layers;
 mod menu;
+#[cfg(target_os = "macos")]
+mod relocate;
 mod setup;
 pub mod types;
 
@@ -56,10 +58,28 @@ app_commands![
 /// Writes the octopus skill for the user's Claude Code, returning where.
 pub struct Skill(pub fn() -> anyhow::Result<PathBuf>);
 
-/// Opens the window, installs this machine's server meanwhile when given one to install, and blocks until the window
-/// closes. While the user keeps the skill, every launch writes it again, so it follows the installed octopus; the
-/// first open asks before writing it.
-pub fn run(launch_problem: Option<String>, install: Option<Install>, skill: Skill) -> anyhow::Result<()> {
+/// What a launch hands the window.
+pub struct Launch {
+    /// Why the launch could not look at this machine's server.
+    pub problem: Option<String>,
+    pub install: Option<Install>,
+    pub skill: Skill,
+    /// The app bundle, when it runs from somewhere it won't stay, which the window offers to move to Applications.
+    #[cfg(target_os = "macos")]
+    pub transient: Option<PathBuf>,
+}
+
+/// Opens the window, first offering to move a transient app to Applications, installs this machine's server
+/// meanwhile when given one to install, and blocks until the window closes. While the user keeps the skill, every
+/// launch writes it again, so it follows the installed octopus; the first open asks before writing it.
+pub fn run(launch: Launch) -> anyhow::Result<()> {
+    let Launch {
+        problem,
+        install,
+        skill,
+        #[cfg(target_os = "macos")]
+        transient,
+    } = launch;
     let config = Config::user()?;
     let client = Client {
         me: Identity::load(&config)?,
@@ -73,9 +93,17 @@ pub fn run(launch_problem: Option<String>, install: Option<Install>, skill: Skil
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(invoke_handler())
         .setup(move |app| {
-            octopus_shell::start(app.handle(), client, launch_problem);
+            #[cfg(target_os = "macos")]
+            let moved = transient.as_deref().map_or(Ok(()), |bundle| {
+                relocate::offer(objc2::MainThreadMarker::new().expect("tauri sets up on the main thread"), bundle)
+            });
+            octopus_shell::start(app.handle(), client, problem);
             menu::relay(app.handle());
             let ui = Arc::clone(app.state::<Arc<UiStore>>().inner());
+            #[cfg(target_os = "macos")]
+            if let Err(error) = moved {
+                ui.report(format!("move octopus to Applications: {error:#}"));
+            }
             app.manage(BrowserPages::new(app.handle().clone()));
             if install.is_none()
                 && ui.ui().prefs.skill

@@ -176,7 +176,9 @@ struct Machine<'a> {
 }
 
 impl<'a> Machine<'a> {
-    fn find(octopus: &'a Octopus) -> anyhow::Result<Self> {
+    /// None when this launch manages no server: on macOS, a binary outside any app.
+    fn find(octopus: &'a Octopus) -> anyhow::Result<Option<Self>> {
+        let Some(service) = Service::read(&octopus.home)? else { return Ok(None) };
         let answer = local::ask(&octopus.socket(), CLIENT, PATIENCE);
         let listed = octopus.listed()?;
         let mut names: Vec<&String> = answer.iter().map(|answer| &answer.server).chain(&listed).collect();
@@ -185,7 +187,7 @@ impl<'a> Machine<'a> {
             .into_iter()
             .filter_map(|name| install::legacy_unit(&octopus.home, name).map(|unit| (name.clone(), unit)))
             .collect();
-        Ok(Self { octopus, service: Service::read(&octopus.home), answer, listed, legacy })
+        Ok(Some(Self { octopus, service, answer, listed, legacy }))
     }
 
     /// Whether a service, this install's or an earlier one's, runs the server.
@@ -275,7 +277,7 @@ impl<'a> Machine<'a> {
 /// Holding the repair lock, finds the server again, as another launch may have fixed it meanwhile, and fixes it
 /// when a check still fails, telling `fixing` which.
 fn fix_held(octopus: &Octopus, fixing: impl FnOnce(&Fault)) -> anyhow::Result<()> {
-    let machine = Machine::find(octopus)?;
+    let Some(machine) = Machine::find(octopus)? else { return Ok(()) };
     if let Some(fault) = machine.check() {
         fixing(&fault);
         machine.fix()?;
@@ -297,7 +299,7 @@ fn last_error(log: &Path, from: u64) -> Option<String> {
 #[cfg(feature = "desktop")]
 pub fn app() -> anyhow::Result<Option<octopus_desktop::Install>> {
     let octopus = Octopus::find()?;
-    let machine = Machine::find(&octopus)?;
+    let Some(machine) = Machine::find(&octopus)? else { return Ok(None) };
     let server = machine.list()?;
     if machine.check().is_none() {
         return Ok(None);
@@ -318,6 +320,7 @@ pub fn app() -> anyhow::Result<Option<octopus_desktop::Install>> {
 pub fn cli() {
     let Ok(octopus) = Octopus::find() else { return };
     let repaired = Machine::find(&octopus).and_then(|machine| {
+        let Some(machine) = machine else { return Ok(()) };
         if !machine.installed() || machine.check().is_none() {
             return Ok(());
         }
@@ -332,11 +335,15 @@ pub fn cli() {
     }
 }
 
+fn manages_none() -> anyhow::Error {
+    anyhow!("on macOS the octopus app manages this machine's server; open it")
+}
+
 /// `octopus install`: lists this machine's server and fixes it whatever the checks find.
 pub fn install() -> anyhow::Result<Registration> {
     let octopus = Octopus::find()?;
     let _locked = octopus.lock()?;
-    let machine = Machine::find(&octopus)?;
+    let machine = Machine::find(&octopus)?.ok_or_else(manages_none)?;
     machine.list()?;
     machine.fix().map_err(|error| anyhow!("install this machine's server: {error:#}"))
 }
@@ -345,7 +352,7 @@ pub fn install() -> anyhow::Result<Registration> {
 pub fn uninstall() -> anyhow::Result<Registration> {
     let octopus = Octopus::find()?;
     let _locked = octopus.lock()?;
-    let machine = Machine::find(&octopus)?;
+    let machine = Machine::find(&octopus)?.ok_or_else(manages_none)?;
     for (name, unit) in &machine.legacy {
         install::retire(name, unit)?;
     }

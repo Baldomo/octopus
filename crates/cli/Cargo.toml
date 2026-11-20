@@ -31,6 +31,10 @@ serde.workspace = true
 nix = { workspace = true, features = ["fs", "user"] }
 
 [target."cfg(target_os = \"macos\")".dependencies]
+libc = "0.2.189"
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = ["NSError", "NSString"] }
+objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "objc2", "objc2-foundation", "SMAppService"] }
 tempfile.workspace = true
 
 [dev-dependencies]

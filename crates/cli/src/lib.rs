@@ -78,7 +78,13 @@ pub fn main() -> ExitCode {
                 Ok(install) => (None, install),
                 Err(error) => (Some(format!("repair this machine's server: {error:#}")), None),
             };
-            octopus_desktop::run(problem, install, octopus_desktop::Skill(skill::install))
+            octopus_desktop::run(octopus_desktop::Launch {
+                problem,
+                install,
+                skill: octopus_desktop::Skill(skill::install),
+                #[cfg(target_os = "macos")]
+                transient: install::binary::transient_bundle(),
+            })
         }
         Some(("install", _)) => repair::install().and_then(|registration| print(&registration)),
         Some(("uninstall", _)) => repair::uninstall().and_then(|registration| print(&registration)),

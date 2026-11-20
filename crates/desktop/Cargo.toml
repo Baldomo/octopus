@@ -22,9 +22,9 @@ ts-rs.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSEvent", "NSHapticFeedback", "NSResponder", "NSTrackingArea", "NSView", "NSWindow"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAlert", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSHapticFeedback", "NSResponder", "NSTrackingArea", "NSView", "NSWindow"] }
 objc2-core-foundation.workspace = true
-objc2-foundation = { workspace = true, features = ["NSString"] }
+objc2-foundation = { workspace = true, features = ["NSError", "NSFileManager", "NSString", "NSURL"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"
