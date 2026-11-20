@@ -82,8 +82,7 @@ pub fn main() -> ExitCode {
                 problem,
                 install,
                 skill: octopus_desktop::Skill(skill::install),
-                #[cfg(target_os = "macos")]
-                transient: install::binary::transient_bundle(),
+                app: install::binary::app(),
             })
         }
         Some(("install", _)) => repair::install().and_then(|registration| print(&registration)),

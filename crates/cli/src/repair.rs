@@ -244,7 +244,7 @@ impl<'a> Machine<'a> {
         let installed = self.service.binary().map(|binary| (Version::of(&binary), binary));
         let (expected, source) = match installed {
             Some((Some(version), binary)) if version > this => (version, binary),
-            _ => (this, std::env::current_exe()?),
+            _ => (this, install::binary::this()?),
         };
         let program = self.service.put(&source)?;
         let log = self.octopus.log();

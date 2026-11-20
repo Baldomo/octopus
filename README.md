@@ -44,7 +44,7 @@ Pair a device by scanning a server's QR code or pasting its invite. Hand the sam
 
 ## Download
 
-The [Releases page](https://github.com/zabealbe/octopus/releases) has the app for macOS (universal `.dmg`) and Linux (amd64 and arm64 `.deb`), the Android app (`.apk`), and the headless CLI and server for Linux (x86_64 and aarch64 `.tar.gz`). On a Mac, the app carries the same `octopus` command, at `octopus.app/Contents/MacOS/octopus`.
+The [Releases page](https://github.com/zabealbe/octopus/releases) has the app for macOS (universal `.dmg`) and Linux (amd64 and arm64 `.AppImage`), the Android app (`.apk`), and the headless CLI and server for Linux (x86_64 and aarch64 `.tar.gz`). On a Mac, the app carries the same `octopus` command, at `octopus.app/Contents/MacOS/octopus`.
 
 Verify a download against the build that made it, then check it against the release's `SHA256SUMS`, which sits beside it in the same folder:
 
@@ -55,7 +55,7 @@ shasum -a 256 --check --ignore-missing SHA256SUMS
 
 ## Quick start
 
-Download the app from the Releases page and open it; on macOS it offers to move itself to Applications first.
+Download the app from the Releases page and open it. On macOS it offers to move itself to Applications first; on Linux, mark the AppImage executable first (`chmod +x octopus_*.AppImage`).
 
 Every start of the app checks this machine's server and repairs it: registered as a login service, running the installed binary, and answering with at least this version.
 

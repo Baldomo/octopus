@@ -73,9 +73,44 @@ pub fn bundle(program: &Path) -> Option<&Path> {
     macos.parent()?.parent().filter(|bundle| bundle.extension().is_some_and(|extension| extension == "app"))
 }
 
-/// The app bundle this binary is the main binary of, when it runs from somewhere it won't stay.
+/// What this launch runs as. A build from source is version 0.0.0, unstamped, and stays the build it is.
+#[cfg(feature = "desktop")]
+pub fn app() -> octopus_desktop::App {
+    if env!("CARGO_PKG_VERSION") == "0.0.0" {
+        return octopus_desktop::App::Source;
+    }
+    platform_app()
+}
+
 #[cfg(all(target_os = "macos", feature = "desktop"))]
-pub fn transient_bundle() -> Option<std::path::PathBuf> {
-    let program = std::env::current_exe().ok()?;
-    bundle(&program).filter(|bundle| transient(bundle)).map(Path::to_path_buf)
+fn platform_app() -> octopus_desktop::App {
+    let program = std::env::current_exe().ok();
+    match program.as_deref().and_then(bundle).map(Path::to_path_buf) {
+        None => octopus_desktop::App::Source,
+        Some(bundle) if transient(&bundle) => octopus_desktop::App::Transient(bundle),
+        Some(bundle) => octopus_desktop::App::Installed(bundle),
+    }
+}
+
+/// The AppImage this binary runs from, which its runtime names in APPIMAGE.
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+fn platform_app() -> octopus_desktop::App {
+    std::env::var_os("APPIMAGE")
+        .map_or(octopus_desktop::App::Source, |file| octopus_desktop::App::Installed(file.into()))
+}
+
+/// The binary this launch installs as the server's: within an AppImage, the headless build it carries at
+/// `usr/lib/octopus/octopus` under the directory its runtime names in APPDIR, which runs without the window libraries
+/// only the AppImage holds; else this binary.
+#[cfg(target_os = "linux")]
+pub fn this() -> std::io::Result<PathBuf> {
+    match std::env::var_os("APPDIR") {
+        Some(appdir) => Ok(Path::new(&appdir).join("usr/lib/octopus/octopus")),
+        None => std::env::current_exe(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn this() -> std::io::Result<std::path::PathBuf> {
+    std::env::current_exe()
 }

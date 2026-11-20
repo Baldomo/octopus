@@ -33,5 +33,12 @@
         "Library/LaunchAgents/octopus.plist": "server.plist"
       }
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5MjczN0VFOTc4NUM2MjEKUldRaHhvV1g3amNuR1RuZVdjcG5xWjFBUnkvMFE4Q2tVQjJHQ3JBT0ZNUldqZ3NhbHh0YlN3ejgK",
+      "endpoints": ["https://github.com/zabealbe/octopus/releases/latest/download/latest.json"],
+      "requireSignedVersion": true
+    }
   }
 }

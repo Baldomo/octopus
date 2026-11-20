@@ -1,11 +1,14 @@
 mod browser;
 mod commands;
+#[cfg(target_os = "linux")]
+mod launcher;
 mod layers;
 mod menu;
 #[cfg(target_os = "macos")]
 mod relocate;
 mod setup;
 pub mod types;
+mod update;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -64,22 +67,27 @@ pub struct Launch {
     pub problem: Option<String>,
     pub install: Option<Install>,
     pub skill: Skill,
-    /// The app bundle, when it runs from somewhere it won't stay, which the window offers to move to Applications.
+    pub app: App,
+}
+
+/// What a launch runs as.
+pub enum App {
+    /// A build from source, which stays the build it is.
+    Source,
+    /// The Mac app's bundle on a disk image, in a translocated copy or in the Trash, which the window offers to move
+    /// to Applications.
     #[cfg(target_os = "macos")]
-    pub transient: Option<PathBuf>,
+    Transient(PathBuf),
+    /// The Mac app's bundle or the AppImage, which the window keeps updated and, on Linux, points the app launcher at.
+    Installed(PathBuf),
 }
 
 /// Opens the window, first offering to move a transient app to Applications, installs this machine's server
-/// meanwhile when given one to install, and blocks until the window closes. While the user keeps the skill, every
+/// meanwhile when given one to install, updates an installed app in the background, and blocks until the window
+/// closes. While the user keeps the skill, every
 /// launch writes it again, so it follows the installed octopus; the first open asks before writing it.
 pub fn run(launch: Launch) -> anyhow::Result<()> {
-    let Launch {
-        problem,
-        install,
-        skill,
-        #[cfg(target_os = "macos")]
-        transient,
-    } = launch;
+    let Launch { problem, install, skill, app: runs_as } = launch;
     let config = Config::user()?;
     let client = Client {
         me: Identity::load(&config)?,
@@ -91,18 +99,29 @@ pub fn run(launch: Launch) -> anyhow::Result<()> {
     tauri::Builder::default()
         .plugin(octopus_shell::plugin())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(invoke_handler())
         .setup(move |app| {
             #[cfg(target_os = "macos")]
-            let moved = transient.as_deref().map_or(Ok(()), |bundle| {
-                relocate::offer(objc2::MainThreadMarker::new().expect("tauri sets up on the main thread"), bundle)
-            });
+            let moved = match &runs_as {
+                App::Transient(bundle) => {
+                    relocate::offer(objc2::MainThreadMarker::new().expect("tauri sets up on the main thread"), bundle)
+                }
+                _ => Ok(()),
+            };
             octopus_shell::start(app.handle(), client, problem);
             menu::relay(app.handle());
             let ui = Arc::clone(app.state::<Arc<UiStore>>().inner());
             #[cfg(target_os = "macos")]
             if let Err(error) = moved {
                 ui.report(format!("move octopus to Applications: {error:#}"));
+            }
+            if let App::Installed(file) = runs_as {
+                #[cfg(target_os = "linux")]
+                if let Err(error) = launcher::write(&file) {
+                    ui.report(format!("add octopus to the app launcher: {error:#}"));
+                }
+                update::start(app.handle(), Arc::clone(&ui), file);
             }
             app.manage(BrowserPages::new(app.handle().clone()));
             if install.is_none()

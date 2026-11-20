@@ -17,6 +17,7 @@ serde.workspace = true
 serde_json.workspace = true
 tauri = { workspace = true, features = ["devtools", "unstable"] }
 tauri-plugin-opener.workspace = true
+tauri-plugin-updater.workspace = true
 tokio = { workspace = true, features = ["full"] }
 ts-rs.workspace = true
 
@@ -27,6 +28,7 @@ objc2-core-foundation.workspace = true
 objc2-foundation = { workspace = true, features = ["NSError", "NSFileManager", "NSString", "NSURL"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+dirs.workspace = true
 gtk = "0.18.2"
 webkit2gtk = "2.0.2"
 
