@@ -22,11 +22,7 @@ fn a_call_missing_flags_names_all_of_them_at_once() {
 #[test]
 fn a_home_other_than_the_accounts_registers_no_service() {
     let home = tempfile::tempdir().expect("tempdir");
-    let output = Command::new(OCTOPUS)
-        .env("HOME", home.path())
-        .args(["server", "uninstall", "--name", "foreign-home"])
-        .output()
-        .expect("run octopus");
+    let output = Command::new(OCTOPUS).env("HOME", home.path()).arg("uninstall").output().expect("run octopus");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     let account = nix::unistd::User::from_uid(nix::unistd::getuid()).expect("look up").expect("an account");
@@ -49,4 +45,23 @@ async fn every_command_sends_an_op_the_server_serves_and_a_call_names_every_miss
     let partial = laptop.call_raw(TaskCreate::NAME, json!({ "workspace": "wsp_1", "title": "x" })).await;
     let missing = ["folder", "mode", "parent", "state", "harness", "session"].map(String::from).to_vec();
     assert_eq!(partial.expect("call"), Outcome::Err(Error::MissingField { fields: missing }));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_answers_the_repairs_ask_with_its_name_and_version() {
+    let (_dir, running) = server().await;
+    let socket = running.socket.clone();
+    let answer = tokio::task::spawn_blocking(move || {
+        octopus_proto::local::ask(&socket, "repair", std::time::Duration::from_secs(1))
+    })
+    .await
+    .expect("ask");
+    let expected =
+        octopus_proto::local::Answer { server: common::SERVER.into(), version: Some(env!("CARGO_PKG_VERSION").into()) };
+    assert_eq!(answer, Some(expected));
+    let nothing = tempfile::tempdir().expect("tempdir");
+    assert_eq!(
+        octopus_proto::local::ask(&nothing.path().join("server.sock"), "repair", std::time::Duration::from_secs(1)),
+        None
+    );
 }

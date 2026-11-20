@@ -7,7 +7,7 @@ use anyhow::{Context, anyhow};
 use clap::{ArgAction, Subcommand};
 use octopus_client::Identity;
 use octopus_client::servers::{self, Address, Config, Server as KnownServer, Servers};
-use octopus_proto::local::Listener;
+use octopus_proto::local::{self, Listener};
 use octopus_proto::ops::{TaskGet, TermTakeLock};
 use octopus_proto::pairing::Invite;
 use octopus_proto::remote;
@@ -16,27 +16,17 @@ use octopus_server::TerminalHost;
 use tokio::io::AsyncReadExt;
 
 use crate::commands::SERVER_HELP;
-use crate::install::{self, ServerRun, Service};
-use crate::{account, attach, call, call_error, connect, print, skill};
+use crate::install::ServerRun;
+use crate::{account, attach, call, call_error, connect, print, repair, skill};
 
 #[derive(Subcommand)]
 pub enum ServerVerb {
     /// Run this machine's server in the foreground.
     Run(ServerRun),
-    /// Run the server at every login as a user service (launchd or systemd --user).
-    Install {
-        #[command(flatten)]
-        run: ServerRun,
-        /// The file the service's output is appended to.
-        #[arg(long)]
-        log: PathBuf,
-    },
-    /// Remove the login service that `install` registered for this --name.
-    Uninstall {
-        /// The --name the service was installed with.
-        #[arg(long)]
-        name: String,
-    },
+    /// Run this machine's server from ~/.octopus, appending its output to ~/.octopus/server.log; its login service
+    /// runs this.
+    #[command(hide = true)]
+    Start,
     /// Run the process that keeps a server's terminals alive across server restarts; `server run` starts it.
     #[command(hide = true)]
     TerminalHost {
@@ -71,34 +61,12 @@ pub enum ServerVerb {
 impl ServerVerb {
     pub async fn run(self) -> anyhow::Result<()> {
         match self {
-            Self::Run(run) => {
-                run.check()?;
-                let ServerRun { name, socket, store, worktrees, terminal_host, udp, relay, microphone } = run;
-                let local = Listener::bind(&socket).with_context(|| format!("bind {}", socket.display()))?;
-                let host = TerminalHost { program: std::env::current_exe()?, address: terminal_host };
-                let plugin = store.with_file_name(skill::PLUGIN_DIR);
-                skill::write_plugin(&plugin)?;
-                let server =
-                    octopus_server::Server::open(&name, &store, &worktrees, &host, relay.clone(), microphone, &plugin)
-                        .map_err(|error| anyhow!("{error}"))?;
-                let endpoint = remote::listen(udp, relay.clone(), server.device()).await?;
-                let key = server.device().public();
-                let bound: Vec<String> = endpoint.bound_sockets().iter().map(ToString::to_string).collect();
-                eprintln!(
-                    "octopus server {name} listening on {}, and as {key} on UDP {} and {relay}",
-                    socket.display(),
-                    bound.join(", ")
-                );
-                if udp.ip().is_loopback() {
-                    eprintln!(
-                        "octopus server {name}: UDP {udp} is loopback, so clients on other machines reach it only through {relay}"
-                    );
-                }
-                octopus_server::serve(server, local, endpoint).await;
-                Ok(())
+            Self::Run(run) => serve(run).await,
+            Self::Start => {
+                let octopus = repair::Octopus::find()?;
+                append_output(&octopus.log())?;
+                serve(octopus.server()?).await
             }
-            Self::Install { run, log } => print(&install::install(&Service::new(run, std::env::current_exe()?, log)?)?),
-            Self::Uninstall { name } => print(&install::uninstall(&name)?),
             Self::TerminalHost { address } => {
                 octopus_server::run_terminal_host(&address).await.with_context(|| format!("host {}", address.display()))
             }
@@ -109,6 +77,48 @@ impl ServerVerb {
             Self::Forget { server } => synced(|config, me| servers::forget(config, me, &server)).await,
         }
     }
+}
+
+async fn serve(run: ServerRun) -> anyhow::Result<()> {
+    run.check()?;
+    let ServerRun { name, socket, store, worktrees, terminal_host, udp, relay, microphone } = run;
+    local::clear_stale(&socket).with_context(|| format!("bind {}", socket.display()))?;
+    let host = TerminalHost { program: std::env::current_exe()?, address: terminal_host };
+    let plugin = store.with_file_name(skill::PLUGIN_DIR);
+    skill::write_plugin(&plugin)?;
+    let server = octopus_server::Server::open(&name, &store, &worktrees, &host, relay.clone(), microphone, &plugin)
+        .map_err(|error| anyhow!("{error}"))?;
+    let endpoint = remote::listen(udp, relay.clone(), server.device()).await?;
+    let key = server.device().public();
+    let bound: Vec<String> = endpoint.bound_sockets().iter().map(ToString::to_string).collect();
+    eprintln!(
+        "octopus server {name} listening on {}, and as {key} on UDP {} and {relay}",
+        socket.display(),
+        bound.join(", ")
+    );
+    if udp.ip().is_loopback() {
+        eprintln!(
+            "octopus server {name}: UDP {udp} is loopback, so clients on other machines reach it only through {relay}"
+        );
+    }
+    // Bound once the server can answer, so a launch asking the socket never meets one still starting.
+    let local = Listener::bind(&socket).with_context(|| format!("bind {}", socket.display()))?;
+    octopus_server::serve(server, local, endpoint).await;
+    Ok(())
+}
+
+/// Points stdout and stderr at the end of `log`, as a service manager would.
+fn append_output(log: &std::path::Path) -> anyhow::Result<()> {
+    let directory = log.parent().expect("a log sits in a directory");
+    std::fs::create_dir_all(directory).with_context(|| format!("create {}", directory.display()))?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)
+        .with_context(|| format!("open {}", log.display()))?;
+    nix::unistd::dup2_stdout(&file).context("point stdout at the log")?;
+    nix::unistd::dup2_stderr(&file).context("point stderr at the log")?;
+    Ok(())
 }
 
 async fn synced(change: impl FnOnce(&Config, &Identity) -> anyhow::Result<()>) -> anyhow::Result<()> {

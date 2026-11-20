@@ -11,6 +11,14 @@ Every flag is required. A success prints the op's result as JSON on stdout; a fa
 
 Open the window onto every server in this client's list.
 
+## `octopus install`
+
+Install this machine's server as a login service, from the installed binary when it is newer and from this one otherwise.
+
+## `octopus uninstall`
+
+Remove this machine's server's login service; its terminals and agents keep running until the machine stops.
+
 ## `octopus workspace add`
 
 Add a workspace: a named place this server files tasks in.
@@ -344,6 +352,12 @@ Pair with a server on another machine using the invite its `pairing offer` showe
 
 - `--invite <invite>`: The one-time invite `pairing offer` printed: octopus://<server key>?code=…&relay=….
 
+## `octopus server version`
+
+Report the version of the octopus binary the server runs.
+
+- `--server <server>`: The paired server's name.
+
 ## `octopus server run`
 
 Run this machine's server in the foreground.
@@ -356,26 +370,6 @@ Run this machine's server in the foreground.
 - `--udp <udp>`: The UDP address clients on other machines reach this server on directly: 0.0.0.0:0 for a free port the OS picks at each start, or a fixed one like 0.0.0.0:7300 to forward on a router. 0.0.0.0 takes IPv6 too, on the same port when it is fixed.
 - `--relay <relay>`: The iroh relay this server is homed on, which clients on other machines dial it through: one of n0's, e.g. https://euc1-1.relay.n0.iroh.link./, or one of your own.
 - `--microphone true|false`: Give each terminal a virtual microphone that its lock holder feeds.
-
-## `octopus server install`
-
-Run the server at every login as a user service (launchd or systemd --user).
-
-- `--name <name>`: The server's name, which agents in its terminals see as OCTOPUS_SERVER.
-- `--socket <socket>`: The Unix socket clients on this machine connect to.
-- `--store <store>`: The SQLite file the server keeps its state in.
-- `--worktrees <worktrees>`: Where task worktrees live: <worktrees>/<repo>/<task>.
-- `--terminal-host <terminal-host>`: Socket of the terminal host, the process that keeps this server's terminals running across restarts; started if nothing answers there.
-- `--udp <udp>`: The UDP address clients on other machines reach this server on directly: 0.0.0.0:0 for a free port the OS picks at each start, or a fixed one like 0.0.0.0:7300 to forward on a router. 0.0.0.0 takes IPv6 too, on the same port when it is fixed.
-- `--relay <relay>`: The iroh relay this server is homed on, which clients on other machines dial it through: one of n0's, e.g. https://euc1-1.relay.n0.iroh.link./, or one of your own.
-- `--microphone true|false`: Give each terminal a virtual microphone that its lock holder feeds.
-- `--log <log>`: The file the service's output is appended to.
-
-## `octopus server uninstall`
-
-Remove the login service that `install` registered for this --name.
-
-- `--name <name>`: The --name the service was installed with.
 
 ## `octopus server add`
 

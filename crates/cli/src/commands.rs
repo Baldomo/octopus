@@ -99,6 +99,12 @@ pub fn tree() -> Command {
     extend(&mut nouns, "pairing", PairingVerb::augment_subcommands);
     extend(&mut nouns, "account", AccountVerb::augment_subcommands);
     extend(&mut nouns, "skill", SkillVerb::augment_subcommands);
+    nouns.insert(0, Command::new("uninstall").about(
+        "Remove this machine's server's login service; its terminals and agents keep running until the machine stops.",
+    ));
+    nouns.insert(0, Command::new("install").about(
+        "Install this machine's server as a login service, from the installed binary when it is newer and from this one otherwise.",
+    ));
     #[cfg(feature = "desktop")]
     nouns.insert(0, Command::new("app").about("Open the window onto every server in this client's list."));
     Command::new("octopus")

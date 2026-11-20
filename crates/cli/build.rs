@@ -1,4 +1,4 @@
-//! On macOS, builds the Octopus Microphone HAL plug-in as a signed bundle in OUT_DIR, which `server install`
+//! On macOS, builds the Octopus Microphone HAL plug-in as a signed bundle in OUT_DIR, which `octopus install`
 //! embeds and copies into /Library/Audio/Plug-Ins/HAL, and gives the `octopus` binary the Info.plist macOS reads
 //! the app's identity and microphone prompt from.
 

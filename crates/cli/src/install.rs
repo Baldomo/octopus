@@ -1,16 +1,18 @@
-//! Registers `octopus server run` with the platform's user service manager, started at login.
+//! Registers this machine's server with the platform's user service manager, started at login.
 
+pub mod binary;
 mod manager;
 pub mod microphone;
 mod unit;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, bail};
 use serde::Serialize;
 
-pub use unit::{ServerRun, Service};
+pub use manager::{Service, account_home, exited};
+pub use unit::ServerRun;
 
 #[derive(Serialize)]
 pub struct Registration {
@@ -28,42 +30,46 @@ fn run(program: &str, args: &[&str]) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// The server installs whatever becomes of the Octopus Microphone.
-pub fn install(service: &Service) -> anyhow::Result<Registration> {
-    let unit = manager::unit_path(&service.id)?;
-    for directory in [&unit, &service.log].map(|path| path.parent().expect("an absolute file path has a directory")) {
-        std::fs::create_dir_all(directory).with_context(|| format!("create {}", directory.display()))?;
-    }
-    std::fs::write(&unit, manager::unit_file(service)).with_context(|| format!("write {}", unit.display()))?;
-    let microphone = if service.run.microphone { microphone::install() } else { microphone::Outcome::NotAsked };
+/// Where this machine's server keeps everything, `~/.octopus` within the account's home.
+pub fn octopus_dir(home: &Path) -> PathBuf {
+    home.join(".octopus")
+}
+
+/// Registers this machine's server from `program` and has the service manager start it afresh. The server installs
+/// whatever becomes of the Octopus Microphone.
+pub fn install(service: &Service, program: &Path) -> anyhow::Result<Registration> {
+    let microphone = microphone::install();
     if let microphone::Outcome::Failed { reason } = &microphone {
         eprintln!("octopus: installed without the Octopus Microphone: {reason}");
     }
-    manager::register(&service.id, &unit).with_context(|| {
-        let run = service.command();
+    let unit = service.register(program).with_context(|| {
         format!(
-            "the {} did not start the server: start one in this session, or run the server by hand with `{run}`",
-            manager::NAME
+            "the {} did not start the server: start one in this session, or run the server by hand with `{}`",
+            manager::NAME,
+            unit::command(program)
         )
     })?;
-    Ok(Registration { service: service.id.clone(), unit, microphone })
+    Ok(Registration { service: unit::ID.into(), unit, microphone })
 }
 
-#[cfg(feature = "desktop")]
-pub fn exited(service: &Service) -> anyhow::Result<bool> {
-    manager::exited(&service.id)
+/// The unit an earlier install registered the server `name` under, when it is still there.
+pub fn legacy_unit(home: &Path, name: &str) -> Option<PathBuf> {
+    Some(manager::unit_path(home, &unit::legacy_id(name))).filter(|unit| unit.exists())
 }
 
-/// The terminal host and its agents keep running; they end with the machine. The user's input comes back, and the
-/// Octopus Microphone goes with the machine's last server.
-pub fn uninstall(name: &str) -> anyhow::Result<Registration> {
-    let id = unit::service_id(name)?;
-    let unit = manager::unit_path(&id)?;
-    let terminal_host = microphone::terminal_host(&unit);
-    manager::unregister(&id, &unit)?;
-    let microphone = microphone::uninstall(terminal_host.as_deref(), &unit);
+/// Unregisters the unit an earlier install registered the server `name` under. Its terminal host and agents keep
+/// running for the server that replaces it.
+pub fn retire(name: &str, unit: &Path) -> anyhow::Result<()> {
+    manager::unregister_unit(&unit::legacy_id(name), unit)
+}
+
+/// The terminal host and its agents keep running; they end with the machine. The user's input comes back through
+/// `terminal_host`, and the Octopus Microphone goes with the server.
+pub fn uninstall(service: &Service, terminal_host: &Path) -> anyhow::Result<Registration> {
+    let unit = service.unregister()?;
+    let microphone = microphone::uninstall(terminal_host);
     if let microphone::Outcome::Failed { reason } = &microphone {
         eprintln!("octopus: uninstalled, leaving the Octopus Microphone: {reason}");
     }
-    Ok(Registration { service: id, unit, microphone })
+    Ok(Registration { service: unit::ID.into(), unit, microphone })
 }

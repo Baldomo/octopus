@@ -1,7 +1,7 @@
 //! The Octopus Microphone, the HAL plug-in a macOS server's terminals record from while a client on another
 //! machine holds them.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[cfg(target_os = "macos")]
 use anyhow::Context;
@@ -14,14 +14,12 @@ use super::run;
 #[serde(tag = "state", rename_all = "snake_case")]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code, reason = "only macOS installs a plug-in"))]
 pub enum Outcome {
-    /// This install gives terminals no virtual microphone, or the platform needs no plug-in.
+    /// The platform needs no plug-in, or an uninstall found none to remove.
     NotAsked,
     /// The same plug-in was already installed, so nothing was asked.
     Unchanged,
     Installed,
     Removed,
-    /// Another server on this machine still uses it.
-    Kept,
     /// The prompt was declined or the copy failed; the server installed or uninstalled all the same.
     Failed {
         reason: String,
@@ -54,42 +52,17 @@ pub fn install() -> Outcome {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn terminal_host(_unit: &Path) -> Option<PathBuf> {
-    None
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn uninstall(_terminal_host: Option<&Path>, _unit: &Path) -> Outcome {
+pub fn uninstall(_terminal_host: &Path) -> Outcome {
     Outcome::NotAsked
 }
 
-/// The --terminal-host the launchd agent at `unit` runs its server with.
+/// Gives back the input the server's microphone stood in for, then removes the plug-in.
 #[cfg(target_os = "macos")]
-pub fn terminal_host(unit: &Path) -> Option<PathBuf> {
-    let unit = unit.display().to_string();
-    let argv = run("plutil", &["-extract", "ProgramArguments", "json", "-o", "-", &unit]).ok()?;
-    let argv: Vec<String> = serde_json::from_str(&argv).ok()?;
-    argv.windows(2).find(|pair| pair[0] == "--terminal-host").map(|pair| PathBuf::from(&pair[1]))
-}
-
-/// Gives back the input the server's microphone stood in for, then removes the plug-in once no other octopus
-/// launchd agent remains beside `unit`.
-#[cfg(target_os = "macos")]
-pub fn uninstall(terminal_host: Option<&Path>, unit: &Path) -> Outcome {
-    if let Some(terminal_host) = terminal_host
-        && let Err(error) = octopus_server::give_back_input(terminal_host)
-    {
+pub fn uninstall(terminal_host: &Path) -> Outcome {
+    if let Err(error) = octopus_server::give_back_input(terminal_host) {
         eprintln!("octopus: give back the default input: {error:#}");
     }
-    let agents = unit.parent().expect("a launchd agent sits in a directory");
-    let others = std::fs::read_dir(agents).into_iter().flatten().flatten().any(|entry| {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        name.starts_with("octopus-") && name.ends_with(".plist")
-    });
     let bundle = Path::new(PLUG_INS).join(BUNDLE);
-    if others {
-        return Outcome::Kept;
-    }
     if !bundle.exists() {
         return Outcome::NotAsked;
     }
@@ -212,18 +185,5 @@ mod tests {
         for (define, value) in [("kName", MIC_DEVICE.name), ("kDeviceUID", MIC_DEVICE.uid)] {
             assert!(driver.contains(&format!("#define {define} \"{value}\"\n")), "{define} is {value:?}");
         }
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn uninstall_finds_the_terminal_host_its_agent_runs_with() {
-        let dir = tempfile::tempdir().unwrap();
-        let unit = dir.path().join("octopus-mac-mini.plist");
-        std::fs::write(
-            &unit,
-            crate::install::unit::launchd_plist(&crate::install::unit::tests::service("/var/octopus/server.log")),
-        )
-        .unwrap();
-        assert_eq!(terminal_host(&unit), Some(PathBuf::from("/run/octopus/host.sock")));
     }
 }

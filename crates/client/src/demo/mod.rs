@@ -18,10 +18,10 @@ use octopus_proto::device::PublicKey;
 use octopus_proto::ops::{
     AccountSync, BrowserClose, BrowserMove, BrowserOpen, BrowserReport, Done, FileCopy, FileCreate, FileDelete,
     FileList, FileMove, FileSearch, FileWrite, FolderGet, HarnessCheck, HarnessSet, HarnessStatus, Offer,
-    PairingForget, PairingList, PairingOffer, SessionHello, SessionPing, SessionSync, Synced, TaskArchive, TaskCreate,
-    TaskFocus, TaskGet, TaskMove, TaskRename, TaskSetParent, TaskSetSession, TaskSetWorkspace, TermClaim, TermClose,
-    TermOpen, TermResize, TermSend, TermTakeLock, Welcome, WorkspaceAdd, WorkspaceList, WorkspaceRemove,
-    WorkspaceRename, WorkspaceSetColor,
+    PairingForget, PairingList, PairingOffer, ServerVersion, SessionHello, SessionPing, SessionSync, Synced,
+    TaskArchive, TaskCreate, TaskFocus, TaskGet, TaskMove, TaskRename, TaskSetParent, TaskSetSession, TaskSetWorkspace,
+    TermClaim, TermClose, TermOpen, TermResize, TermSend, TermTakeLock, Version, Welcome, WorkspaceAdd, WorkspaceList,
+    WorkspaceRemove, WorkspaceRename, WorkspaceSetColor,
 };
 use octopus_proto::remote::{self, RelayUrl};
 use octopus_proto::types::{PtyId, ReadDir, Stream};
@@ -149,6 +149,7 @@ impl Demo {
             };
             SessionSync => |_| Ok(world.snapshot());
             SessionPing => |_| Ok(Done {});
+            ServerVersion => |_| Ok(Version { version: env!("CARGO_PKG_VERSION").into() });
             AccountSync => |op| {
                 world.keep_account(&op.account);
                 Ok(Synced { account: op.account, settings: op.settings, server: World::hosted() })

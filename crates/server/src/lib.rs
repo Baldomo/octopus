@@ -31,10 +31,10 @@ pub use octopus_proto::now;
 use octopus_proto::ops::{
     AccountSync, BrowserClose, BrowserMove, BrowserOpen, BrowserReport, Done, Entries, FileCopy, FileCreate,
     FileDelete, FileList, FileMove, FileSearch, FileWrite, FolderGet, HarnessCheck, HarnessSet, Matches, Offer,
-    PairingForget, PairingList, PairingOffer, Revised, SessionHello, SessionPing, SessionSync, Snapshot, TaskArchive,
-    TaskCreate, TaskFocus, TaskGet, TaskMove, TaskRename, TaskSetParent, TaskSetSession, TaskSetWorkspace, TermClaim,
-    TermClose, TermOpen, TermResize, TermSend, TermTakeLock, Welcome, WorkspaceAdd, WorkspaceList, WorkspaceRemove,
-    WorkspaceRename, WorkspaceSetColor, Workspaces, Written,
+    PairingForget, PairingList, PairingOffer, Revised, ServerVersion, SessionHello, SessionPing, SessionSync, Snapshot,
+    TaskArchive, TaskCreate, TaskFocus, TaskGet, TaskMove, TaskRename, TaskSetParent, TaskSetSession, TaskSetWorkspace,
+    TermClaim, TermClose, TermOpen, TermResize, TermSend, TermTakeLock, Version, Welcome, WorkspaceAdd, WorkspaceList,
+    WorkspaceRemove, WorkspaceRename, WorkspaceSetColor, Workspaces, Written,
 };
 use octopus_proto::remote::{Connection, RelayUrl};
 use octopus_proto::types::{AGENT_PANEL, BrowserPanel, PtyId, TaskId};
@@ -218,6 +218,9 @@ impl Server {
             SessionHello::NAME => call::<SessionHello>(args, |_| self.welcome()),
             SessionSync::NAME => call::<SessionSync>(args, |_| self.snapshot()),
             SessionPing::NAME => call::<SessionPing>(args, |_| Ok(Done {})),
+            ServerVersion::NAME => {
+                call::<ServerVersion>(args, |_| Ok(Version { version: env!("CARGO_PKG_VERSION").into() }))
+            }
             PairingForget::NAME => call::<PairingForget>(args, |op| self.pairing_forget(op)),
             PairingOffer::NAME => call::<PairingOffer>(args, |_| Ok::<Offer, Error>(self.offer())),
             PairingList::NAME => call::<PairingList>(args, |_| self.pairing_list()),

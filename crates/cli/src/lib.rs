@@ -1,10 +1,9 @@
 mod account;
 mod attach;
 pub mod commands;
-#[cfg(feature = "desktop")]
-mod first_run;
 mod install;
 mod manual;
+mod repair;
 pub mod skill;
 
 use std::process::ExitCode;
@@ -51,6 +50,11 @@ fn print(value: &impl Serialize) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The server's own processes leave this machine's server as they find it.
+fn runs_the_server(noun: &str, verbs: &clap::ArgMatches) -> bool {
+    noun == "server" && matches!(verbs.subcommand_name(), Some("run" | "start" | "terminal-host"))
+}
+
 /// The app owns the main thread, which the macOS event loop requires; every other command runs on tokio.
 pub fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().collect();
@@ -70,17 +74,23 @@ pub fn main() -> ExitCode {
     let outcome = match matches.subcommand() {
         #[cfg(feature = "desktop")]
         Some(("app", _)) => {
-            let skill = || octopus_desktop::Skill(skill::install);
-            match first_run::list_this_machine() {
-                Ok(install) => octopus_desktop::run(None, install, skill()),
-                Err(error) => {
-                    octopus_desktop::run(Some(format!("list this machine's server: {error:#}")), None, skill())
-                }
-            }
+            let (problem, install) = match repair::app() {
+                Ok(install) => (None, install),
+                Err(error) => (Some(format!("repair this machine's server: {error:#}")), None),
+            };
+            octopus_desktop::run(problem, install, octopus_desktop::Skill(skill::install))
         }
-        _ => tokio::runtime::Runtime::new()
-            .context("start the runtime")
-            .and_then(|runtime| runtime.block_on(commands::run(&matches))),
+        Some(("install", _)) => repair::install().and_then(|registration| print(&registration)),
+        Some(("uninstall", _)) => repair::uninstall().and_then(|registration| print(&registration)),
+        Some((noun, verbs)) => {
+            if !runs_the_server(noun, verbs) {
+                repair::cli();
+            }
+            tokio::runtime::Runtime::new()
+                .context("start the runtime")
+                .and_then(|runtime| runtime.block_on(commands::run(&matches)))
+        }
+        None => unreachable!("the tree requires a noun"),
     };
     match outcome {
         Ok(()) => ExitCode::SUCCESS,

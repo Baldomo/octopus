@@ -90,6 +90,18 @@ op!(
     SessionPing = "session.ping" -> Done {}
 );
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Version {
+    /// The version of the octopus binary the server runs, as `octopus --version` prints it.
+    pub version: String,
+}
+
+op!(
+    /// Report the version of the octopus binary the server runs.
+    ServerVersion = "server.version" -> Version {}
+);
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Offer {
@@ -702,5 +714,6 @@ pub fn commands() -> Vec<Command> {
         command::<PairingOffer>(),
         command::<PairingList>(),
         command::<PairingForget>(),
+        command::<ServerVersion>(),
     ]
 }

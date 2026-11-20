@@ -1,10 +1,10 @@
-//! The unit a service manager runs a server from: the `server run` flags, the service they make, and the launchd
-//! plist and systemd unit that carry it.
+//! The unit a service manager runs this machine's server from, `<binary> server start`, as a launchd plist or a
+//! systemd unit, and the `server run` flags a server takes.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, bail};
+use anyhow::bail;
 use octopus_proto::remote::{self, RelayUrl};
 
 #[derive(clap::Args)]
@@ -49,81 +49,30 @@ impl ServerRun {
         }
         Ok(())
     }
-
-    fn flags(&self) -> [(&'static str, String); 8] {
-        [
-            ("--name", self.name.clone()),
-            ("--socket", self.socket.display().to_string()),
-            ("--store", self.store.display().to_string()),
-            ("--worktrees", self.worktrees.display().to_string()),
-            ("--terminal-host", self.terminal_host.display().to_string()),
-            ("--udp", self.udp.to_string()),
-            ("--relay", self.relay.to_string()),
-            ("--microphone", self.microphone.to_string()),
-        ]
-    }
 }
 
-pub struct Service {
-    pub(super) id: String,
-    pub(super) run: ServerRun,
-    program: PathBuf,
-    pub(super) log: PathBuf,
-}
+/// The service manager's name for this machine's server. A server named by an earlier install went by
+/// `octopus-<name>`, which the dash keeps apart from this one.
+pub const ID: &str = "octopus";
 
-/// Every service manager accepts ASCII letters, digits, '-', '_' and '.', so each other character becomes '-'.
-pub(super) fn service_id(name: &str) -> anyhow::Result<String> {
-    if name.is_empty() {
-        bail!("--name must not be empty");
-    }
+/// The id an earlier install registered the server `name` under: each character a service manager refuses, any
+/// but ASCII letters, digits, '-', '_' and '.', became '-'.
+pub fn legacy_id(name: &str) -> String {
     let safe = |c: char| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '-' };
-    Ok(format!("octopus-{}", name.chars().map(safe).collect::<String>()))
+    format!("octopus-{}", name.chars().map(safe).collect::<String>())
 }
 
-fn absolute(path: PathBuf) -> anyhow::Result<PathBuf> {
-    std::path::absolute(&path).with_context(|| format!("resolve {}", path.display()))
+fn argv(program: &Path) -> [String; 3] {
+    [program.display().to_string(), "server".into(), "start".into()]
 }
 
-impl Service {
-    /// Service managers start in their own working directory, so every path is made absolute. A service listens
-    /// beyond loopback, since a loopback address leaves clients on other machines the relay alone.
-    pub fn new(run: ServerRun, program: PathBuf, log: PathBuf) -> anyhow::Result<Self> {
-        if run.udp.ip().is_loopback() {
-            bail!("--udp {} is loopback; install with --udp 0.0.0.0:{}", run.udp, run.udp.port());
-        }
-        let id = service_id(&run.name)?;
-        let run = ServerRun {
-            socket: absolute(run.socket)?,
-            store: absolute(run.store)?,
-            worktrees: absolute(run.worktrees)?,
-            terminal_host: absolute(run.terminal_host)?,
-            ..run
-        };
-        run.check()?;
-        let service = Self { id, run, program: absolute(program)?, log: absolute(log)? };
-        let mut words = service.argv().into_iter().chain([service.log.display().to_string()]);
-        if let Some(word) = words.find(|word| word.chars().any(char::is_control)) {
-            bail!("{word:?} holds a control character, which no unit file can carry");
-        }
-        Ok(service)
-    }
-
-    /// The command that runs this service's server by hand, each word quoted for a POSIX shell.
-    pub fn command(&self) -> String {
-        let quoted = |word: &String| {
-            let plain = word.chars().all(|c| c.is_ascii_alphanumeric() || "/._-:=,+@".contains(c));
-            if plain { word.clone() } else { format!("'{}'", word.replace('\'', "'\\''")) }
-        };
-        self.argv().iter().map(quoted).collect::<Vec<_>>().join(" ")
-    }
-
-    fn argv(&self) -> Vec<String> {
-        let mut argv = vec![self.program.display().to_string(), "server".into(), "run".into()];
-        for (flag, value) in self.run.flags() {
-            argv.extend([flag.to_string(), value]);
-        }
-        argv
-    }
+/// The command the unit runs, each word quoted for a POSIX shell.
+pub fn command(program: &Path) -> String {
+    let quoted = |word: &String| {
+        let plain = word.chars().all(|c| c.is_ascii_alphanumeric() || "/._-:=,+@".contains(c));
+        if plain { word.clone() } else { format!("'{}'", word.replace('\'', "'\\''")) }
+    };
+    argv(program).iter().map(quoted).collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -131,23 +80,17 @@ fn xml(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-#[cfg(any(target_os = "macos", test))]
-fn plist_word(word: &str) -> String {
-    format!("\t\t<string>{}</string>\n", xml(word))
-}
-
 /// `AbandonProcessGroup` keeps launchd from ending the terminal host along with the server.
 #[cfg(any(target_os = "macos", test))]
-pub fn launchd_plist(service: &Service) -> String {
-    let arguments: String = service.argv().iter().map(|argument| plist_word(argument)).collect();
-    let (label, log) = (&service.id, xml(&service.log.display().to_string()));
+pub fn launchd_plist(program: &Path) -> String {
+    let arguments: String = argv(program).iter().map(|word| format!("\t\t<string>{}</string>\n", xml(word))).collect();
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>{label}</string>
+	<string>{ID}</string>
 	<key>ProgramArguments</key>
 	<array>
 {arguments}	</array>
@@ -157,10 +100,6 @@ pub fn launchd_plist(service: &Service) -> String {
 	<true/>
 	<key>AbandonProcessGroup</key>
 	<true/>
-	<key>StandardOutPath</key>
-	<string>{log}</string>
-	<key>StandardErrorPath</key>
-	<string>{log}</string>
 </dict>
 </plist>
 "#
@@ -168,30 +107,22 @@ pub fn launchd_plist(service: &Service) -> String {
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn specifiers(text: &str) -> String {
-    text.replace('%', "%%")
-}
-
-#[cfg(any(target_os = "linux", test))]
 fn systemd_word(word: &str) -> String {
-    format!("\"{}\"", specifiers(word).replace('\\', "\\\\").replace('"', "\\\"").replace('$', "$$"))
+    format!("\"{}\"", word.replace('%', "%%").replace('\\', "\\\\").replace('"', "\\\"").replace('$', "$$"))
 }
 
 /// `KillMode=process` stops the server alone, so its terminal host and every agent outlive a restart.
 #[cfg(any(target_os = "linux", test))]
-pub fn systemd_unit(service: &Service) -> String {
-    let exec: Vec<String> = service.argv().iter().map(|argument| systemd_word(argument)).collect();
-    let (name, log) = (&service.run.name, specifiers(&service.log.display().to_string()));
+pub fn systemd_unit(program: &Path) -> String {
+    let exec: Vec<String> = argv(program).iter().map(|word| systemd_word(word)).collect();
     format!(
         "[Unit]
-Description=octopus server {name}
+Description=octopus server
 
 [Service]
 ExecStart={exec}
 Restart=always
 KillMode=process
-StandardOutput=append:{log}
-StandardError=append:{log}
 
 [Install]
 WantedBy=default.target
@@ -201,96 +132,46 @@ WantedBy=default.target
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+mod tests {
     use super::*;
 
-    pub(in crate::install) fn service(log: &str) -> Service {
-        let run = ServerRun {
-            name: "mac-mini".into(),
-            socket: "/run/octopus/mac mini.sock".into(),
-            store: "/var/octopus/store.db".into(),
-            worktrees: "/var/octopus/worktrees".into(),
-            terminal_host: "/run/octopus/host.sock".into(),
-            udp: ([0, 0, 0, 0], 7300).into(),
-            relay: remote::N0_EU_RELAY.parse().expect("n0's relay is a URL"),
-            microphone: true,
-        };
-        Service { id: "octopus-mac-mini".into(), run, program: "/opt/octopus/bin/octopus".into(), log: log.into() }
-    }
-
-    const ARGV: [&str; 19] = [
-        "/opt/octopus/bin/octopus",
-        "server",
-        "run",
-        "--name",
-        "mac-mini",
-        "--socket",
-        "/run/octopus/mac mini.sock",
-        "--store",
-        "/var/octopus/store.db",
-        "--worktrees",
-        "/var/octopus/worktrees",
-        "--terminal-host",
-        "/run/octopus/host.sock",
-        "--udp",
-        "0.0.0.0:7300",
-        "--relay",
-        "https://euc1-1.relay.n0.iroh.link./",
-        "--microphone",
-        "true",
-    ];
-
     #[test]
-    fn a_launchd_agent_runs_the_server_at_login_and_spares_its_terminal_host() {
-        let plist = launchd_plist(&service("/var/octopus/server.log"));
-        let array: String = ARGV.iter().map(|argument| format!("\t\t<string>{argument}</string>\n")).collect();
+    fn a_launchd_agent_starts_the_server_at_login_and_spares_its_terminal_host() {
+        let plist = launchd_plist(Path::new("/Applications/octopus & co.app/Contents/MacOS/octopus"));
+        let array = "\t\t<string>/Applications/octopus &amp; co.app/Contents/MacOS/octopus</string>\n\t\t<string>server</string>\n\t\t<string>start</string>\n";
         assert!(plist.contains(&format!("<key>ProgramArguments</key>\n\t<array>\n{array}\t</array>")), "{plist}");
         for key in ["RunAtLoad", "KeepAlive", "AbandonProcessGroup"] {
             assert!(plist.contains(&format!("<key>{key}</key>\n\t<true/>")), "{key} in {plist}");
         }
-        assert!(plist.contains("<key>Label</key>\n\t<string>octopus-mac-mini</string>"));
-        assert!(plist.contains("<key>StandardErrorPath</key>\n\t<string>/var/octopus/server.log</string>"));
+        assert!(plist.contains("<key>Label</key>\n\t<string>octopus</string>"));
     }
 
     #[test]
     fn a_systemd_unit_quotes_each_word_and_stops_the_server_alone() {
-        let exec: Vec<String> = ARGV.iter().map(|word| format!("\"{word}\"")).collect();
-        let expected = format!(
-            "[Unit]
-Description=octopus server mac-mini
-
-[Service]
-ExecStart={}
-Restart=always
-KillMode=process
-StandardOutput=append:/var/octopus/100%%.log
-StandardError=append:/var/octopus/100%%.log
-
-[Install]
-WantedBy=default.target
-",
-            exec.join(" ")
-        );
-        assert_eq!(systemd_unit(&service("/var/octopus/100%.log")), expected);
+        let unit = systemd_unit(Path::new("/home/ada/100% \"real\"/octopus"));
+        assert!(unit.contains("\nExecStart=\"/home/ada/100%% \\\"real\\\"/octopus\" \"server\" \"start\"\n"), "{unit}");
+        assert!(unit.contains("\nRestart=always\nKillMode=process\n"), "{unit}");
     }
 
     #[test]
-    fn a_service_never_installs_on_loopback() {
-        for udp in ["127.0.0.1:7300", "[::1]:7300"] {
-            let mut run = service("/log").run;
-            run.udp = udp.parse().expect("an address");
-            let error = Service::new(run, "/opt/octopus/bin/octopus".into(), "/log".into()).err().expect("refused");
-            assert!(error.to_string().contains("--udp 0.0.0.0:7300"), "{error}");
-        }
+    fn an_earlier_install_named_its_unit_after_the_server() {
+        assert_eq!(legacy_id("mac-mini.2"), "octopus-mac-mini.2");
+        assert_eq!(legacy_id("Ada’s Mac"), "octopus-Ada-s-Mac");
+        assert_ne!(legacy_id(""), ID);
     }
 
     #[test]
-    fn a_service_takes_one_safe_name_and_distinct_sockets() {
-        assert_eq!(service_id("mac-mini.2").expect("id"), "octopus-mac-mini.2");
-        assert_eq!(service_id("Ada’s Mac").expect("id"), "octopus-Ada-s-Mac");
-        assert!(service_id("").is_err());
-        let mut shared = service("/log").run;
-        shared.terminal_host = PathBuf::from(shared.socket.display().to_string().to_uppercase());
-        assert!(shared.check().is_err(), "one socket, spelled in another case");
+    fn a_server_never_dials_its_own_socket_for_its_host() {
+        let run = ServerRun {
+            name: "mac-mini".into(),
+            socket: "/run/octopus/server.sock".into(),
+            store: "/var/octopus/store.db".into(),
+            worktrees: "/var/octopus/worktrees".into(),
+            terminal_host: "/RUN/OCTOPUS/SERVER.SOCK".into(),
+            udp: ([0, 0, 0, 0], 0).into(),
+            relay: remote::N0_EU_RELAY.parse().expect("n0's relay is a URL"),
+            microphone: true,
+        };
+        assert!(run.check().is_err(), "one socket, spelled in another case");
     }
 }

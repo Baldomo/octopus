@@ -65,20 +65,17 @@ octopus app
 
 On Linux, first install `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libasound2-dev`.
 
-The first start registers this machine's server as a login service.
+Every start of the app checks this machine's server and repairs it: registered as a login service, running the installed binary, and answering with at least this version.
 
-On a machine without a display, like a Mac mini, clone the repository and add it as a second server:
+On a machine without a display, like a Linux box, unpack the headless CLI from the Releases page, install its server, and offer to pair:
 
 ```sh
-cargo install --locked --path crates/cli --no-default-features
-octopus server install --name mac-mini \
-  --socket ~/.octopus/server.sock --store ~/.octopus/store.db \
-  --worktrees ~/.octopus/worktrees --terminal-host ~/.octopus/host.sock \
-  --udp 0.0.0.0:0 --relay https://euc1-1.relay.n0.iroh.link./ \
-  --microphone false --log ~/.octopus/server.log
-octopus server add --name mac-mini --socket ~/.octopus/server.sock
-octopus pairing offer --server mac-mini
+tar -xzf octopus-cli_<version>_<target>.tar.gz
+./octopus install
+octopus pairing offer --server "$(hostname)"
 ```
+
+`octopus install` copies the binary to `~/.octopus/bin/octopus`, links `~/.local/bin/octopus` to it, and registers its server with systemd. Every later run of the CLI repairs that server the way the app does, so running a newer release's `octopus` once upgrades it.
 
 Paste the invite into **Pair a server** (the `+` after the server names in the sidebar), or scan its QR code with the phone app. The iOS app builds from source.
 

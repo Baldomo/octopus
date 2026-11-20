@@ -3,12 +3,12 @@
 use std::io::{self, BufRead, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::frames::{Op, Outcome, REPLY_BUFFER, Request, decode_reply, line};
-use crate::ops::SessionPing;
+use crate::frames::{Op, Outcome, REPLY_BUFFER, Request, Response, ServerFrame, decode_reply, line};
+use crate::ops::{ServerVersion, SessionHello, Version, Welcome};
 
 const ACCEPT_RETRY: Duration = Duration::from_millis(100);
 
@@ -46,8 +46,9 @@ pub async fn accept_forever(mut listener: Listener, mut serve: impl FnMut(Stream
 
 pub struct Listener(tokio::net::UnixListener);
 
-/// A socket file whose server is gone refuses connections; anything else at the path is left alone.
-fn clear_stale(address: &Path) -> io::Result<()> {
+/// Fails while a server serves `address`. A socket file whose server is gone refuses connections and goes;
+/// anything else at the path is left alone.
+pub fn clear_stale(address: &Path) -> io::Result<()> {
     match std::fs::symlink_metadata(address) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
@@ -86,17 +87,53 @@ pub fn connect_blocking(address: &Path) -> io::Result<BlockingStream> {
     BlockingStream::connect(address)
 }
 
-/// Whether a server serves `address`: it replies within `patience` to a ping, with the refusal a ping before
-/// `session.hello` draws. A socket whose process is still starting takes the connection and replies only once it
-/// serves.
-pub fn answers(address: &Path, patience: Duration) -> bool {
-    let args = serde_json::to_value(SessionPing {}).expect("ops serialize");
-    let ping = Request { id: 0, op: SessionPing::NAME.to_string(), args };
-    let replied = |mut stream: BlockingStream| -> io::Result<bool> {
-        stream.set_read_timeout(Some(patience))?;
-        stream.write_all(line(&ping).as_bytes())?;
-        let mut reply = Vec::new();
-        Ok(io::BufReader::new(stream).read_until(b'\n', &mut reply)? > 0)
+/// What the server serving a socket says of itself.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Answer {
+    pub server: String,
+    /// None from a server that predates `server.version`.
+    pub version: Option<String>,
+}
+
+fn request<O: Op + Serialize>(id: u64, op: &O) -> String {
+    line(&Request { id, op: O::NAME.to_string(), args: serde_json::to_value(op).expect("ops serialize") })
+}
+
+/// Asks the server serving `address` its name and version, as `client`; None when nothing there answers both
+/// within `patience`, or answers with something other than replies and pushes. A socket whose process is still
+/// starting takes the connection and replies only once it serves.
+pub fn ask(address: &Path, client: &str, patience: Duration) -> Option<Answer> {
+    let deadline = Instant::now() + patience;
+    let asked = |mut stream: BlockingStream| -> io::Result<Option<Answer>> {
+        let hello = request(0, &SessionHello { client: client.to_string() });
+        stream.write_all((hello + &request(1, &ServerVersion {})).as_bytes())?;
+        let mut reader = io::BufReader::new(stream);
+        let mut server = None;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Ok(None);
+            }
+            reader.get_ref().set_read_timeout(Some(left))?;
+            let mut read = String::new();
+            if reader.read_line(&mut read)? == 0 {
+                return Ok(None);
+            }
+            let outcome = match serde_json::from_str::<ServerFrame>(&read) {
+                Ok(ServerFrame::Response(Response { id: 0, outcome: Outcome::Ok(welcome) })) => {
+                    server = serde_json::from_value::<Welcome>(welcome).ok().map(|welcome| welcome.server);
+                    continue;
+                }
+                Ok(ServerFrame::Response(Response { id: 1, outcome })) => outcome,
+                Ok(ServerFrame::Push(_)) => continue,
+                _ => return Ok(None),
+            };
+            let version = match outcome {
+                Outcome::Ok(version) => serde_json::from_value::<Version>(version).ok().map(|version| version.version),
+                Outcome::Err(_) => None,
+            };
+            return Ok(server.map(|server| Answer { server, version }));
+        }
     };
-    connect_blocking(address).and_then(replied).unwrap_or(false)
+    connect_blocking(address).and_then(asked).ok().flatten()
 }

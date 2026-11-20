@@ -101,7 +101,7 @@ fn drain(audio: &mut HashMap<PtyId, VecDeque<u8>>, id: &PtyId, out: &mut [u8]) {
     out[taken..].fill(0);
 }
 
-/// Gives back the input a stopped server's Octopus Microphone stood in for, as `server uninstall` does.
+/// Gives back the input a stopped server's Octopus Microphone stood in for, as `octopus uninstall` does.
 #[cfg(target_os = "macos")]
 pub fn give_back_input(terminal_host: &Path) -> anyhow::Result<()> {
     platform::give_back_input(&directory(terminal_host))
