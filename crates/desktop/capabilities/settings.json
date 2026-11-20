@@ -1,0 +1,11 @@
+{
+  "identifier": "settings",
+  "description": "The folder picker opens the macOS privacy setting that lets this machine's server into a folder.",
+  "webviews": ["float"],
+  "permissions": [
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "x-apple.systempreferences:*" }]
+    }
+  ]
+}

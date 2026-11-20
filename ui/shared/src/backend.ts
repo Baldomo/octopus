@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { COMMANDS, EVENTS } from "./generated.ts";
 import type {
   AccountView,
@@ -91,6 +92,8 @@ export const backend = {
     invoke<void>(octopus("task_set_workspace"), { at, workspace }),
   /** The folder on `server`, resolved, with the git repo it sits in and the folders inside it. */
   folderGet: (server: string, folder: string) => invoke<Folder>(octopus("folder_get"), { server, folder }),
+  /** Opens a system setting of this machine by its URL. */
+  openSetting: (url: string) => openUrl(url),
   /** Whether the harness's program is installed on `server`; null when the server has no such harness. */
   harnessCheck: (server: string, harness: string) =>
     invoke<HarnessStatus | null>(octopus("harness_check"), { server, harness }),

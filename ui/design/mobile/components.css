@@ -120,6 +120,7 @@
 .mi>.slot{color:var(--dim)}
 .mi .why{font:var(--t-cap);color:var(--faint);white-space:nowrap}
 .mi .chev{color:var(--faint)}
+.mi .guard{color:var(--faint)}
 .mi.off{color:var(--faint)}
 .mi.off>.slot{color:var(--faint)}
 .mi.danger,.mi.danger>.slot{color:var(--err)}

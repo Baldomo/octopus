@@ -5,8 +5,9 @@ use std::process::Command;
 
 use common::{connect, create, refused, server, task, task_create, workspace, workspace_add};
 use octopus_proto::ops::{
-    Folder, FolderGet, SessionSync, TaskArchive, TaskCreate, TaskFocus, TaskMove, TaskRename, TaskSetParent,
-    TaskSetWorkspace, TermOpen, WorkspaceAdd, WorkspaceList, WorkspaceRemove, WorkspaceRename, WorkspaceSetColor,
+    Folder, FolderGet, Inside, SessionSync, Subfolder, TaskArchive, TaskCreate, TaskFocus, TaskMove, TaskRename,
+    TaskSetParent, TaskSetWorkspace, TermOpen, WorkspaceAdd, WorkspaceList, WorkspaceRemove, WorkspaceRename,
+    WorkspaceSetColor,
 };
 use octopus_proto::types::{Color, Hue, Mode, Swatch, TaskId, TaskState, Tone, WorkspaceId};
 use octopus_proto::{Error, Event, Op, Outcome};
@@ -17,6 +18,10 @@ fn git(repo: &Path, args: &[&str]) -> String {
     let output = Command::new("git").arg("-C").arg(repo).args(args).output().expect("run git");
     assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
     String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+fn folders(listed: &[(&str, bool)]) -> Vec<Subfolder> {
+    listed.iter().map(|&(name, guarded)| Subfolder { name: name.into(), guarded }).collect()
 }
 
 /// A git repository with one commit on `main`, under `dir`.
@@ -76,7 +81,7 @@ async fn a_worktree_holds_the_folder_on_its_branch_and_comes_back_until_its_life
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_folder_shows_its_repo_branch_and_the_folders_inside_it_and_an_in_place_task_needs_its_folder() {
+async fn a_folder_shows_its_repo_branch_and_folders_locking_the_guarded_and_an_in_place_task_needs_its_folder() {
     let (dir, running) = server().await;
     let repo = repo(dir.path());
     std::fs::create_dir(repo.join("src")).expect("mkdir src");
@@ -92,13 +97,27 @@ async fn a_folder_shows_its_repo_branch_and_the_folders_inside_it_and_an_in_plac
             folder: canonical.clone(),
             repo: Some(canonical),
             branch: Some("main".into()),
-            folders: vec![".git".into(), "src".into()],
-            repos: vec![],
+            inside: Inside::Listed { folders: folders(&[(".git", false), ("src", false)]) },
         }
     );
-    let outside = laptop.call(&get(dir.path())).await.expect("folder.get");
-    let listed = (outside.folders.contains(&"repo".to_string()), outside.repos.contains(&"repo".to_string()));
-    assert_eq!((outside.repo, outside.branch, listed), (None, None, (true, true)), "a repo's top is listed as one");
+    let shelf = dir.path().join("shelf");
+    let locked = shelf.join("locked");
+    std::fs::create_dir_all(shelf.join("open")).expect("mkdir open");
+    std::fs::create_dir(&locked).expect("mkdir locked");
+    std::os::unix::fs::symlink(&locked, shelf.join("link")).expect("symlink link");
+    std::os::unix::fs::symlink("link", shelf.join("chain")).expect("symlink chain");
+    std::os::unix::fs::symlink("loop", shelf.join("loop")).expect("symlink loop");
+    std::os::unix::fs::symlink("../shelf/./open", shelf.join("up")).expect("symlink up");
+    std::os::unix::fs::symlink(repo.join("README.md"), shelf.join("file")).expect("symlink file");
+    std::fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o000)).expect("chmod locked");
+    let outside = laptop.call(&get(&shelf)).await.expect("folder.get");
+    let kept_out = laptop.call(&get(&locked)).await.expect("folder.get");
+    std::fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o755)).expect("chmod locked");
+    let listed = Inside::Listed {
+        folders: folders(&[("chain", true), ("link", true), ("locked", true), ("open", false), ("up", false)]),
+    };
+    assert_eq!((outside.repo, outside.branch, outside.inside), (None, None, listed));
+    assert!(matches!(kept_out.inside, Inside::KeptOut { setting: None, .. }), "{kept_out:?}");
     for folder in [Path::new("repo"), &repo.join("README.md")] {
         assert!(matches!(refused(laptop.call(&get(folder)).await), Error::InvalidArgs { .. }));
     }

@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use octopus_proto::device::PublicKey;
 use octopus_proto::local::{self, Listener};
-use octopus_proto::ops::{AccountJoin, Done, PairingPair, SessionHello, SessionPing};
+use octopus_proto::ops::{AccountJoin, Done, PairingPair, SessionHello, SessionPing, WAITING_ON_THE_OS};
 use octopus_proto::remote::{self, Connection, Endpoint};
 use octopus_proto::types::Stream;
 use octopus_proto::{
@@ -245,6 +245,12 @@ async fn hello(server: &Arc<Server>, request: &Request, peer: Peer) -> Result<Cl
     peer.hello(server, parse_args::<SessionHello>(&request.args)?.client).await
 }
 
+async fn answer(server: Arc<Server>, client: Client, request: Request) -> Outcome {
+    tokio::task::spawn_blocking(move || server.handle(&client, &request))
+        .await
+        .unwrap_or_else(|error| Outcome::Err(Error::internal(error)))
+}
+
 async fn serve_control<R, W>(server: Arc<Server>, hello: Request, client: Client, mut lines: BufReader<R>, mut write: W)
 where
     R: AsyncRead + Unpin + Send,
@@ -282,17 +288,15 @@ where
     let (executor_server, executor_client, answers) = (Arc::clone(&server), client.clone(), out.clone());
     let executor = tokio::spawn(async move {
         while let Some(request) = queued.recv().await {
-            let (server, client, id) = (Arc::clone(&executor_server), executor_client.clone(), request.id);
-            let outcome = tokio::task::spawn_blocking(move || server.handle(&client, &request))
-                .await
-                .unwrap_or_else(|error| Outcome::Err(Error::internal(error)));
+            let id = request.id;
+            let outcome = answer(Arc::clone(&executor_server), executor_client.clone(), request).await;
             if answers.send(respond(id, outcome)).is_err() {
                 break;
             }
         }
     });
-    // Requests run one at a time in order; a ping is answered as it arrives, so it times the connection rather
-    // than the op ahead of it.
+    // Requests run one at a time in order. A ping is answered as it arrives, so it times the connection rather than
+    // the op ahead of it, and an op that can wait on the OS asking its user runs beside the queue.
     let mut request_line = String::new();
     loop {
         request_line.clear();
@@ -303,6 +307,17 @@ where
         let sent = match parse_request(&request_line) {
             Ok(request) if request.op == SessionPing::NAME => {
                 out.send(respond(request.id, server.handle(&client, &request))).is_ok()
+            }
+            Ok(request) if WAITING_ON_THE_OS.contains(&request.op.as_str()) => {
+                let (server, client, answers) = (Arc::clone(&server), client.clone(), out.downgrade());
+                tokio::spawn(async move {
+                    let id = request.id;
+                    let outcome = answer(server, client, request).await;
+                    if let Some(answers) = answers.upgrade() {
+                        let _client_gone = answers.send(respond(id, outcome));
+                    }
+                });
+                true
             }
             Ok(request) => queue.send(request).await.is_ok(),
             Err((id, error)) => out.send(respond(id, Outcome::Err(error))).is_ok(),

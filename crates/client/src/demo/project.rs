@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use octopus_proto::Error;
-use octopus_proto::ops::{Entry, EntryKind, Folder, Match};
+use octopus_proto::ops::{Entry, EntryKind, Folder, Inside, Match, Subfolder};
 
 /// Where the project sits on the demo computer, and the folder above it.
 pub(super) const ROOT: &str = "/work/tidewatch";
@@ -186,7 +186,7 @@ impl Project {
     pub(super) fn folder(&self, folder: &str) -> Result<Folder, Error> {
         let trimmed = folder.trim_end_matches('/');
         let unknown = || Error::not_found(format!("{folder} on the demo computer"));
-        let (folders, repo) = match trimmed {
+        let (names, repo): (Vec<String>, _) = match trimmed {
             "" => (vec!["work".to_string()], None),
             PARENT => (vec!["tidewatch".to_string()], None),
             _ => {
@@ -198,13 +198,12 @@ impl Project {
             }
         };
         let branch = repo.as_ref().map(|_| "main".to_string());
-        let repos = if trimmed == PARENT { folders.clone() } else { Vec::new() };
+        let folders = names.into_iter().map(|name| Subfolder { name, guarded: false }).collect();
         Ok(Folder {
             folder: if trimmed.is_empty() { "/".into() } else { trimmed.into() },
             repo,
             branch,
-            folders,
-            repos,
+            inside: Inside::Listed { folders },
         })
     }
 }

@@ -3,38 +3,49 @@ import { createStore } from "solid-js/store";
 import { backend } from "./backend";
 import type { Folder } from "./generated";
 import type { Toward } from "./motion";
+import { isLocal, serverLabel } from "./state";
 
-/** A folder completing the path: its name, the path picking it leads to, the path completing into it, and whether it
- * is the top of a git repo. */
-type Completion = { name: string; pick: string; into: string; repo: boolean };
+/** A folder completing the path: its name, the path picking it leads to, the path completing into it, and whether the
+ * server's OS guards it. */
+type Completion = { name: string; pick: string; into: string; guarded: boolean };
 
-/** What the list shows while no folder completes the path: why, and whether the server refused to read the folder. */
-type Note = { text: string; refused: boolean };
+/** What the list shows while no folder completes the path: why, whether it says the folder is empty, waits on the
+ * server's OS or was refused, and the URL of the system setting that lets this machine's server in, if one does. */
+type Note = { text: string; kind: "empty" | "waiting" | "refused"; setting: string | null };
 
 /** How long a reading stands before showing its folder again asks the server anew, the reading staying meanwhile. */
 const FRESH_MS = 10_000;
 
 /** Every folder the server has read this session, by server and folder: the folder, or why it is none. */
 const [reads, setReads] = createStore<Record<string, Folder | string>>({});
-/** When each folder was last asked for, so one asked for again while fresh, or still on its way, is not. */
-const asked = new Map<string, number>();
+/** When each reading arrived, or Infinity while it is on its way, which can take as long as the OS asking its user, so
+ * a folder shown again while its reading is fresh or coming is not asked for again. */
+const arrived = new Map<string, number>();
 
-const keyOf = (server: string, folder: string) => `${server}\n${folder.replace(/(.)\/+$/, "$1")}`;
+const trimmed = (folder: string) => folder.replace(/(.)\/+$/, "$1");
+
+const keyOf = (server: string, folder: string) => `${server}\n${trimmed(folder)}`;
 
 /** The server's reading of `folder`: the folder, or why it is none; undefined until first read. */
 export const readingOf = (server: string, folder: string): Folder | string | undefined => reads[keyOf(server, folder)];
+
+/** The folders inside a reading, when the server could list them. */
+const listedIn = (reading: Folder | string | undefined) =>
+  typeof reading === "object" && reading.inside.kind === "listed" ? reading.inside : undefined;
 
 /** Asks `server` to read `folder` unless its reading is fresh or on its way. */
 export const readFolder = (server: string, folder: string) =>
   untrack(() => {
     const key = keyOf(server, folder);
-    const at = asked.get(key);
-    if (at !== undefined && performance.now() - at < FRESH_MS) return;
-    asked.set(key, performance.now());
-    backend.folderGet(server, folder).then(
-      (read) => setReads(key, read),
-      (refused) => setReads(key, String(refused)),
-    );
+    if (performance.now() - (arrived.get(key) ?? -Infinity) < FRESH_MS) return;
+    arrived.set(key, Infinity);
+    backend
+      .folderGet(server, folder)
+      .then(
+        (read) => setReads(key, read),
+        (refused) => setReads(key, String(refused)),
+      )
+      .finally(() => arrived.set(key, performance.now()));
   });
 
 /** The start every folder under `root` shares. */
@@ -69,62 +80,95 @@ export type FolderPicker = ReturnType<typeof folderPicker>;
 /**
  * A folder picker on `server` holding its own path, typed under `root` and opening on the folder `from` names with a
  * slash after it, read through `folder.get` as it changes: the folder it names, and the folders completing its last
- * segment. `choose` hands the folder to `chosen` once the server reads it as a directory and ends the picker, unless
- * `chosen` refuses it with false; `cancel` ends it leaving everything as it was.
+ * segment. A folder the server's OS guards is read only once the path goes into it, since reading it can have the OS
+ * ask its user. `choose` hands the folder to `chosen` once the server reads it as a directory and ends the picker,
+ * unless `chosen` refuses it with false; `cancel` ends it leaving everything as it was.
  */
 export function folderPicker(server: string, root: string, from: string, chosen: (folder: string) => boolean | void) {
   return createRoot((end) => {
     const [path, setPath] = createSignal(from === "" || from.endsWith("/") ? from : `${from}/`);
     const reading = (typed: string) => readingOf(server, absolute(typed, root));
     const peek = (typed: string) => readFolder(server, absolute(typed, root));
+    /** Reads a listed folder ahead of the path going into it, unless the server's OS guards it. */
+    const readAhead = (row: Completion) => {
+      if (!row.guarded) peek(row.into);
+    };
     const cut = () => path().lastIndexOf("/") + 1;
     /** The path of the folder whose subfolders complete the path's last segment, and that segment. */
     const listedPath = () => path().slice(0, cut());
     const stem = () => path().slice(cut());
-    /** Whether the path can name a folder: its last segment is empty, `.` or `..`, or one its listed folder holds. */
-    const possible = () => {
-      const listed = reading(listedPath());
-      const typedStem = stem().toLowerCase();
-      return (
-        typeof listed !== "object" ||
-        ["", ".", ".."].includes(typedStem) ||
-        listed.folders.some((name) => name.toLowerCase() === typedStem)
-      );
-    };
+    /** The folder the last segment names in the listed folder, matching its case or not. */
+    const stemFolder = () =>
+      listedIn(reading(listedPath()))?.folders.find(({ name }) => name.toLowerCase() === stem().toLowerCase());
+    /** Whether the path names a folder to read ahead: its last segment is empty, `.` or `..`, or an unguarded folder
+     * of the listed folder, or the listed folder is still unread. */
+    const possible = () =>
+      reading(listedPath()) === undefined || ["", ".", ".."].includes(stem()) || stemFolder()?.guarded === false;
     createEffect(() => {
       peek(listedPath());
       if (possible()) peek(path());
     });
-    /** The folder the path names, once the server has read it as one. */
+    /** The folder the path names, once the server has listed it. */
     const folder = () => {
       const now = reading(path());
-      return typeof now === "object" ? now : undefined;
+      return typeof now === "object" && now.inside.kind === "listed" ? now : undefined;
+    };
+    const choosable = () => folder() !== undefined || stemFolder()?.guarded === true;
+    const listedFolder = () => trimmed(absolute(listedPath(), root));
+    /** The name of the folder listed while its parent lists it as one the server's OS guards. */
+    const guardedTarget = () => {
+      const name = baseName(listedFolder());
+      const listed = listedIn(readingOf(server, parentOf(listedFolder())));
+      return listed?.folders.some((each) => each.name === name && each.guarded) ? name : undefined;
     };
     /**
      * The folder listed, its folders completing the path, `..` first while the last segment is empty, and the note
-     * shown while no folder completes it. A folder still being read keeps the last listing.
+     * shown while no folder completes it. A guarded folder still being read shows that it waits on the server; any
+     * other keeps the last listing.
      */
     const listing = createMemo<{ folder: string; rows: Completion[]; note: Note | null }>(
       (was) => {
         const listed = reading(listedPath());
-        if (listed === undefined) return was;
-        if (typeof listed !== "object") return { folder: was.folder, rows: [], note: { text: listed, refused: true } };
+        const label = serverLabel(server);
+        if (listed === undefined) {
+          const name = guardedTarget();
+          if (name === undefined) return was;
+          const text = `Waiting for ${label} to let octopus into ${name}. Its screen may be asking.`;
+          return { folder: listedFolder(), rows: [], note: { text, kind: "waiting", setting: null } };
+        }
+        if (typeof listed !== "object")
+          return { folder: was.folder, rows: [], note: { text: listed, kind: "refused", setting: null } };
+        if (listed.inside.kind === "kept_out") {
+          const setting = listed.inside.setting;
+          const allow =
+            setting === null
+              ? "Give the account octopus runs as permission to read and open it."
+              : `Turn on octopus in ${setting.name}.`;
+          const text = `${label} keeps octopus out of ${baseName(listed.folder)}. ${allow}`;
+          const url = isLocal(server) ? (setting?.url ?? null) : null;
+          return { folder: listed.folder, rows: [], note: { text, kind: "refused", setting: url } };
+        }
         const typedStem = stem().toLowerCase();
-        const named = listed.folders
+        const named = listed.inside.folders
           .filter(
-            (name) => name.toLowerCase().startsWith(typedStem) && (typedStem.startsWith(".") || !name.startsWith(".")),
+            ({ name }) =>
+              name.toLowerCase().startsWith(typedStem) && (typedStem.startsWith(".") || !name.startsWith(".")),
           )
-          .map((name) => ({ name, pick: `${listedPath()}${name}`, repo: listed.repos.includes(name) }));
+          .map(({ name, guarded }) => ({ name, pick: `${listedPath()}${name}`, guarded }));
         const up =
           typedStem === "" && listed.folder !== "/"
-            ? [{ name: "..", pick: relative(parentOf(listed.folder), root), repo: false }]
+            ? [{ name: "..", pick: relative(parentOf(listed.folder), root), guarded: false }]
             : [];
         const rows = [...up, ...named].map((each) => ({
           ...each,
           into: each.pick === "" ? "" : `${each.pick.replace(/\/$/, "")}/`,
         }));
         const why = stem() === "" ? "No folders inside" : `No folder starts with “${stem()}”`;
-        return { folder: listed.folder, rows, note: named.length > 0 ? null : { text: why, refused: false } };
+        return {
+          folder: listed.folder,
+          rows,
+          note: named.length > 0 ? null : { text: why, kind: "empty", setting: null },
+        };
       },
       { folder: "", rows: [], note: null },
     );
@@ -154,9 +198,15 @@ export function folderPicker(server: string, root: string, from: string, chosen:
       const now = reading(path());
       return now === undefined ? was : typeof now === "object" ? repoTag(now) : null;
     }, null);
+    /** Hands the folder over once listed; a path naming a guarded folder goes into it instead, which reads it. */
     const choose = () => {
       const now = folder();
-      if (now === undefined || chosen(now.folder) === false) return false;
+      if (now === undefined) {
+        const named = stemFolder();
+        if (named?.guarded) setPath(`${listedPath()}${named.name}/`);
+        return false;
+      }
+      if (chosen(now.folder) === false) return false;
       end();
       return true;
     };
@@ -172,7 +222,8 @@ export function folderPicker(server: string, root: string, from: string, chosen:
       pending,
       tab,
       tag,
-      peek,
+      readAhead,
+      choosable,
       choose,
       cancel: end,
     };

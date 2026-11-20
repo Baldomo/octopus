@@ -67,6 +67,7 @@ const SYMBOLS = {
   reload: ["0 0 20 20", `<path d="M15.5 10a5.5 5.5 0 1 1-1.6-3.9M14.5 3.5v3h-3"/>`],
   chev: ["0 0 16 16", `<path d="m6 4 4 4-4 4"/>`],
   warn: ["0 0 16 16", `<circle cx="8" cy="8" r="5.5"/><path d="M8 5v3.5M8 11h.01"/>`],
+  lock: ["0 0 16 16", `<rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>`],
   sun: ["0 0 16 16", `<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11a5.5 5.5 0 0 0 0-11z" fill="currentColor"/>`],
   zoom: ["0 0 16 16", `<circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3M5 7h4M7 5v4"/>`],
   info: ["0 0 16 16", `<circle cx="8" cy="8" r="5.5"/><path d="M8 7.5V11M8 5h.01"/>`],

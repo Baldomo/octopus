@@ -1,6 +1,8 @@
 //! The TypeScript the UI compiles against, rendered from the Rust types and constants that cross the IPC boundary.
 
-use octopus_proto::ops::{Entry, EntryKind, Folder, HarnessStatus, Match, Offer, PairedAccount, PairedClient};
+use octopus_proto::ops::{
+    Entry, EntryKind, Folder, HarnessStatus, Inside, Match, Offer, OsSetting, PairedAccount, PairedClient, Subfolder,
+};
 use octopus_proto::settings::{AgentFlags, Current, Setting};
 use octopus_proto::term::HISTORY_LINES;
 use octopus_proto::types::{
@@ -71,6 +73,9 @@ pub fn render() -> String {
         EntryKind,
         Entry,
         Match,
+        Subfolder,
+        OsSetting,
+        Inside,
         Folder,
         HarnessStatus,
         Offer,

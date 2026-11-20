@@ -59,7 +59,7 @@ Remove a workspace with no live task, with every task in it; their worktrees go 
 
 ## `octopus folder get`
 
-Show a folder on the server's machine, for a new task to pick: the git repo and branch it sits in and the folders inside it.
+Show a folder on the server's machine, for a new task to pick: the git repo and branch it sits in and the folders inside it, without looking inside them. Waits for the OS when it guards the folder.
 
 - `--server <server>`: The paired server's name.
 - `--folder <folder>`: The folder, as an absolute path, or ~ for the home folder of the server's user.

@@ -74,6 +74,24 @@ export type Entry = { name: string, kind: EntryKind, };
 
 export type Match = { path: string, line: number, text: string, };
 
+export type Subfolder = { name: string, 
+/**
+ * Whether the server's OS guards it, so reading it can wait on the OS asking its user.
+ */
+guarded: boolean, };
+
+export type OsSetting = { 
+/**
+ * Where the setting sits, as the OS names it, such as `System Settings › Privacy & Security › Files & Folders`.
+ */
+name: string, 
+/**
+ * The URL that opens it.
+ */
+url: string, };
+
+export type Inside = { "kind": "listed", folders: Array<Subfolder>, } | { "kind": "kept_out", setting: OsSetting | null, };
+
 export type Folder = { 
 /**
  * The folder, its symlinks, `.` and `..` resolved.
@@ -88,13 +106,9 @@ repo: string | null,
  */
 branch: string | null, 
 /**
- * The names of the folders directly inside it, in name order.
+ * The folders inside it, or what lets the server in when its OS keeps the server out.
  */
-folders: Array<string>, 
-/**
- * The names of those folders that are the top of a git repo, in name order.
- */
-repos: Array<string>, };
+inside: Inside, };
 
 export type HarnessStatus = { 
 /**

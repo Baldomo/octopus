@@ -1,11 +1,12 @@
 import { createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
+import { backend } from "./backend";
 import { Actions, autofocus, Field, Segments, TextField } from "./Dialog";
 import type { FolderPicker } from "./folderPath";
 import { MODES, TASK_STATES } from "./generated";
 import { dismissible } from "./Menu";
 import { floatPanel, shiftIn } from "./motion";
 import { modeLabel, newTaskDraft, workspaceKey } from "./newTaskDraft";
-import { newTaskSection, openTask, serverLabel, setNewTaskSection, showModal, workspaces } from "./state";
+import { act, newTaskSection, openTask, serverLabel, setNewTaskSection, showModal, workspaces } from "./state";
 
 type Draft = ReturnType<typeof newTaskDraft>;
 
@@ -24,16 +25,22 @@ function FolderPath(props: { lead: string; tag: string | null; children: JSX.Ele
   );
 }
 
+const Guard = () => (
+  <svg class="guard" viewBox="0 0 16 16" aria-label="guarded by the OS">
+    <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
+    <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
+  </svg>
+);
+
 /**
  * The folder picker floating where its field was: `head` over the path typed under the root above a list of the
- * folders completing it, each git repo's top tagged while `repos` holds, and `refusal` under the list. Arrows point at
- * a folder, Tab or a click goes into it, Enter or Choose takes the path, and Escape or a press outside cancels.
+ * folders completing it, each the server's OS guards locked, and `refusal` under the list. Arrows point at a folder,
+ * Tab or a click goes into it, Enter or Choose takes the path, and Escape or a press outside cancels.
  */
 export function FolderPick(props: {
   picker: FolderPicker;
   gone: () => void;
   head?: JSX.Element;
-  repos?: boolean;
   refusal?: string | null;
 }) {
   const picker = props.picker;
@@ -55,7 +62,7 @@ export function FolderPick(props: {
   const point = (index: number) => {
     setPointed(index);
     const row = rows()[index];
-    if (row !== undefined) picker.peek(row.into);
+    if (row !== undefined) picker.readAhead(row);
     list.querySelectorAll(".mi")[index]?.scrollIntoView({ block: "nearest" });
   };
   const keys = (event: KeyboardEvent) => {
@@ -102,20 +109,27 @@ export function FolderPick(props: {
               type="button"
               class="mi"
               classList={{ active: index() === pointed() }}
-              onMouseEnter={() => picker.peek(row.into)}
+              onMouseEnter={() => picker.readAhead(row)}
               onClick={() => type(row.into)}
             >
               <span class="name">{row.name}/</span>
-              <Show when={props.repos && row.repo}>
-                <span class="tag">git</span>
+              <Show when={row.guarded}>
+                <Guard />
               </Show>
             </button>
           )}
         </For>
         <Show when={picker.listing().note}>
           {(note) => (
-            <div class="mlabel" classList={{ err: note().refused }}>
+            <div class="mlabel" classList={{ err: note().kind === "refused" }}>
               {note().text}
+              <Show when={note().setting}>
+                {(setting) => (
+                  <button type="button" class="btn" onClick={() => act(backend.openSetting(setting()))}>
+                    Open System Settings
+                  </button>
+                )}
+              </Show>
             </div>
           )}
         </Show>
@@ -124,7 +138,7 @@ export function FolderPick(props: {
       <div class="sep" />
       <div class="pick-foot">
         <span>⇥ goes in · ⏎ chooses · esc cancels</span>
-        <button type="button" class="btn live" disabled={picker.folder() === undefined} onClick={choose}>
+        <button type="button" class="btn live" disabled={!picker.choosable()} onClick={choose}>
           Choose
         </button>
       </div>

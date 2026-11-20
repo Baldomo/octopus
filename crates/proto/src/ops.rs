@@ -264,19 +264,49 @@ pub struct Folder {
     pub repo: Option<String>,
     /// The branch the repo's HEAD is on, which a worktree branches from, or null outside a repo or on a detached HEAD.
     pub branch: Option<String>,
-    /// The names of the folders directly inside it, in name order.
-    pub folders: Vec<String>,
-    /// The names of those folders that are the top of a git repo, in name order.
-    pub repos: Vec<String>,
+    /// The folders inside it, or what lets the server in when its OS keeps the server out.
+    pub inside: Inside,
+}
+
+/// What the server finds inside a folder: the folders it holds, or that the server's OS keeps the server out.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Inside {
+    /// The folders directly inside it, in name order.
+    Listed { folders: Vec<Subfolder> },
+    /// The OS setting that lets the server in, or null when the folder's permissions keep the server's user out.
+    KeptOut { setting: Option<OsSetting> },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct Subfolder {
+    pub name: String,
+    /// Whether the server's OS guards it, so reading it can wait on the OS asking its user.
+    pub guarded: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct OsSetting {
+    /// Where the setting sits, as the OS names it, such as `System Settings › Privacy & Security › Files & Folders`.
+    pub name: String,
+    /// The URL that opens it.
+    pub url: String,
 }
 
 op!(
-    /// Show a folder on the server's machine, for a new task to pick: the git repo and branch it sits in and the folders inside it.
+    /// Show a folder on the server's machine, for a new task to pick: the git repo and branch it sits in and the folders
+    /// inside it, without looking inside them. Waits for the OS when it guards the folder.
     FolderGet = "folder.get" -> Folder {
         /// The folder, as an absolute path, or ~ for the home folder of the server's user.
         folder: String,
     }
 );
+
+/// The ops that can wait on the server's OS asking its user, which a server runs beside a client's queue of ops so the
+/// wait holds up none of them.
+pub const WAITING_ON_THE_OS: [&str; 1] = [FolderGet::NAME];
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct HarnessStatus {

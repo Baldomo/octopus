@@ -146,7 +146,6 @@ function AddPick() {
             picker={folderPicker(on, root, "", (folder) => add(on, folder))}
             gone={() => setAdding(false)}
             head={head}
-            repos
             refusal={refusal()}
           />
         )}

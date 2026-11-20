@@ -32,7 +32,7 @@ export function FolderSheet(props: { picker: FolderPicker }) {
 
   const rows = createMemo(() => new Map(picker.completions().map((row) => [row.into, row])));
   createEffect(() => {
-    for (const into of [...rows().keys()].slice(0, READ_AHEAD)) picker.peek(into);
+    for (const row of [...rows().values()].slice(0, READ_AHEAD)) picker.readAhead(row);
   });
   picker.onTurn((toward) => turnPage(scroller, scroller.cloneNode(true) as HTMLElement, toward, scroller.scrollTop));
 
@@ -45,7 +45,7 @@ export function FolderSheet(props: { picker: FolderPicker }) {
       <SheetHead
         title="Folder"
         end={
-          <button class="btn solid" classList={{ inert: picker.folder() === undefined }} onClick={choose}>
+          <button class="btn solid" classList={{ inert: !picker.choosable() }} onClick={choose}>
             Choose
           </button>
         }
@@ -104,11 +104,16 @@ export function FolderSheet(props: { picker: FolderPicker }) {
         >
           <For each={[...rows().keys()]}>
             {(into) => {
-              const name = () => rows().get(into)?.name ?? "";
+              const row = () => rows().get(into);
+              const name = () => row()?.name ?? "";
               const typed = () => picker.stem().length;
               const up = name() === "..";
+              const touched = () => {
+                const now = row();
+                if (now !== undefined) picker.readAhead(now);
+              };
               return (
-                <div class="mi" role="button" onTouchStart={() => picker.peek(into)} onClick={() => go(into)}>
+                <div class="mi" role="button" onTouchStart={touched} onClick={() => go(into)}>
                   <Slot>
                     <Icon name={up ? "back" : "folder"} />
                   </Slot>
@@ -116,6 +121,9 @@ export function FolderSheet(props: { picker: FolderPicker }) {
                     <b class="hit">{name().slice(0, typed())}</b>
                     {name().slice(typed())}
                   </span>
+                  <Show when={row()?.guarded}>
+                    <Icon name="lock" class="guard" />
+                  </Show>
                   {up ? <Id>{baseName(parentOf(picker.listing().folder))}</Id> : <Chev />}
                 </div>
               );
@@ -123,10 +131,10 @@ export function FolderSheet(props: { picker: FolderPicker }) {
           </For>
           <Show when={picker.listing().note}>
             {(note) => (
-              <Show when={note().refused} fallback={<div class="empty">{note().text}</div>}>
-                <div class="note err wrap">
+              <Show when={note().kind !== "empty"} fallback={<div class="empty">{note().text}</div>}>
+                <div class="note wrap" classList={{ err: note().kind === "refused" }}>
                   <Slot>
-                    <Icon name="warn" />
+                    <Icon name={note().kind === "refused" ? "warn" : "lock"} />
                   </Slot>
                   <span class="name">{note().text}</span>
                 </div>
