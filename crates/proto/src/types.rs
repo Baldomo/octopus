@@ -302,8 +302,19 @@ pub struct Panel {
     pub lock_holder: Option<LockHolder>,
     pub cols: u16,
     pub rows: u16,
-    /// A program of the terminal records from its virtual microphone, so the holder sends its own on `Stream::Mic`.
-    pub listening: bool,
+    pub listening: Listening,
+}
+
+/// Whether a program of the terminal records, and whether the holder's microphone can reach it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum Listening {
+    No,
+    /// A program records from the terminal's virtual microphone, so the holder sends its own on `Stream::Mic`.
+    Yes,
+    /// A program records while a client on another machine holds the terminal, and the server has no working virtual
+    /// microphone to carry the holder's; `term.install_microphone` installs one.
+    NoMicrophone,
 }
 
 /// Who holds a terminal's lock: a paired device by its key, labelled with the name it is pinned under, or a client on

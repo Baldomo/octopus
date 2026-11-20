@@ -11,7 +11,7 @@ use octopus_proto::ops::{
     BrowserClose, BrowserMove, BrowserOpen, Entry, EntryKind, FileCopy, FileCreate, FileDelete, FileList, FileMove,
     FileSearch, FileWrite, Folder, FolderGet, HarnessCheck, HarnessStatus, Match, Offer, PairedAccount, PairingForget,
     PairingList, PairingOffer, TaskArchive, TaskCreate, TaskMove, TaskRename, TaskSetParent, TaskSetWorkspace,
-    TermClaim, TermClose, TermOpen, TermResize, TermTakeLock, WorkspaceAdd, WorkspaceRemove,
+    TermClaim, TermClose, TermInstallMicrophone, TermOpen, TermResize, TermTakeLock, WorkspaceAdd, WorkspaceRemove,
 };
 use octopus_proto::pairing::Invite;
 use octopus_proto::settings::Setting;
@@ -310,6 +310,12 @@ pub fn term_detach(terminals: State<Terminals>, attachment: u64) {
 #[tauri::command]
 pub async fn term_open(hub: Hubbed<'_>, at: TaskRef, path: String) -> Result<PtyId, String> {
     Ok(hub.call(&at.server, &TermOpen { task: at.task, path }).await?.panel)
+}
+
+/// Resolves to the id of the shell panel it opens, which runs the server's microphone install.
+#[tauri::command]
+pub async fn term_install_microphone(hub: Hubbed<'_>, at: TaskRef) -> Result<PtyId, String> {
+    Ok(hub.call(&at.server, &TermInstallMicrophone { task: at.task }).await?.panel)
 }
 
 #[tauri::command]

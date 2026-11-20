@@ -11,7 +11,7 @@ use octopus_proto::{Op, Outcome};
 use serde_json::Value;
 
 use crate::account::AccountVerb;
-use crate::manual::{FileVerb, PairingVerb, ServerVerb, TermVerb};
+use crate::manual::{FileVerb, MicrophoneVerb, PairingVerb, ServerVerb, TermVerb};
 use crate::skill::SkillVerb;
 use crate::{call, connect, print, server_error};
 
@@ -99,6 +99,7 @@ pub fn tree() -> Command {
     extend(&mut nouns, "pairing", PairingVerb::augment_subcommands);
     extend(&mut nouns, "account", AccountVerb::augment_subcommands);
     extend(&mut nouns, "skill", SkillVerb::augment_subcommands);
+    extend(&mut nouns, "microphone", MicrophoneVerb::augment_subcommands);
     nouns.insert(0, Command::new("uninstall").about(
         "Remove this machine's server's login service; its terminals and agents keep running until the machine stops.",
     ));

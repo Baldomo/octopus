@@ -9,6 +9,7 @@ pub mod skill;
 use std::process::ExitCode;
 
 use anyhow::{Context, anyhow};
+use clap::FromArgMatches;
 use octopus_client::servers::{Config, Servers};
 use octopus_client::{CallError, Connection, Identity};
 use octopus_proto::{Error, Op};
@@ -87,6 +88,9 @@ pub fn main() -> ExitCode {
         }
         Some(("install", _)) => repair::install().and_then(|registration| print(&registration)),
         Some(("uninstall", _)) => repair::uninstall().and_then(|registration| print(&registration)),
+        Some(("microphone", verbs)) => {
+            manual::MicrophoneVerb::from_arg_matches(verbs).map_err(anyhow::Error::from).and_then(|verb| verb.run())
+        }
         Some((noun, verbs)) => {
             if !runs_the_server(noun, verbs) {
                 repair::cli();

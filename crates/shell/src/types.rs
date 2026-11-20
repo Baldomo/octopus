@@ -7,8 +7,8 @@ use octopus_proto::settings::{AgentFlags, Current, Setting};
 use octopus_proto::term::HISTORY_LINES;
 use octopus_proto::types::{
     AGENT_PANEL, Agent, AgentStatus, BACKGROUND_BROWSER_PANEL, BrowserId, BrowserPanel, BrowserTarget, FRESH_SESSION,
-    HOLDER_GRACE_MS, Hue, LockHolder, Mode, NEW_BROWSER_PANEL, Panel, PtyId, Session, SessionId, Swatch, Task, TaskId,
-    TaskState, Tone, WorkspaceId,
+    HOLDER_GRACE_MS, Hue, Listening, LockHolder, Mode, NEW_BROWSER_PANEL, Panel, PtyId, Session, SessionId, Swatch,
+    Task, TaskId, TaskState, Tone, WorkspaceId,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -67,6 +67,7 @@ pub fn render() -> String {
         Swatch,
         Agent,
         Panel,
+        Listening,
         LockHolder,
         BrowserPanel,
         Task,

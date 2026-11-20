@@ -12,7 +12,7 @@ use octopus_proto::device::PublicKey;
 use octopus_proto::ops::{Revised, SessionSync, TaskFocus, WorkspaceRename, WorkspaceSetColor};
 use octopus_proto::pairing::Invite;
 use octopus_proto::settings::{AgentFlags, Current, Settings};
-use octopus_proto::types::{Color, LockHolder, Task, Workspace, WorkspaceId};
+use octopus_proto::types::{Color, Listening, LockHolder, Task, Workspace, WorkspaceId};
 use octopus_proto::{Event, Op, Push, now};
 use serde::Serialize;
 use tauri::{AppHandle, Url};
@@ -720,7 +720,7 @@ impl Hub {
         for (server, cache) in &state.caches {
             let Some(Link { connection: Some(connection), .. }) = state.links.get(server) else { continue };
             let held = cache.tasks.values().flat_map(|task| &task.panels).filter(|panel| {
-                panel.listening
+                panel.listening == Listening::Yes
                     && panel.lock_holder.as_ref().is_some_and(|holder| state.held_here(&self.me, server, holder))
             });
             for panel in held {

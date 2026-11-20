@@ -104,6 +104,8 @@
 .key .ic{stroke-width:1.04}
 .lockbar{height:var(--h-row);display:flex;align-items:center;gap:var(--g3);padding:0 var(--rail);box-shadow:inset 0 1px var(--line);font:var(--t-sub);color:var(--dim)}
 .lockbar .name{flex:1}
+.lockbar.wrap{height:auto;min-height:var(--h-row);padding-block:var(--g3)}
+.lockbar.wrap .name{white-space:normal}
 .btn{all:unset;height:var(--h-chip);display:flex;align-items:center;padding:0 var(--g3);border-radius:var(--pill);font:600 15px/24px var(--ui);background:var(--accent-ink);color:var(--accent);flex:none}
 .end{display:grid;color:var(--faint)}
 .dot.srv.re{background:none;box-shadow:inset 0 0 0 1.5px var(--needs)}

@@ -18,7 +18,6 @@ pub use unit::ServerRun;
 pub struct Registration {
     pub service: String,
     pub unit: PathBuf,
-    pub microphone: microphone::Outcome,
 }
 
 /// Returns the command's trimmed stdout.
@@ -35,13 +34,8 @@ pub fn octopus_dir(home: &Path) -> PathBuf {
     home.join(".octopus")
 }
 
-/// Registers this machine's server from `program` and has the service manager start it afresh. The server installs
-/// whatever becomes of the Octopus Microphone.
+/// Registers this machine's server from `program` and has the service manager start it afresh.
 pub fn install(service: &Service, program: &Path) -> anyhow::Result<Registration> {
-    let microphone = microphone::install();
-    if let microphone::Outcome::Failed { reason } = &microphone {
-        eprintln!("octopus: installed without the Octopus Microphone: {reason}");
-    }
     let unit = service.register(program).with_context(|| {
         format!(
             "the {} did not start the server: start one in this session, or run the server by hand with `{}`",
@@ -49,7 +43,7 @@ pub fn install(service: &Service, program: &Path) -> anyhow::Result<Registration
             unit::command(program)
         )
     })?;
-    Ok(Registration { service: unit::ID.into(), unit, microphone })
+    Ok(Registration { service: unit::ID.into(), unit })
 }
 
 /// The unit an earlier install registered the server `name` under, when it is still there.
@@ -63,13 +57,7 @@ pub fn retire(name: &str, unit: &Path) -> anyhow::Result<()> {
     manager::unregister_unit(&unit::legacy_id(name), unit)
 }
 
-/// The terminal host and its agents keep running; they end with the machine. The user's input comes back through
-/// `terminal_host`, and the Octopus Microphone goes with the server.
-pub fn uninstall(service: &Service, terminal_host: &Path) -> anyhow::Result<Registration> {
-    let unit = service.unregister()?;
-    let microphone = microphone::uninstall(terminal_host);
-    if let microphone::Outcome::Failed { reason } = &microphone {
-        eprintln!("octopus: uninstalled, leaving the Octopus Microphone: {reason}");
-    }
-    Ok(Registration { service: unit::ID.into(), unit, microphone })
+/// The terminal host and its agents keep running; they end with the machine.
+pub fn uninstall(service: &Service) -> anyhow::Result<Registration> {
+    Ok(Registration { service: unit::ID.into(), unit: service.unregister()? })
 }

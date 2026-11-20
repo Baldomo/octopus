@@ -367,7 +367,6 @@ fn host_error(address: &Path, error: impl std::fmt::Display) -> Error {
 
 impl HostClient {
     /// A client of the host already answering at `address`.
-    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn at(address: &Path) -> Self {
         Self { address: address.to_path_buf() }
     }
@@ -481,7 +480,6 @@ impl HostClient {
     }
 
     /// The pid of the program the terminal started, which leads its session, while it runs.
-    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn program(&self, id: &PtyId) -> Result<Option<i32>, Error> {
         self.call(&HostRequest::Program { id: id.clone() })
     }

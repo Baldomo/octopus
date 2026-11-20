@@ -166,6 +166,13 @@ Open a shell panel in a live task: the user's login shell, in a folder of the ta
 - `--task <task>`: The task's id.
 - `--path <path>`: The directory the shell starts in, relative to the task's directory; . for the directory itself.
 
+## `octopus term install-microphone`
+
+Open a shell panel in a live task that runs `sudo octopus microphone install` on the task's server, where the user types the server's password; the panel closes when the install succeeds.
+
+- `--server <server>`: The paired server's name.
+- `--task <task>`: The task's id.
+
 ## `octopus term close`
 
 Stop a shell panel and drop it with its scrollback.
@@ -428,3 +435,11 @@ Write the octopus skill, rendered from this octopus's commands, to ~/.claude/ski
 ## `octopus skill uninstall`
 
 Remove the octopus skill from ~/.claude/skills.
+
+## `octopus microphone install`
+
+As root: on macOS install the Octopus Microphone, restarting the audio service; on Linux enable a sound server, or name what is missing.
+
+## `octopus microphone uninstall`
+
+As root: on macOS remove the Octopus Microphone, restarting the audio service; on Linux leave the sound server.

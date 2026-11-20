@@ -15,8 +15,8 @@ use octopus_proto::ops::{
 };
 use octopus_proto::term::Piece;
 use octopus_proto::types::{
-    AGENT_PANEL, Agent, AgentStatus, BrowserId, BrowserPanel, BrowserTarget, Color, LockHolder, Mode, Panel, PtyId,
-    Session, SessionId, SessionStart, Task, TaskId, TaskState, Workspace, WorkspaceId, web_page,
+    AGENT_PANEL, Agent, AgentStatus, BrowserId, BrowserPanel, BrowserTarget, Color, Listening, LockHolder, Mode, Panel,
+    PtyId, Session, SessionId, SessionStart, Task, TaskId, TaskState, Workspace, WorkspaceId, web_page,
 };
 use octopus_proto::{Error, Event, Push, now};
 use tokio::sync::{broadcast, oneshot};
@@ -70,7 +70,7 @@ const UPLOAD_BYTES: u64 = 8 << 20;
 
 fn panel(id: &str, name: &str, lock_holder: Option<LockHolder>) -> Panel {
     let (id, name) = (PtyId(id.into()), name.into());
-    Panel { id, name, running: true, lock_holder, cols: COLS, rows: ROWS, listening: false }
+    Panel { id, name, running: true, lock_holder, cols: COLS, rows: ROWS, listening: Listening::No }
 }
 
 fn browser(id: &str, url: &str, title: &str) -> BrowserPanel {

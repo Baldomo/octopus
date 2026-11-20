@@ -1,5 +1,6 @@
-//! The Octopus Microphone: one loopback HAL device per machine. Programs record from its input; the server plays the
-//! listening terminal's audio into its output, which the device hands back to them.
+//! The Octopus Microphone: one loopback HAL device per machine, there once `octopus microphone install` installs it.
+//! Programs record from its input; the server plays the listening terminal's audio into its output, which the device
+//! hands back to them.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -8,10 +9,9 @@ use std::time::Duration;
 
 use anyhow::Context;
 use nix::unistd::Pid;
-use octopus_proto::types::{MIC_DEVICE, MIC_FORMAT, PtyId};
+use octopus_proto::types::{Listening, MIC_DEVICE, MIC_FORMAT, PtyId};
 
 use super::Shared;
-use crate::host::HostClient;
 use crate::{lock, report};
 
 /// The user's own default input while the Octopus Microphone stands in for it.
@@ -24,63 +24,41 @@ pub struct Platform {
 }
 
 struct Inner {
-    device: ca::Device,
     dir: PathBuf,
     shared: Arc<Shared>,
     /// This server's terminals; another server's may record from the same device.
     terminals: Mutex<HashSet<PtyId>>,
-    host: HostClient,
-    /// The program each terminal started, which leads the terminal's session.
-    leaders: Mutex<HashMap<PtyId, Pid>>,
     /// The listening terminals in the order they started; the device carries the first.
     order: Mutex<Vec<PtyId>>,
     output: Mutex<Option<ca::Output>>,
-    /// The terminals whose lock a client connected over QUIC holds.
-    remote_held: Mutex<HashSet<PtyId>>,
 }
 
 impl Platform {
-    pub fn start(dir: &Path, terminal_host: &Path, shared: Arc<Shared>) -> anyhow::Result<Self> {
-        let device = ca::Device::find(MIC_DEVICE.uid)?
-            .with_context(|| format!("no audio device {}; reinstall the server to install it", MIC_DEVICE.uid))?;
+    pub fn start(dir: &Path, shared: Arc<Shared>) -> anyhow::Result<Self> {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
         let inner = Arc::new(Inner {
-            host: HostClient::at(terminal_host),
-            leaders: Mutex::default(),
-            device,
             dir: dir.to_path_buf(),
             shared,
             terminals: Mutex::default(),
             order: Mutex::default(),
             output: Mutex::default(),
-            remote_held: Mutex::default(),
         });
         let watched = Arc::downgrade(&inner);
         std::thread::spawn(move || watch(&watched));
         Ok(Self { inner })
     }
 
-    pub fn prepare(&self, id: &PtyId) -> anyhow::Result<Vec<(String, String)>> {
+    pub fn prepare(&self, id: &PtyId) -> Vec<(String, String)> {
         lock(&self.inner.terminals).insert(id.clone());
-        Ok(Vec::new())
-    }
-
-    pub fn started(&self, id: &PtyId) {
-        self.inner.learn_leader(id);
+        Vec::new()
     }
 
     pub fn adopt(&self, terminals: &[PtyId]) {
         lock(&self.inner.terminals).extend(terminals.iter().cloned());
-        terminals.iter().for_each(|id| self.inner.learn_leader(id));
     }
 
     pub fn remove(&self, id: &PtyId) {
         lock(&self.inner.terminals).remove(id);
-        lock(&self.inner.leaders).remove(id);
-    }
-
-    pub fn remote_held(&self, terminals: HashSet<PtyId>) {
-        *lock(&self.inner.remote_held) = terminals;
     }
 }
 
@@ -101,53 +79,44 @@ fn watch(inner: &Weak<Inner>) {
 
 impl Inner {
     /// The device stands in for the default input exactly while a remote client holds one of this server's
-    /// terminals, so a program records from it from its first sample.
+    /// terminals, so a program records from it from its first sample. It is found again each poll, as an install,
+    /// or the audio service restarting, gives it a new id.
     fn poll(&self) -> anyhow::Result<()> {
-        let (recording, skipped) = ca::recording_processes(self.device).context("list the processes recording")?;
-        self.listen(&recording);
-        let switched = if !lock(&self.remote_held).is_empty() {
-            self.take_input()
-        } else {
-            restore_input(self.device, &self.restore_path())
+        let device = ca::Device::find(MIC_DEVICE.uid).context("find the Octopus Microphone")?;
+        let (recording, skipped) = ca::recording_processes(device).context("list the processes recording")?;
+        self.listen(&recording, device);
+        let switched = match device {
+            None => Ok(()),
+            Some(device) if !lock(&self.shared.remote_held).is_empty() => self.take_input(device),
+            Some(device) => restore_input(device, &self.restore_path()),
         };
         switched.context("switch the default input")?;
         skipped.map_or(Ok(()), |error| Err(error.context("read an audio process")))
     }
 
-    fn listen(&self, recording: &[ca::Recording]) {
+    fn listen(&self, recording: &[ca::Recording], device: Option<ca::Device>) {
         let terminals = lock(&self.terminals).clone();
-        let remote_held = lock(&self.remote_held).clone();
-        let now = listeners(recording, &terminals, &remote_held, |pid| self.terminal_of(pid));
+        let remote_held = lock(&self.shared.remote_held).clone();
+        let sessions = &self.shared.sessions;
+        let now = listeners(recording, &terminals, &remote_held, device.is_some(), |pid| sessions.terminal_of(pid));
         let first = {
+            let heard = now.iter().filter(|(_, listening)| **listening == Listening::Yes).map(|(id, _)| id.clone());
             let mut order = lock(&self.order);
-            advance(&mut order, &now);
+            advance(&mut order, &heard.collect::<HashSet<_>>());
             order.first().cloned()
         };
         self.shared.set_listening(now);
         let mut output = lock(&self.output);
-        match (first, output.as_mut()) {
-            (Some(first), Some(running)) => running.carry(first),
-            (Some(first), None) => match ca::Output::start(self.device, Arc::clone(&self.shared), first) {
+        if output.as_ref().is_some_and(|running| Some(running.device) != device) {
+            *output = None;
+        }
+        match (first, device, output.as_mut()) {
+            (Some(first), _, Some(running)) => running.carry(first),
+            (Some(first), Some(device), None) => match ca::Output::start(device, Arc::clone(&self.shared), first) {
                 Ok(started) => *output = Some(started),
                 Err(error) => report!("play into the Octopus Microphone: {error:#}"),
             },
-            (None, _) => *output = None,
-        }
-    }
-
-    fn terminal_of(&self, pid: Pid) -> Option<PtyId> {
-        let leader = nix::unistd::getsid(Some(pid)).ok()?;
-        lock(&self.leaders).iter().find(|(_, known)| **known == leader).map(|(id, _)| id.clone())
-    }
-
-    /// A terminal whose program has already exited has no leader to learn.
-    fn learn_leader(&self, id: &PtyId) {
-        match self.host.program(id) {
-            Ok(Some(program)) => {
-                lock(&self.leaders).insert(id.clone(), Pid::from_raw(program));
-            }
-            Ok(None) => {}
-            Err(error) => report!("find the program of {id}: {error}"),
+            _ => *output = None,
         }
     }
 
@@ -156,9 +125,9 @@ impl Inner {
     }
 
     /// The user's choice is saved before it is replaced, and kept while the device stands in for it.
-    fn take_input(&self) -> anyhow::Result<()> {
+    fn take_input(&self, device: ca::Device) -> anyhow::Result<()> {
         let current = ca::default_input()?;
-        if current == self.device {
+        if current == device {
             return Ok(());
         }
         let saved = self.restore_path();
@@ -166,7 +135,7 @@ impl Inner {
             let uid = current.uid()?;
             std::fs::write(&saved, uid).with_context(|| format!("write {}", saved.display()))?;
         }
-        ca::set_default_input(self.device)
+        ca::set_default_input(device)
     }
 }
 
@@ -193,19 +162,27 @@ pub fn give_back_input(dir: &Path) -> anyhow::Result<()> {
     }
 }
 
-/// This server's listening terminals: those with a program recording from the device, and those whose remote holder
-/// stands in for whatever input their program records from.
+/// How this server's terminals listen: those with a program recording from the device, and those whose remote holder
+/// stands in for whatever input their program records from, which hear nothing while the device is not `installed`.
 fn listeners(
     recording: &[ca::Recording],
     terminals: &HashSet<PtyId>,
     remote_held: &HashSet<PtyId>,
+    installed: bool,
     terminal_of: impl Fn(Pid) -> Option<PtyId>,
-) -> HashSet<PtyId> {
+) -> HashMap<PtyId, Listening> {
     recording
         .iter()
         .filter_map(|recording| Some((terminal_of(recording.pid)?, recording.from_device)))
-        .filter(|(id, from_device)| terminals.contains(id) && (*from_device || remote_held.contains(id)))
-        .map(|(id, _)| id)
+        .filter(|(id, _)| terminals.contains(id))
+        .filter_map(|(id, from_device)| {
+            let listening = match (from_device, remote_held.contains(&id), installed) {
+                (true, _, _) | (false, true, true) => Listening::Yes,
+                (false, true, false) => Listening::NoMicrophone,
+                (false, false, _) => return None,
+            };
+            Some((id, listening))
+        })
         .collect()
 }
 
@@ -471,14 +448,17 @@ mod ca {
 
     /// The processes now recording from any input, beside the first failure to read one that has not exited.
     /// Process objects exist from macOS 14.
-    pub fn recording_processes(device: Device) -> anyhow::Result<(Vec<Recording>, Option<anyhow::Error>)> {
+    pub fn recording_processes(device: Option<Device>) -> anyhow::Result<(Vec<Recording>, Option<anyhow::Error>)> {
         let processes = objects(SYSTEM, &address(PROCESSES, SCOPE_GLOBAL)).context("list audio processes")?;
         let recording = |process: ObjectId| -> anyhow::Result<Option<Recording>> {
             let running: u32 = get(process, &address(PROCESS_RUNNING_INPUT, SCOPE_GLOBAL), None)?;
             if running == 0 {
                 return Ok(None);
             }
-            let from_device = objects(process, &address(PROCESS_DEVICES, SCOPE_INPUT))?.contains(&device.0);
+            let from_device = match device {
+                Some(device) => objects(process, &address(PROCESS_DEVICES, SCOPE_INPUT))?.contains(&device.0),
+                None => false,
+            };
             let pid: i32 = get(process, &address(PROCESS_PID, SCOPE_GLOBAL), None)?;
             Ok(Some(Recording { pid: Pid::from_raw(pid), from_device }))
         };
@@ -518,7 +498,7 @@ mod ca {
 
     /// A running IOProc playing into the device's output; dropping it stops it.
     pub struct Output {
-        device: Device,
+        pub device: Device,
         id: IoProcId,
         feed: *const Feed,
     }
@@ -624,8 +604,18 @@ mod tests {
         let terminal_of = |pid: Pid| panels.get(&pid.as_raw()).map(|panel| id(panel));
         let recording = [(101, true), (201, false), (301, false), (401, true), (999, true)]
             .map(|(pid, from_device)| ca::Recording { pid: Pid::from_raw(pid), from_device });
-        let listening = listeners(&recording, &terminals, &remote_held, terminal_of);
-        assert_eq!(listening, HashSet::from([id("pty_a"), id("pty_b")]));
+        let listening = listeners(&recording, &terminals, &remote_held, true, terminal_of);
+        assert_eq!(listening, HashMap::from([(id("pty_a"), Listening::Yes), (id("pty_b"), Listening::Yes)]));
+    }
+
+    #[test]
+    fn a_remote_holder_hears_no_microphone_until_the_device_is_installed() {
+        let terminals = HashSet::from([id("pty_a"), id("pty_b")]);
+        let remote_held = HashSet::from([id("pty_a")]);
+        let terminal_of = |pid: Pid| Some(id(if pid.as_raw() == 101 { "pty_a" } else { "pty_b" }));
+        let recording = [101, 201].map(|pid| ca::Recording { pid: Pid::from_raw(pid), from_device: false });
+        let listening = listeners(&recording, &terminals, &remote_held, false, terminal_of);
+        assert_eq!(listening, HashMap::from([(id("pty_a"), Listening::NoMicrophone)]));
     }
 
     #[test]

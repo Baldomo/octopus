@@ -10,8 +10,12 @@ use std::time::Duration;
 
 use octopus_proto::Error;
 use octopus_proto::local::{self, BlockingStream};
-use octopus_proto::ops::{Opened, Revised, TermClaim, TermClose, TermOpen, TermResize, TermSend, TermTakeLock};
-use octopus_proto::types::{AGENT_PANEL, ENV_SERVER, ENV_TASK, HOLDER_GRACE_MS, LockHolder, Panel, PtyId, TaskId};
+use octopus_proto::ops::{
+    Opened, Revised, TermClaim, TermClose, TermInstallMicrophone, TermOpen, TermResize, TermSend, TermTakeLock,
+};
+use octopus_proto::types::{
+    AGENT_PANEL, ENV_SERVER, ENV_TASK, HOLDER_GRACE_MS, Listening, LockHolder, Panel, PtyId, TaskId,
+};
 
 use crate::client::Client;
 use crate::host::HostClient;
@@ -23,6 +27,21 @@ use crate::{Server, State, files, lock, login, now, report};
 const WAIT_RETRY: Duration = Duration::from_secs(1);
 const PASTE_START: &str = "\x1b[200~";
 const PASTE_END: &str = "\x1b[201~";
+const MICROPHONE_PANEL: &str = "microphone";
+
+/// `word` as a POSIX shell reads it back, quoted only when the shell would read it otherwise.
+pub fn shell_word(word: &str) -> String {
+    let plain = !word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric() || "/._-:=,+@".contains(c));
+    if plain { word.to_string() } else { format!("'{}'", word.replace('\'', r"'\''")) }
+}
+
+/// The login `shell` running `program`'s microphone install as root. A failed install leaves the user in a shell beside
+/// its output; a successful one exits, closing the panel.
+fn microphone_install(program: &Path, shell: &str) -> Vec<String> {
+    let (program, quoted_shell) = (shell_word(&program.to_string_lossy()), shell_word(shell));
+    let install = format!("sudo {program} microphone install || exec {quoted_shell} -l");
+    vec![shell.to_string(), "-l".into(), "-c".into(), install]
+}
 
 pub(crate) struct Shell {
     pub(crate) name: String,
@@ -315,7 +334,7 @@ impl State {
                     lock_holder: screen.holder.map(|holder| self.lock_holder(holder)),
                     cols: screen.cols,
                     rows: screen.rows,
-                    listening: self.listening.contains(&terminal.id),
+                    listening: self.listening.get(&terminal.id).copied().unwrap_or(Listening::No),
                 }
             })
             .collect()
@@ -406,22 +425,32 @@ impl Server {
 
     pub(crate) fn term_open(&self, op: TermOpen) -> Result<Opened, Error> {
         let shell = login::shell()?;
-        let (mut state, row) = self.ready_task(&op.task, |row| row.state.is_live())?;
+        let stem = shell.file_stem().unwrap_or(shell.as_os_str()).to_string_lossy().into_owned();
+        self.open_shell(&op.task, &op.path, &stem, vec![shell.to_string_lossy().into_owned(), "-l".into()])
+    }
+
+    pub(crate) fn term_install_microphone(&self, op: TermInstallMicrophone) -> Result<Opened, Error> {
+        let argv = microphone_install(&self.program, &login::shell()?.to_string_lossy());
+        self.open_shell(&op.task, ".", MICROPHONE_PANEL, argv)
+    }
+
+    /// Starts `argv` at `path` as a new shell panel named `stem`, or `stem-2`, `stem-3` and on while a panel of the
+    /// task holds the name.
+    fn open_shell(&self, task: &TaskId, path: &str, stem: &str, argv: Vec<String>) -> Result<Opened, Error> {
+        let (mut state, row) = self.ready_task(task, |row| row.state.is_live())?;
         if !row.state.is_live() {
             return Err(Error::conflict(format!("{} is ended; reopen it to open a shell", row.id)));
         }
-        let directory = files::directory(Path::new(&row.directory), &op.path)?;
-        let stem = shell.file_stem().unwrap_or(shell.as_os_str()).to_string_lossy().into_owned();
-        let taken: HashSet<&str> = state.terminals(&op.task).map(|(name, _)| name).chain([AGENT_PANEL]).collect();
-        let name = std::iter::once(stem.clone())
+        let directory = files::directory(Path::new(&row.directory), path)?;
+        let taken: HashSet<&str> = state.terminals(task).map(|(name, _)| name).chain([AGENT_PANEL]).collect();
+        let name = std::iter::once(stem.to_string())
             .chain((2..).map(|count| format!("{stem}-{count}")))
             .find(|name| !taken.contains(name.as_str()))
             .expect("an unbounded run of names holds one the task's panels lack");
-        let panel = PanelRow { id: PtyId::random(), task: op.task.clone(), name: name.clone() };
-        let argv = vec![shell.to_string_lossy().into_owned(), "-l".into()];
+        let panel = PanelRow { id: PtyId::random(), task: task.clone(), name: name.clone() };
         let terminal = self.spawn_panel(&mut state, &panel, argv, &directory, Vec::new())?;
-        state.shells.entry(op.task.clone()).or_default().push(Shell { name, terminal });
-        Ok(Opened { panel: panel.id, rev: self.touch_task(&mut state, &op.task)? })
+        state.shells.entry(task.clone()).or_default().push(Shell { name, terminal });
+        Ok(Opened { panel: panel.id, rev: self.touch_task(&mut state, task)? })
     }
 
     pub(crate) fn term_close(&self, op: TermClose) -> Result<Revised, Error> {
@@ -604,5 +633,22 @@ impl Server {
 
     pub(crate) fn terminal(&self, id: &PtyId) -> Result<Arc<Terminal>, Error> {
         lock(&self.state).terminal_by_id(id).map(|(_, terminal)| terminal).ok_or_else(|| Error::not_found(id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_microphone_panel_runs_this_server_s_binary_as_root_whatever_its_path() {
+        let program = Path::new("/Applications/it's \"octopus\"/octopus");
+        let argv = microphone_install(program, "/bin/zsh");
+        assert_eq!(argv[..3], ["/bin/zsh", "-l", "-c"]);
+        let install = argv[3].strip_prefix("sudo ").expect("the install runs under sudo");
+        let echoed =
+            std::process::Command::new("sh").args(["-c", &format!("printf '%s|' {install}")]).output().expect("run sh");
+        assert_eq!(String::from_utf8_lossy(&echoed.stdout), format!("{}|microphone|install|", program.display()));
+        assert!(argv[3].ends_with(" || exec /bin/zsh -l"), "a failure leaves the shell open");
     }
 }

@@ -348,7 +348,8 @@ pub fn install() -> anyhow::Result<Registration> {
     machine.fix().map_err(|error| anyhow!("install this machine's server: {error:#}"))
 }
 
-/// `octopus uninstall`: unregisters this machine's server, and any unit an earlier install left.
+/// `octopus uninstall`: unregisters this machine's server, and any unit an earlier install left. On macOS the input
+/// the Octopus Microphone stood in for comes back, and the plug-in stays for `octopus microphone uninstall`.
 pub fn uninstall() -> anyhow::Result<Registration> {
     let octopus = Octopus::find()?;
     let _locked = octopus.lock()?;
@@ -356,7 +357,12 @@ pub fn uninstall() -> anyhow::Result<Registration> {
     for (name, unit) in &machine.legacy {
         install::retire(name, unit)?;
     }
-    install::uninstall(&machine.service, &octopus.terminal_host())
+    let registration = install::uninstall(&machine.service)?;
+    #[cfg(target_os = "macos")]
+    if let Err(error) = octopus_server::give_back_input(&octopus.terminal_host()) {
+        eprintln!("octopus: give back the default input: {error:#}");
+    }
+    Ok(registration)
 }
 
 #[cfg(test)]

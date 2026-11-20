@@ -14,7 +14,15 @@ import { colors, scheme } from "@octopus/shared/tokens.ts";
 import { dormant } from "@octopus/shared/Glyph.tsx";
 import { feel } from "./feel";
 import { animateList } from "@octopus/shared/flip.ts";
-import { chooseShell, EachPanel, openShell, taskPanels } from "@octopus/shared/panels.ts";
+import {
+  chooseShell,
+  EachPanel,
+  installMicrophone,
+  microphonePrompt,
+  needsMicrophone,
+  openShell,
+  taskPanels,
+} from "@octopus/shared/panels.ts";
 import { Icon } from "./Icon";
 import { caretMove, cursorKey, cursorKeys, ESC, pasteKeys } from "./keys";
 import { onPainted } from "./motion";
@@ -577,7 +585,7 @@ function PhoneTerm(props: {
 }
 
 function Mic(props: { panel: PanelView }) {
-  const hearing = () => props.panel.running && props.panel.held_here && props.panel.listening;
+  const hearing = () => props.panel.running && props.panel.held_here && props.panel.listening === "yes";
   return (
     <Show when={hearing()}>
       <Show
@@ -647,6 +655,10 @@ function TaskScreen(props: { open: TaskView }) {
   const live = () => reach().is === "reachable";
   const server = () => serverView(props.open.at.server);
   const ended = () => !props.open.live;
+  const unheard = () => {
+    const panel = selected();
+    return panel && needsMicrophone(panel) ? panel : undefined;
+  };
   const gone = () => {
     const reached = reach();
     return reached.is === "unreachable" && !ended() ? reached : null;
@@ -710,6 +722,19 @@ function TaskScreen(props: { open: TaskView }) {
         )}
       </EachPanel>
       <div class="foot" ref={animateList(":scope > *")}>
+        <Show when={live() && unheard()}>
+          {(panel) => (
+            <div class="lockbar wrap">
+              <Slot>
+                <Icon name="micoff" />
+              </Slot>
+              <span class="name">{microphonePrompt(serverLabel(props.open.at.server))}</span>
+              <button class="btn" onClick={() => act(installMicrophone(props.open, panel()))}>
+                Install
+              </button>
+            </div>
+          )}
+        </Show>
         <Show when={gone()}>
           {(down) => (
             <div class="lockbar">

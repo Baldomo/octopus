@@ -4,7 +4,15 @@ import { AGENT_PANEL, type PanelView, type PtyId, type TaskView } from "./genera
 import { Glyph } from "./Glyph";
 import { keepInView } from "./keepInView";
 import { onFileDrag } from "./fileDrag";
-import { chooseShell, EachPanel, openShell, taskPanels } from "./panels";
+import {
+  chooseShell,
+  EachPanel,
+  installMicrophone,
+  microphonePrompt,
+  needsMicrophone,
+  openShell,
+  taskPanels,
+} from "./panels";
 import { commands, hint, mac } from "./commands";
 import { act, model, serverLabel, ui } from "./state";
 import { pastedPaths } from "./taskFiles";
@@ -81,6 +89,15 @@ function Term(props: { task: TaskView; panel: PanelView; visible: boolean; resum
           <span class="spacer" />
           <button class="btn live" onClick={session.take}>
             Take over
+          </button>
+        </div>
+      </Show>
+      <Show when={needsMicrophone(props.panel)}>
+        <div class="readonly">
+          <span>{microphonePrompt(serverLabel(props.task.at.server))}</span>
+          <span class="spacer" />
+          <button class="btn live" onClick={() => act(installMicrophone(props.task, props.panel))}>
+            Install
           </button>
         </div>
       </Show>
@@ -184,7 +201,7 @@ function Stack(props: { key: string; openLink: OpenLink }) {
                 {(panel) => (
                   <span class="lock">
                     {panel().lock_holder === null ? "lock free" : `✎ ${panel().lock_holder?.name}`}
-                    {panel().listening ? " · listening" : ""}
+                    {panel().listening === "yes" ? " · listening" : ""}
                   </span>
                 )}
               </Show>

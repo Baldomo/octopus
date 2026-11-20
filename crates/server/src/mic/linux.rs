@@ -1,5 +1,7 @@
 //! One pipe source per terminal on the user's sound server, PulseAudio or PipeWire's pulse server, driven by `pactl`.
-//! A source's module reads its FIFO; the server writes the holder's audio into it while a program records.
+//! A source's module reads its FIFO; the server writes the holder's audio into it while a program records. The
+//! server follows the sound server as it comes and goes, and while there is none it watches for programs recording
+//! straight from the machine's sound devices.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
@@ -7,11 +9,13 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
-use octopus_proto::types::{MIC_FORMAT, PtyId};
+use nix::unistd::Pid;
+use octopus_proto::types::{Listening, MIC_FORMAT, PtyId};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
@@ -21,17 +25,11 @@ use crate::{lock, report};
 const SOURCE_PREFIX: &str = "octopus_";
 /// How much audio each write to a source carries.
 const TICK: Duration = Duration::from_millis(10);
-/// How long the server waits for the sound server to come back once `pactl subscribe` ends.
+/// How often the server looks for a sound server while it has none.
 const RESUBSCRIBE: Duration = Duration::from_secs(1);
 /// A sound server slower than this to answer is treated as wedged.
 const PACTL_PATIENCE: Duration = Duration::from_secs(2);
 const PACTL_POLL: Duration = Duration::from_millis(5);
-
-#[derive(Deserialize)]
-struct Module {
-    index: u64,
-    argument: Option<String>,
-}
 
 #[derive(Deserialize)]
 struct Source {
@@ -98,6 +96,7 @@ struct Inner {
     terminals: Mutex<HashSet<PtyId>>,
     /// The terminals a thread is writing audio into.
     feeding: Mutex<HashSet<PtyId>>,
+    reachable: AtomicBool,
 }
 
 pub(crate) struct Platform {
@@ -105,24 +104,29 @@ pub(crate) struct Platform {
 }
 
 impl Platform {
-    pub fn start(dir: &Path, _terminal_host: &Path, shared: Arc<Shared>) -> anyhow::Result<Self> {
-        pactl(&["info"]).context("reach the user's sound server")?;
+    pub fn start(dir: &Path, shared: Arc<Shared>) -> anyhow::Result<Self> {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
         let inner = Arc::new(Inner {
             fifos: dir.to_path_buf(),
             shared,
             terminals: Mutex::default(),
             feeding: Mutex::default(),
+            reachable: AtomicBool::new(false),
         });
         Ok(Self { inner })
     }
 
-    pub fn prepare(&self, id: &PtyId) -> anyhow::Result<Vec<(String, String)>> {
+    /// The variables name the terminal's source even while the sound server is away, which makes it on its return.
+    pub fn prepare(&self, id: &PtyId) -> Vec<(String, String)> {
         let mut terminals = lock(&self.inner.terminals);
-        self.inner.load(id)?;
+        if self.inner.reachable.load(Ordering::Relaxed)
+            && let Err(error) = self.inner.load(id)
+        {
+            report!("make the virtual microphone of {id}: {error:#}");
+        }
         terminals.insert(id.clone());
         let name = source(id);
-        Ok(vec![("PULSE_SOURCE".to_string(), name.clone()), ("PIPEWIRE_NODE".to_string(), name)])
+        vec![("PULSE_SOURCE".to_string(), name.clone()), ("PIPEWIRE_NODE".to_string(), name)]
     }
 
     /// Follows the sound server from here on: until the adopted terminals are known, it would drop their sources.
@@ -134,12 +138,10 @@ impl Platform {
 
     pub fn remove(&self, id: &PtyId) {
         lock(&self.inner.terminals).remove(id);
-        self.inner.reconcile();
+        if self.inner.reachable.load(Ordering::Relaxed) {
+            self.inner.reconcile();
+        }
     }
-
-    pub fn started(&self, _id: &PtyId) {}
-
-    pub(crate) fn remote_held(&self, _terminals: HashSet<PtyId>) {}
 }
 
 impl Inner {
@@ -171,15 +173,7 @@ impl Inner {
 
     /// This server's sources by terminal, each with its module: those whose FIFO lives in this server's directory.
     fn loaded(&self) -> anyhow::Result<HashMap<PtyId, String>> {
-        let prefix = format!("file={}/", self.fifos.display());
-        let mut loaded = HashMap::new();
-        for module in pactl_list::<Module>("modules")? {
-            let argument = module.argument.unwrap_or_default();
-            if let Some(id) = argument.split_whitespace().find_map(|word| word.strip_prefix(&prefix)) {
-                loaded.insert(PtyId(id.to_string()), module.index.to_string());
-            }
-        }
-        Ok(loaded)
+        Ok(pipe_modules(&pactl(&["list", "short", "modules"])?, &self.fifos))
     }
 
     /// Gives each terminal its source and drops every other source of this server's.
@@ -205,28 +199,52 @@ impl Inner {
         self.refresh();
     }
 
-    /// Follows the sound server's recording streams for as long as the server runs; a sound server that restarts
-    /// gets every source back.
+    /// Follows the sound server's recording streams for as long as the server runs; a sound server that starts, or
+    /// restarts, gets every source back. While there is none, a remote holder's terminal recording from a sound
+    /// device hears no microphone.
     fn watch(self: Arc<Self>) {
         loop {
-            match Command::new("pactl").arg("subscribe").stdout(Stdio::piped()).stdin(Stdio::null()).spawn() {
-                Ok(mut subscribed) => {
-                    self.reconcile();
-                    let events = BufReader::new(subscribed.stdout.take().expect("stdout is piped"));
-                    for event in events.lines() {
-                        match event {
-                            Ok(event) if event.contains("source-output") => self.refresh(),
-                            Ok(_) => {}
-                            Err(_) => break,
-                        }
-                    }
-                    let _reaped = subscribed.wait();
-                }
-                Err(error) => report!("follow the sound server: {error}"),
+            if pactl(&["info"]).is_ok() {
+                self.reachable.store(true, Ordering::Relaxed);
+                self.follow();
+                self.reachable.store(false, Ordering::Relaxed);
             }
-            self.shared.set_listening(HashSet::new());
+            self.shared.set_listening(self.unheard());
             std::thread::sleep(RESUBSCRIBE);
         }
+    }
+
+    /// Returns when the sound server goes.
+    fn follow(self: &Arc<Self>) {
+        let mut subscribed =
+            match Command::new("pactl").arg("subscribe").stdout(Stdio::piped()).stdin(Stdio::null()).spawn() {
+                Ok(subscribed) => subscribed,
+                Err(error) => return report!("follow the sound server: {error}"),
+            };
+        self.reconcile();
+        let events = BufReader::new(subscribed.stdout.take().expect("stdout is piped"));
+        for event in events.lines() {
+            match event {
+                Ok(event) if event.contains("source-output") => self.refresh(),
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        let _reaped = subscribed.wait();
+    }
+
+    /// The remote holders' terminals with a program recording from one of the machine's sound devices.
+    fn unheard(&self) -> HashMap<PtyId, Listening> {
+        let held = lock(&self.shared.remote_held).clone();
+        if held.is_empty() {
+            return HashMap::new();
+        }
+        capturing()
+            .into_iter()
+            .filter_map(|pid| self.shared.sessions.terminal_of(pid))
+            .filter(|id| held.contains(id))
+            .map(|id| (id, Listening::NoMicrophone))
+            .collect()
     }
 
     /// Reads which sources have a recording stream, and feeds each terminal that started listening.
@@ -241,7 +259,7 @@ impl Inner {
         };
         let listening: HashSet<PtyId> =
             lock(&self.terminals).iter().filter(|id| recording.contains(source(id).as_str())).cloned().collect();
-        self.shared.set_listening(listening.clone());
+        self.shared.set_listening(listening.iter().map(|id| (id.clone(), Listening::Yes)).collect());
         for id in listening {
             if lock(&self.feeding).insert(id.clone()) {
                 let feeder = Arc::clone(self);
@@ -282,5 +300,70 @@ impl Inner {
             std::thread::sleep(next.saturating_duration_since(Instant::now()));
         }
         Ok(())
+    }
+}
+
+/// The modules in `listed`, `pactl list short modules`, whose FIFO lives in `fifos`, by terminal. Each line is the
+/// module's index, name and argument, separated by tabs; PulseAudio's JSON leaves the index out.
+fn pipe_modules(listed: &str, fifos: &Path) -> HashMap<PtyId, String> {
+    let prefix = format!("file={}/", fifos.display());
+    listed
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            let (index, argument) = (fields.next()?, fields.nth(1)?);
+            let id = argument.split_whitespace().find_map(|word| word.strip_prefix(&prefix))?;
+            Some((PtyId(id.to_string()), index.to_string()))
+        })
+        .collect()
+}
+
+/// The processes holding a sound device's capture stream open, `/dev/snd/pcmC<card>D<device>c`.
+fn capturing() -> Vec<Pid> {
+    let Ok(processes) = std::fs::read_dir("/proc") else { return Vec::new() };
+    processes
+        .flatten()
+        .filter_map(|process| process.file_name().to_str()?.parse::<i32>().ok())
+        .filter(|pid| {
+            let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else { return false };
+            fds.flatten().any(|fd| std::fs::read_link(fd.path()).is_ok_and(|target| captures(&target)))
+        })
+        .map(Pid::from_raw)
+        .collect()
+}
+
+fn captures(device: &Path) -> bool {
+    device.to_str().and_then(|path| path.strip_prefix("/dev/snd/pcmC")).is_some_and(|rest| {
+        rest.strip_suffix('c').and_then(|numbers| numbers.split_once('D')).is_some_and(|(card, device)| {
+            [card, device].iter().all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_server_finds_its_own_pipe_sources_among_the_modules() {
+        let listed = "0\tmodule-device-restore\t\tn/a\n\
+                      12\tmodule-pipe-source\tsource_name=octopus_pty_a file=/run/mic/pty_a format=s16le\t1\n\
+                      13\tmodule-pipe-source\tsource_name=octopus_pty_b file=/other/mic/pty_b\tn/a\n";
+        let loaded = pipe_modules(listed, Path::new("/run/mic"));
+        assert_eq!(loaded, HashMap::from([(PtyId("pty_a".into()), "12".to_string())]));
+    }
+
+    #[test]
+    fn only_a_sound_device_s_capture_stream_counts_as_recording() {
+        for (path, capture) in [
+            ("/dev/snd/pcmC0D0c", true),
+            ("/dev/snd/pcmC12D3c", true),
+            ("/dev/snd/pcmC0D0p", false),
+            ("/dev/snd/controlC0", false),
+            ("/dev/snd/pcmCD0c", false),
+            ("/tmp/dev/snd/pcmC0D0c", false),
+        ] {
+            assert_eq!(captures(Path::new(path)), capture, "{path}");
+        }
     }
 }

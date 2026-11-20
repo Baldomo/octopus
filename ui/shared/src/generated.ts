@@ -32,11 +32,9 @@ export type Swatch = { hue: Hue, tone: Tone, };
 
 export type Agent = { "kind": "not_started" } | { "kind": "running", status: AgentStatus, } | { "kind": "harness_not_installed", install: string, } | { "kind": "harness_unknown" };
 
-export type Panel = { id: PtyId, name: string, running: boolean, lock_holder: LockHolder | null, cols: number, rows: number, 
-/**
- * A program of the terminal records from its virtual microphone, so the holder sends its own on `Stream::Mic`.
- */
-listening: boolean, };
+export type Panel = { id: PtyId, name: string, running: boolean, lock_holder: LockHolder | null, cols: number, rows: number, listening: Listening, };
+
+export type Listening = "no" | "yes" | "no_microphone";
 
 export type LockHolder = { name: string, key: string | null, };
 
@@ -224,11 +222,7 @@ export type PanelView = {
 /**
  * Whether this client holds the panel's lock.
  */
-held_here: boolean, id: PtyId, name: string, running: boolean, lock_holder: LockHolder | null, cols: number, rows: number, 
-/**
- * A program of the terminal records from its virtual microphone, so the holder sends its own on `Stream::Mic`.
- */
-listening: boolean, };
+held_here: boolean, id: PtyId, name: string, running: boolean, lock_holder: LockHolder | null, cols: number, rows: number, listening: Listening, };
 
 export type TaskView = { key: string, at: TaskRef, section: string, 
 /**
@@ -413,6 +407,6 @@ export const HOLDER_GRACE_MS = 10000 as const;
 
 export const VERSION = "0.0.0" as const;
 
-export const COMMANDS = ["boot","ready","ui_act","quit","server_pair","server_offer","server_accounts","server_revoke","account_link","account_join","settings_set","account_remove","account_leave","account_start_over","servers_refresh","server_rename","server_forget","workspace_add","workspace_remove","section_rename","section_color","auto_color","task_focus","task_resume","task_move","task_set_parent","task_set_workspace","task_rename","task_archive","task_create","folder_get","harness_check","term_attach","term_input","term_detach","term_open","term_close","term_claim","term_take_lock","term_resize","browser_open","browser_close","browser_move","file_list","file_root_url","file_write","file_create","file_move","file_copy","file_delete","file_upload","file_upload_content","file_search"] as const;
+export const COMMANDS = ["boot","ready","ui_act","quit","server_pair","server_offer","server_accounts","server_revoke","account_link","account_join","settings_set","account_remove","account_leave","account_start_over","servers_refresh","server_rename","server_forget","workspace_add","workspace_remove","section_rename","section_color","auto_color","task_focus","task_resume","task_move","task_set_parent","task_set_workspace","task_rename","task_archive","task_create","folder_get","harness_check","term_attach","term_input","term_detach","term_open","term_install_microphone","term_close","term_claim","term_take_lock","term_resize","browser_open","browser_close","browser_move","file_list","file_root_url","file_write","file_create","file_move","file_copy","file_delete","file_upload","file_upload_content","file_search"] as const;
 
 export const EVENTS = {"account":"account","browserDownloaded":"browser_downloaded","browserFailed":"browser_failed","browserHeld":"browser_held","browserOpened":"browser_opened","browserPaged":"browser_paged","fileDrag":"file-drag","filesChanged":"files_changed","microphoneDenied":"microphone_denied","model":"model","servers":"servers","ui":"ui","windowFocused":"window-focused","windowShown":"window-shown"} as const;

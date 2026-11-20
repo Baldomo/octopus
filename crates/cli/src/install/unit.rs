@@ -68,11 +68,7 @@ fn argv(program: &Path) -> [String; 3] {
 
 /// The command the unit runs, each word quoted for a POSIX shell.
 pub fn command(program: &Path) -> String {
-    let quoted = |word: &String| {
-        let plain = word.chars().all(|c| c.is_ascii_alphanumeric() || "/._-:=,+@".contains(c));
-        if plain { word.clone() } else { format!("'{}'", word.replace('\'', "'\\''")) }
-    };
-    argv(program).iter().map(quoted).collect::<Vec<_>>().join(" ")
+    argv(program).iter().map(|word| octopus_server::shell_word(word)).collect::<Vec<_>>().join(" ")
 }
 
 /// The login item's plist, `crates/desktop/server.plist`, which the app bundle carries in

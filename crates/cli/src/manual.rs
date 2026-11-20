@@ -16,7 +16,7 @@ use octopus_server::TerminalHost;
 use tokio::io::AsyncReadExt;
 
 use crate::commands::SERVER_HELP;
-use crate::install::ServerRun;
+use crate::install::{ServerRun, microphone};
 use crate::{account, attach, call, call_error, connect, print, repair, skill};
 
 #[derive(Subcommand)]
@@ -126,6 +126,24 @@ async fn synced(change: impl FnOnce(&Config, &Identity) -> anyhow::Result<()>) -
     let me = Identity::load(&config)?;
     change(&config, &me)?;
     account::sync_everywhere(&config, &me).await
+}
+
+#[derive(Subcommand)]
+pub enum MicrophoneVerb {
+    /// As root: on macOS install the Octopus Microphone, restarting the audio service; on Linux enable a sound server,
+    /// or name what is missing.
+    Install,
+    /// As root: on macOS remove the Octopus Microphone, restarting the audio service; on Linux leave the sound server.
+    Uninstall,
+}
+
+impl MicrophoneVerb {
+    pub fn run(self) -> anyhow::Result<()> {
+        print(&match self {
+            Self::Install => microphone::install()?,
+            Self::Uninstall => microphone::uninstall()?,
+        })
+    }
 }
 
 #[derive(Subcommand)]

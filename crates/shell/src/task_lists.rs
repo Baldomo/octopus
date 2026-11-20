@@ -262,7 +262,7 @@ pub fn lists(caches: &BTreeMap<String, Cache>, waking: &Waking) -> Lists {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use octopus_proto::types::{Mode, Panel, PtyId, Session, SessionId, Workspace};
+    use octopus_proto::types::{Listening, Mode, Panel, PtyId, Session, SessionId, Workspace};
 
     #[test]
     fn a_task_shows_its_agent_while_live_and_how_it_ended_after() {
@@ -281,7 +281,7 @@ pub(crate) mod tests {
             lock_holder: None,
             cols: 80,
             rows: 24,
-            listening: false,
+            listening: Listening::No,
         }];
         let mut missing = asleep.clone();
         missing.agent = Agent::HarnessUnknown;

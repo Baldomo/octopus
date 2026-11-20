@@ -11,13 +11,15 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use octopus_proto::types::{MIC_FORMAT, PtyId};
+use nix::unistd::Pid;
+use octopus_proto::types::{Listening, MIC_FORMAT, PtyId};
 
 use crate::{lock, report};
 use octopus_proto::Error;
 
 use crate::Server;
 use crate::client::Client;
+use crate::host::HostClient;
 use crate::terminals::Terminal;
 
 /// The most audio a terminal buffers ahead of its programs; a holder sending faster loses its oldest bytes.
@@ -27,30 +29,77 @@ fn buffered_bytes() -> usize {
     (MIC_FORMAT.bytes_per_second() as f64 * BUFFERED_SECONDS) as usize
 }
 
-type Changed = Box<dyn Fn(&PtyId, bool) + Send + Sync>;
+type Changed = Box<dyn Fn(&PtyId, Listening) + Send + Sync>;
 
-/// What the platform shares with the server: which terminals listen, and the audio waiting for each.
-pub(crate) struct Shared {
-    listening: Mutex<HashSet<PtyId>>,
-    audio: Mutex<HashMap<PtyId, VecDeque<u8>>>,
-    changed: Changed,
+/// The program each terminal started, which leads the terminal's session: a process belongs to the terminal whose
+/// session it runs in.
+pub(crate) struct Sessions {
+    host: HostClient,
+    leaders: Mutex<HashMap<PtyId, Pid>>,
 }
 
-impl Shared {
-    /// Takes the terminals now listening, reporting each that started or stopped.
-    pub(crate) fn set_listening(&self, now: HashSet<PtyId>) {
-        let before = std::mem::replace(&mut *lock(&self.listening), now.clone());
-        for stopped in before.difference(&now) {
-            lock(&self.audio).remove(stopped);
-            (self.changed)(stopped, false);
-        }
-        for started in now.difference(&before) {
-            (self.changed)(started, true);
+impl Sessions {
+    /// A terminal whose program has already exited has no leader to learn.
+    fn learn(&self, id: &PtyId) {
+        match self.host.program(id) {
+            Ok(Some(program)) => {
+                lock(&self.leaders).insert(id.clone(), Pid::from_raw(program));
+            }
+            Ok(None) => {}
+            Err(error) => report!("find the program of {id}: {error}"),
         }
     }
 
+    fn forget(&self, id: &PtyId) {
+        lock(&self.leaders).remove(id);
+    }
+
+    pub(crate) fn terminal_of(&self, pid: Pid) -> Option<PtyId> {
+        let leader = nix::unistd::getsid(Some(pid)).ok()?;
+        lock(&self.leaders).iter().find(|(_, known)| **known == leader).map(|(id, _)| id.clone())
+    }
+}
+
+/// What the platform shares with the server: which terminals listen, the audio waiting for each, and who holds them.
+pub(crate) struct Shared {
+    listening: Mutex<HashMap<PtyId, Listening>>,
+    audio: Mutex<HashMap<PtyId, VecDeque<u8>>>,
+    changed: Changed,
+    pub(crate) sessions: Sessions,
+    /// The terminals whose lock a client connected over QUIC holds.
+    pub(crate) remote_held: Mutex<HashSet<PtyId>>,
+}
+
+impl Shared {
+    fn new(terminal_host: &Path, changed: Changed) -> Self {
+        Self {
+            listening: Mutex::default(),
+            audio: Mutex::default(),
+            changed,
+            sessions: Sessions { host: HostClient::at(terminal_host), leaders: Mutex::default() },
+            remote_held: Mutex::default(),
+        }
+    }
+
+    /// Takes how each terminal that listens now listens, `Yes` or `NoMicrophone`, the rest listening `No`, and reports
+    /// each that changed.
+    pub(crate) fn set_listening(&self, now: HashMap<PtyId, Listening>) {
+        let before = std::mem::replace(&mut *lock(&self.listening), now.clone());
+        for (id, _) in before.iter().filter(|(id, _)| !now.contains_key(*id)) {
+            lock(&self.audio).remove(id);
+            (self.changed)(id, Listening::No);
+        }
+        for (id, listening) in now.iter().filter(|(id, listening)| before.get(*id) != Some(*listening)) {
+            if *listening != Listening::Yes {
+                lock(&self.audio).remove(id);
+            }
+            (self.changed)(id, *listening);
+        }
+    }
+
+    /// Whether the holder's audio reaches the terminal's programs.
     pub fn listening(&self, id: &PtyId) -> bool {
-        lock(&self.listening).contains(id)
+        lock(&self.listening).get(id) == Some(&Listening::Yes)
     }
 
     /// Fills `out` with the terminal's waiting audio, then silence.
@@ -120,11 +169,14 @@ pub(crate) struct Microphones {
 
 impl Microphones {
     /// A platform that cannot start leaves every terminal on the machine's own input.
-    pub fn start(enabled: bool, terminal_host: &Path, changed: impl Fn(&PtyId, bool) + Send + Sync + 'static) -> Self {
-        let shared =
-            Arc::new(Shared { listening: Mutex::default(), audio: Mutex::default(), changed: Box::new(changed) });
+    pub fn start(
+        enabled: bool,
+        terminal_host: &Path,
+        changed: impl Fn(&PtyId, Listening) + Send + Sync + 'static,
+    ) -> Self {
+        let shared = Arc::new(Shared::new(terminal_host, Box::new(changed)));
         let platform = enabled
-            .then(|| platform::Platform::start(&directory(terminal_host), terminal_host, Arc::clone(&shared)))
+            .then(|| platform::Platform::start(&directory(terminal_host), Arc::clone(&shared)))
             .and_then(|started| started.map_err(|error| report!("no virtual microphones: {error:#}")).ok());
         Self { shared, platform }
     }
@@ -132,11 +184,7 @@ impl Microphones {
     /// Readies the virtual microphone of a terminal about to start, returning the variables that point its
     /// programs at it.
     pub fn prepare(&self, id: &PtyId) -> Vec<(String, String)> {
-        let Some(platform) = &self.platform else { return Vec::new() };
-        platform.prepare(id).unwrap_or_else(|error| {
-            report!("no virtual microphone for {id}: {error:#}");
-            Vec::new()
-        })
+        self.platform.as_ref().map_or_else(Vec::new, |platform| platform.prepare(id))
     }
 
     fn on_platform(&self, act: impl FnOnce(&platform::Platform)) {
@@ -147,31 +195,42 @@ impl Microphones {
 
     /// Keeps the virtual microphones of the running terminals a restarted server adopts, and drops the rest.
     pub fn adopt(&self, terminals: &[PtyId]) {
-        self.on_platform(|platform| platform.adopt(terminals));
+        self.on_platform(|platform| {
+            terminals.iter().for_each(|id| self.shared.sessions.learn(id));
+            platform.adopt(terminals);
+        });
     }
 
     pub fn remove(&self, id: &PtyId) {
-        self.on_platform(|platform| platform.remove(id));
-        let others = lock(&self.shared.listening).iter().filter(|known| *known != id).cloned().collect();
+        self.on_platform(|platform| {
+            self.shared.sessions.forget(id);
+            platform.remove(id);
+        });
+        let others = lock(&self.shared.listening)
+            .iter()
+            .filter(|(known, _)| *known != id)
+            .map(|(known, listening)| (known.clone(), *listening))
+            .collect();
         self.shared.set_listening(others);
     }
 
     pub fn started(&self, id: &PtyId) {
-        self.on_platform(|platform| platform.started(id));
+        self.on_platform(|_| self.shared.sessions.learn(id));
     }
 
-    /// The terminals whose lock a client connected over QUIC holds.
     pub(crate) fn remote_held(&self, terminals: HashSet<PtyId>) {
-        self.on_platform(|platform| platform.remote_held(terminals));
+        self.on_platform(|_| *lock(&self.shared.remote_held) = terminals);
     }
 }
 
 impl Server {
-    pub(crate) fn listening_changed(&self, id: &PtyId, listening: bool) {
+    pub(crate) fn listening_changed(&self, id: &PtyId, listening: Listening) {
         let mut state = lock(&self.state);
         let task = state.terminal_by_id(id).map(|(task, _)| task);
-        let changed =
-            if listening { task.is_some() && state.listening.insert(id.clone()) } else { state.listening.remove(id) };
+        let changed = match listening {
+            Listening::No => state.listening.remove(id).is_some(),
+            heard => task.is_some() && state.listening.insert(id.clone(), heard) != Some(heard),
+        };
         let Some(task) = task else { return };
         if changed && let Err(error) = self.touch_task(&mut state, &task) {
             report!("publish whether {id} is listening: {error}");
@@ -192,10 +251,10 @@ mod tests {
 
     #[test]
     fn a_terminal_hears_its_holder_then_silence_and_never_more_than_the_buffer() {
-        let shared = Shared { listening: Mutex::default(), audio: Mutex::default(), changed: Box::new(|_, _| {}) };
+        let shared = Shared::new(Path::new("/nowhere/host.sock"), Box::new(|_, _| {}));
         let id = PtyId("pty_1".into());
         shared.push(&id, &[1, 2]);
-        shared.set_listening(HashSet::from([id.clone()]));
+        shared.set_listening(HashMap::from([(id.clone(), Listening::Yes)]));
         shared.push(&id, &[3, 4]);
         let mut out = [9u8; 4];
         shared.pull(&id, &mut out);

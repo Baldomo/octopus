@@ -99,6 +99,9 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
   /** Holding the lock or claiming it, so a look draws the terminal as held here from the first frame. */
   const claimed = () => mine() || claim.pending();
   let generation = 0;
+  /** Reports `error` once the lock settles, if it still matters then. */
+  const reportLater = (error: unknown, matters: () => boolean) =>
+    setTimeout(() => matters() && report(error), LOCK_SETTLES_MS);
   const [drops, setDrops] = createSignal(0);
 
   const attach = async () => {
@@ -126,7 +129,13 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
       }
       xterm.write(new Uint8Array(piece));
     };
-    const opened = await backend.termAttach(props.at, props.panel().id, output);
+    // A panel that exits before its stream opens, as a quick shell does, has left the task by the time this reports.
+    const opened = await backend.termAttach(props.at, props.panel().id, output).catch((error) => {
+      claim.ended(false);
+      reportLater(error, () => current === generation);
+      return null;
+    });
+    if (opened === null) return;
     if (current === generation && !ended) {
       attachment = opened;
       setAttached(true);
@@ -145,7 +154,7 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
    * its holder once the lock's move reaches the model.
    */
   const unlessOutrun = (sent: Promise<void>, stillMine: () => boolean) =>
-    sent.catch((error) => setTimeout(() => stillMine() && report(error), LOCK_SETTLES_MS));
+    sent.catch((error) => reportLater(error, stillMine));
   let fitting: ReturnType<typeof setTimeout> | undefined;
   const fit = () => {
     clearTimeout(fitting);
@@ -194,10 +203,7 @@ export function terminalSession(props: { at: TaskRef; panel: () => PanelView; sh
   createEffect(
     on([streaming, drops], ([stream]) => {
       if (!stream) return;
-      attach().catch((error) => {
-        claim.ended(false);
-        report(error);
-      });
+      attach();
       onCleanup(detach);
     }),
   );

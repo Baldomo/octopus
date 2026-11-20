@@ -107,6 +107,7 @@ export const backend = {
   termDetach: (attachment: number) => invoke<void>(octopus("term_detach"), { attachment }),
   /** Resolves to the id of the shell panel it opens at `path`, relative to the task's directory. */
   termOpen: (at: TaskRef, path: string) => invoke<PtyId>(octopus("term_open"), { at, path }),
+  termInstallMicrophone: (at: TaskRef) => invoke<PtyId>(octopus("term_install_microphone"), { at }),
   termClose: (at: TaskRef, panel: PtyId) => invoke<void>(octopus("term_close"), { at, panel }),
   termClaim: (at: TaskRef, panel: PtyId, cols: number, rows: number) =>
     invoke<void>(octopus("term_claim"), { at, panel, cols, rows }),

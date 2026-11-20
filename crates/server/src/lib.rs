@@ -20,7 +20,7 @@ mod terminals;
 mod workspaces;
 mod worktrees;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak, mpsc};
 
@@ -33,11 +33,11 @@ use octopus_proto::ops::{
     FileDelete, FileList, FileMove, FileSearch, FileWrite, FolderGet, HarnessCheck, HarnessSet, Matches, Offer,
     PairingForget, PairingList, PairingOffer, Revised, ServerVersion, SessionHello, SessionPing, SessionSync, Snapshot,
     TaskArchive, TaskCreate, TaskFocus, TaskGet, TaskMove, TaskRename, TaskSetParent, TaskSetSession, TaskSetWorkspace,
-    TermClaim, TermClose, TermOpen, TermResize, TermSend, TermTakeLock, Version, Welcome, WorkspaceAdd, WorkspaceList,
-    WorkspaceRemove, WorkspaceRename, WorkspaceSetColor, Workspaces, Written,
+    TermClaim, TermClose, TermInstallMicrophone, TermOpen, TermResize, TermSend, TermTakeLock, Version, Welcome,
+    WorkspaceAdd, WorkspaceList, WorkspaceRemove, WorkspaceRename, WorkspaceSetColor, Workspaces, Written,
 };
 use octopus_proto::remote::{Connection, RelayUrl};
-use octopus_proto::types::{AGENT_PANEL, BrowserPanel, PtyId, TaskId};
+use octopus_proto::types::{AGENT_PANEL, BrowserPanel, Listening, PtyId, TaskId};
 use octopus_proto::{Error, Event, Op, Outcome, Push, Request, parse_args};
 use tokio::sync::broadcast;
 
@@ -53,6 +53,7 @@ pub use mic::give_back_input;
 use pairing::Offers;
 use store::{Store, TaskRow};
 use terminals::Shell;
+pub use terminals::shell_word;
 pub use worktrees::{Sweep, WORKTREE_LIFETIME_MS};
 
 const PUSH_BACKLOG: usize = 4096;
@@ -65,8 +66,8 @@ struct State {
     /// The store's browser panels, which every task view carries.
     browsers: HashMap<TaskId, Vec<BrowserPanel>>,
     watchers: HashMap<TaskId, notify::RecommendedWatcher>,
-    /// The terminals a program records from the virtual microphone of.
-    listening: HashSet<PtyId>,
+    /// The terminals a program records in, and whether their holder's microphone reaches it.
+    listening: HashMap<PtyId, Listening>,
     trusted: HashMap<AccountId, accounts::Trusted>,
 }
 
@@ -79,6 +80,8 @@ pub struct Server {
     worktrees: PathBuf,
     /// The Claude Code plugin carrying the octopus skill.
     plugin: PathBuf,
+    /// The `octopus` binary this server runs, which installs the virtual microphone.
+    program: PathBuf,
     host: Arc<HostClient>,
     state: Mutex<State>,
     clients: Mutex<HashMap<Client, usize>>,
@@ -134,13 +137,14 @@ impl Server {
         let browsers = store.browsers()?;
         let trusted = accounts::load(store.accounts()?);
         let host_address = host.address.clone();
+        let host_program = host.program.clone();
         let host = Arc::new(HostClient::reach_or_start(host)?);
         let mut hosted: HashMap<PtyId, bool> =
             host.list()?.into_iter().map(|hosted| (hosted.id, hosted.running)).collect();
         let recorded = store.reattach(&hosted.keys().cloned().collect())?;
         let (pushes, _) = broadcast::channel(PUSH_BACKLOG);
         let (file_changes, changed) = mpsc::channel::<(TaskId, String)>();
-        let (listening_changes, listening_changed) = mpsc::channel::<(PtyId, bool)>();
+        let (listening_changes, listening_changed) = mpsc::channel::<(PtyId, Listening)>();
         let mic = Microphones::start(microphone, &host_address, move |id, listening| {
             let _server_gone = listening_changes.send((id.clone(), listening));
         });
@@ -152,6 +156,7 @@ impl Server {
             offers: Mutex::default(),
             worktrees: worktrees.to_path_buf(),
             plugin: plugin.to_path_buf(),
+            program: host_program,
             host,
             state: Mutex::new(State {
                 store,
@@ -159,7 +164,7 @@ impl Server {
                 shells: HashMap::new(),
                 browsers,
                 watchers: HashMap::new(),
-                listening: HashSet::new(),
+                listening: HashMap::new(),
                 trusted,
             }),
             clients: Mutex::new(HashMap::new()),
@@ -248,6 +253,7 @@ impl Server {
                 Ok(state.view(&state.store.task(&op.task)?))
             }),
             TermOpen::NAME => call::<TermOpen>(args, |op| self.term_open(op)),
+            TermInstallMicrophone::NAME => call::<TermInstallMicrophone>(args, |op| self.term_install_microphone(op)),
             TermClose::NAME => call::<TermClose>(args, |op| self.term_close(op)),
             TermSend::NAME => call::<TermSend>(args, |op| self.term_send(client, op)),
             TermClaim::NAME => call::<TermClaim>(args, |op| self.term_claim(client, op)),

@@ -450,6 +450,14 @@ op!(
     }
 );
 op!(
+    /// Open a shell panel in a live task that runs `sudo octopus microphone install` on the task's server, where the
+    /// user types the server's password; the panel closes when the install succeeds.
+    TermInstallMicrophone = "term.install_microphone" -> Opened {
+        /// The task's id.
+        task: TaskId,
+    }
+);
+op!(
     /// Stop a shell panel and drop it with its scrollback.
     TermClose = "term.close" -> Revised {
         /// The task's id.
@@ -726,6 +734,7 @@ pub fn commands() -> Vec<Command> {
         command::<TaskFocus>(),
         command::<TaskGet>(),
         command::<TermOpen>(),
+        command::<TermInstallMicrophone>(),
         command::<TermClose>(),
         command::<TermSend>(),
         command::<TermTakeLock>(),

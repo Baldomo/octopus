@@ -35,6 +35,7 @@ plugin_commands![
     term_input,
     term_detach,
     term_open,
+    term_install_microphone,
     term_close,
     term_claim,
     term_take_lock,
