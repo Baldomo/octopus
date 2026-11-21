@@ -228,13 +228,13 @@ jobs:
           lipo -create -output target/universal-apple-darwin/release/octopus \
             "$RUNNER_TEMP/macos/macos-aarch64-apple-darwin/octopus" "$RUNNER_TEMP/macos/macos-x86_64-apple-darwin/octopus"
           chmod +x target/universal-apple-darwin/release/octopus
-      - name: Bundle and sign the dmg
+      - name: Bundle and sign the app and its dmg
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
-          (cd crates/desktop && cargo tauri bundle --bundles dmg --target universal-apple-darwin --config "$DESKTOP_BUNDLE_CONFIG")
+          (cd crates/desktop && cargo tauri bundle --bundles app,dmg --target universal-apple-darwin --config "$DESKTOP_BUNDLE_CONFIG")
           mkdir dist
           cp target/universal-apple-darwin/release/bundle/dmg/*.dmg "dist/octopus_${VERSION}_universal.dmg"
           COPYFILE_DISABLE=1 tar -czf "dist/octopus_${VERSION}_universal.app.tar.gz" -C target/universal-apple-darwin/release/bundle/macos octopus.app
