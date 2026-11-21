@@ -7,7 +7,7 @@ import { report, scale, showModal, showSidebar, showSurface, showView, ui } from
 import { desktop, desktopEvents } from "./backend";
 import { TOUR, type ShowDrive, type ShowTarget } from "./generated";
 
-/** Whether the show covers the screens: so until read, then until it ends. */
+/** Whether a show covers the screens: so until read, then until it ends, and again from each replay's tour. */
 const [showing, setShowing] = createSignal(true);
 /** Whether the show is touring the window, during which the first open steps aside. */
 const [touring, setTouring] = createSignal(false);
@@ -80,6 +80,7 @@ export async function followShow(base: boolean) {
   await desktopEvents.showDrive((step: ShowDrive) => {
     if (step.do === "start") {
       before = shown();
+      setShowing(true);
       setTouring(true);
       spot();
     } else if (step.do === "press") TARGETS[step.target]()?.click();

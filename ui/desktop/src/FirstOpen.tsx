@@ -15,7 +15,7 @@ import { desktop, desktopEvents } from "./backend";
 import { nextBeat, type Beat } from "./beats";
 import { titleHeight } from "./layer";
 import { showing, touring } from "./tour";
-import type { SetupView } from "./generated";
+import { TOUR, type SetupView } from "./generated";
 import fibre from "../../design/desktop/fibre.webp?url";
 import { inOut } from "./octopus/ease";
 import { paintMark, Stage, type Motion, type Point, type Rect } from "./octopus/stage";
@@ -38,6 +38,9 @@ export async function followSetup() {
 const answered = (server: string) =>
   model.version >= 0 && serverView(server) !== undefined && !model.unread.includes(server);
 
+/** Whether work on `server` is the user's: the show's tour works on its own demo computer, which leaves as it ends. */
+const users = (server: string) => server !== TOUR.server;
+
 /** Every layer follows the same events, so each reads the same beat. */
 export const beat = createRoot(() => {
   const [now, setNow] = createSignal<Beat>("wake");
@@ -49,8 +52,8 @@ export const beat = createRoot(() => {
       showing: showing(),
       answered: install !== null && answered(install.server),
       sidebar: ui.sidebar,
-      workspaces: model.lists.workspaces.length,
-      tasks: Object.keys(model.tasks).length,
+      workspaces: model.lists.workspaces.filter((workspace) => users(workspace.server)).length,
+      tasks: Object.keys(model.tasks).filter((key) => users(key.slice(0, key.indexOf("/")))).length,
     };
     setNow((was) => nextBeat(was, facts));
   });

@@ -25,16 +25,19 @@ const TAIL: f64 = 0.1;
 /// How long the pages have to get ready before the show ends unplayed.
 const READY_BY: Duration = Duration::from_secs(15);
 const POINTER_POLL: Duration = Duration::from_millis(16);
-/// The page that drives the show and takes the keys.
-const DRIVER: &str = "show-0";
+/// The display whose page drives the show and takes the keys.
+const DRIVING: usize = 0;
 
-fn page(display: usize) -> String {
-    format!("show-{display}")
+/// The label of the page over `display` in the show's `play`th play.
+fn page(play: u64, display: usize) -> String {
+    format!("show-{play}-{display}")
 }
 
-/// The show while it plays, which is the app's state from its windows opening to the end of the launch.
+/// One play of the show, from its windows opening to its end.
 pub(crate) struct Show {
     app: AppHandle,
+    /// The driving display's page.
+    driver: String,
     scenes: HashMap<String, ShowScene>,
     ready: Mutex<HashSet<String>>,
     started: AtomicBool,
@@ -46,22 +49,25 @@ pub(crate) struct Show {
 impl Show {
     /// Opens a show window over every display and lists the blank tidepool; none when there is no display. A window
     /// that fails to open closes every one opened.
-    pub(super) fn start(app: &tauri::App) -> anyhow::Result<Option<Arc<Self>>> {
+    pub(super) fn start(app: &AppHandle, play: u64) -> anyhow::Result<Option<Arc<Self>>> {
         let scenes = scenes();
         if scenes.is_empty() {
             return Ok(None);
         }
-        if let Err(error) = scenes.iter().enumerate().try_for_each(|(display, scene)| cover(app, display, scene)) {
+        if let Err(error) =
+            scenes.iter().enumerate().try_for_each(|(display, scene)| cover(app, &page(play, display), scene))
+        {
             for display in 0..scenes.len() {
-                if let Some(window) = app.get_webview_window(&page(display)) {
+                if let Some(window) = app.get_webview_window(&page(play, display)) {
                     let _ = window.destroy();
                 }
             }
             return Err(error);
         }
         let show = Arc::new(Self {
-            app: app.handle().clone(),
-            scenes: scenes.into_iter().enumerate().map(|(display, scene)| (page(display), scene)).collect(),
+            app: app.clone(),
+            driver: page(play, DRIVING),
+            scenes: scenes.into_iter().enumerate().map(|(display, scene)| (page(play, display), scene)).collect(),
             ready: Mutex::default(),
             started: AtomicBool::new(false),
             toured: AtomicBool::new(false),
@@ -85,8 +91,13 @@ impl Show {
         !self.ended.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn scene(&self, page: &str) -> Option<ShowScene> {
-        self.scenes.get(page).cloned()
+    pub(crate) fn covers(&self, page: &str) -> bool {
+        self.scenes.contains_key(page)
+    }
+
+    /// The scene of `page`, one of the show's own.
+    pub(crate) fn scene(&self, page: &str) -> ShowScene {
+        self.scenes[page].clone()
     }
 
     /// Marks `page` ready; the show starts once every page is.
@@ -223,7 +234,7 @@ impl Show {
             }
         }
         self.layers_drawn(true);
-        for label in [BASE, DRIVER] {
+        for label in [BASE, self.driver.as_str()] {
             if let Some(window) = self.app.get_webview_window(label) {
                 let _ = window.set_focus();
             }
@@ -287,16 +298,16 @@ fn scenes() -> Vec<ShowScene> {
             display: found.rect,
             bounds,
             wallpaper: found.wallpaper,
-            drives: page(display) == DRIVER,
+            drives: display == DRIVING,
         })
         .collect()
 }
 
-/// Opens the page of `display` in a window over it, lifted above everything. Each window shows from the start, as
-/// WebKit paints no webview in a hidden window, and lets clicks through until the show starts.
-fn cover(app: &tauri::App, display: usize, scene: &ShowScene) -> anyhow::Result<()> {
+/// Opens the page `label` in a window over its scene's display, lifted above everything. Each window shows from the
+/// start, as WebKit paints no webview in a hidden window, and lets clicks through until the show starts.
+fn cover(app: &AppHandle, label: &str, scene: &ShowScene) -> anyhow::Result<()> {
     let ShowRect { x, y, width, height } = scene.display;
-    let window = WebviewWindowBuilder::new(app, page(display), WebviewUrl::App("show.html".into()))
+    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App("show.html".into()))
         .title("octopus")
         .transparent(true)
         .decorations(false)

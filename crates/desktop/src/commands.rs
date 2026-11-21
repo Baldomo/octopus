@@ -7,14 +7,14 @@ use octopus_shell::hub::Hub;
 use octopus_shell::task_lists::TaskRef;
 use octopus_shell::webkit::Go;
 use serde::Deserialize;
-use tauri::{AppHandle, Manager, State, Webview};
+use tauri::{AppHandle, State, Webview};
 use ts_rs::TS;
 
 use crate::Skill;
 use crate::browser::Browsers;
 use crate::menu::MenuGroup;
 use crate::setup::{Setup, SetupView};
-use crate::show::{Show, ShowDrive, ShowScene, ShowSpot};
+use crate::show::{ShowDrive, ShowScene, ShowSpot, Shows};
 
 type Hubbed<'a> = State<'a, Arc<Hub>>;
 type Browsing<'a> = State<'a, Browsers>;
@@ -123,61 +123,66 @@ pub(crate) fn setup_retry(setup: State<'_, Setup>) {
     setup.retry();
 }
 
-/// Whether the first open's show is yet to end on this launch.
+/// Whether a show is playing.
 #[tauri::command]
-pub(crate) fn show_playing(app: AppHandle) -> bool {
-    app.try_state::<Arc<Show>>().is_some_and(|show| show.playing())
+pub(crate) fn show_playing(shows: State<'_, Shows>) -> bool {
+    shows.current().is_some_and(|show| show.playing())
 }
 
 /// The scene of the display the asking show page covers.
 #[tauri::command]
-pub(crate) fn show_scene(webview: Webview, show: State<'_, Arc<Show>>) -> Result<ShowScene, String> {
-    show.scene(webview.label()).ok_or_else(|| format!("{} covers no display of the show", webview.label()))
+pub(crate) fn show_scene(webview: Webview, shows: State<'_, Shows>) -> Result<ShowScene, String> {
+    Ok(shows.of(webview.label())?.scene(webview.label()))
 }
 
 /// The asking show page is prepared; the show starts once every page is.
 #[tauri::command]
-pub(crate) fn show_ready(webview: Webview, show: State<'_, Arc<Show>>) {
-    show.ready(webview.label());
+pub(crate) fn show_ready(webview: Webview, shows: State<'_, Shows>) -> Result<(), String> {
+    shows.of(webview.label())?.ready(webview.label());
+    Ok(())
 }
 
 /// Hands every show page octopus's window as it stands, for the show to dive into.
 #[tauri::command]
-pub(crate) async fn show_app(show: State<'_, Arc<Show>>) -> Result<(), ()> {
-    show.app().await;
+pub(crate) async fn show_app(webview: Webview, shows: State<'_, Shows>) -> Result<(), String> {
+    shows.of(webview.label())?.app().await;
     Ok(())
 }
 
 /// Hands octopus's window the tour's next step.
 #[tauri::command]
-pub(crate) fn show_drive(show: State<'_, Arc<Show>>, step: ShowDrive) {
-    show.drive(step);
+pub(crate) fn show_drive(webview: Webview, shows: State<'_, Shows>, step: ShowDrive) -> Result<(), String> {
+    shows.of(webview.label())?.drive(step);
+    Ok(())
 }
 
-/// A layer of octopus's window tells the show where a target sits.
+/// A layer of octopus's window tells the playing show where a target sits.
 #[tauri::command]
-pub(crate) fn show_spot(app: AppHandle, spot: ShowSpot) {
-    if let Some(show) = app.try_state::<Arc<Show>>() {
+pub(crate) fn show_spot(shows: State<'_, Shows>, spot: ShowSpot) {
+    if let Some(show) = shows.current() {
         show.spot(spot);
     }
 }
 
 /// Shows or hides the cursor while the show plays.
 #[tauri::command]
-pub(crate) fn show_cursor(show: State<'_, Arc<Show>>, shown: bool) {
-    show.cursor(shown);
+pub(crate) fn show_cursor(webview: Webview, shows: State<'_, Shows>, shown: bool) -> Result<(), String> {
+    shows.of(webview.label())?.cursor(shown);
+    Ok(())
 }
 
 /// Plays the system's alert sound over the show's song.
 #[tauri::command]
-pub(crate) fn show_alert(show: State<'_, Arc<Show>>) {
-    show.alert();
+pub(crate) fn show_alert(webview: Webview, shows: State<'_, Shows>) -> Result<(), String> {
+    shows.of(webview.label())?.alert();
+    Ok(())
 }
 
 /// Ends the show at once.
 #[tauri::command]
-pub(crate) fn show_skip(show: State<'_, Arc<Show>>) {
-    show.end();
+pub(crate) fn show_skip(webview: Webview, shows: State<'_, Shows>) -> Result<(), String> {
+    shows.of(webview.label())?.end();
+    Ok(())
 }
 
 /// Writes the octopus skill for the user's Claude Code, as `octopus skill install` does.

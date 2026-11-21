@@ -15,14 +15,15 @@ export type Facts = {
 };
 
 /**
- * The beat after `was`: a launch that installs nothing has no first open; once the server answers and the show is
- * over, the first open goes on only while no server holds a workspace; the reach ends with the sidebar out, the offer
- * with the first workspace, and the hand-off with the first task.
+ * The beat after `was`: a launch that installs nothing has no first open; no beat moves while a show covers the
+ * screens, as its tour works the window; once the server answers, the first open goes on only while no server holds a
+ * workspace; the reach ends with the sidebar out, the offer with the first workspace, and the hand-off with the first
+ * task.
  */
 export function nextBeat(was: Beat, facts: Facts): Beat {
   if (was === "wake" && !facts.installs) return "off";
-  if (was === "wake" && facts.answered && !facts.showing)
-    return nextBeat(facts.workspaces > 0 ? "done" : "reach", facts);
+  if (facts.showing) return was;
+  if (was === "wake" && facts.answered) return nextBeat(facts.workspaces > 0 ? "done" : "reach", facts);
   if (was === "reach" && facts.sidebar) return nextBeat("offer", facts);
   if (was === "offer" && facts.workspaces > 0) return nextBeat("hand_off", facts);
   if (was === "hand_off" && facts.tasks > 0) return "done";

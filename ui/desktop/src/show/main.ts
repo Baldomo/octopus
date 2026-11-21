@@ -32,12 +32,16 @@ const SCENES: [number, (g: Context, t: number) => void][] = [
   [AT.back, finale],
 ];
 
+/** Tells octopus something, logging a refusal: a page of a show that has ended asks after nothing. */
+const tell = (command: Parameters<typeof invoke>[0], args?: Record<string, unknown>) =>
+  void invoke(command, args).catch((error: unknown) => console.error(`show: ${command}`, error));
+
 /** What the driving page asks of octopus, each once at its moment, in order: the alert sounds, the window just before
  * the octopus swallows the screen, the tour's steps, and the cursor at each change. */
 const CUES = [
-  ...INFECTION.filter((e) => e.alert).map(({ t }) => ({ at: t, run: () => void invoke("show_alert") })),
-  { at: AT.lunge, run: () => void invoke("show_app") },
-  ...STEPS.map(({ at, step }) => ({ at, run: () => void invoke("show_drive", { step }) })),
+  ...INFECTION.filter((e) => e.alert).map(({ t }) => ({ at: t, run: () => tell("show_alert") })),
+  { at: AT.lunge, run: () => tell("show_app") },
+  ...STEPS.map(({ at, step }) => ({ at, run: () => tell("show_drive", { step }) })),
   // The real cursor hides while the show draws the beachball in its place, and from when the octopus swallows it
   // until the ink lands, so the tour's pointer is the only one.
   ...(
@@ -47,7 +51,7 @@ const CUES = [
       [AT.dark - SQUIRT, false],
       [AT.ink, true],
     ] as const
-  ).map(([at, shown]) => ({ at, run: () => void invoke("show_cursor", { shown }) })),
+  ).map(([at, shown]) => ({ at, run: () => tell("show_cursor", { shown }) })),
 ].sort((a, b) => a.at - b.at);
 
 // Nothing is drawn before the song, after it, or from the dive until octopus has handed its window over.
@@ -80,7 +84,7 @@ async function prepare(scene: ShowScene) {
   warm([...stills, ...ink.pictures, ...prepareFinale(ink.last)]);
 }
 
-const skip = () => void invoke("show_skip");
+const skip = () => tell("show_skip");
 addEventListener("keydown", skip);
 addEventListener("pointerdown", skip);
 

@@ -40,3 +40,13 @@ test("no beat moves on before its event, and facts that arrive together land on 
 test("the first open waits on the show to end before it reaches", () => {
   assert.deepEqual(walk([{ showing: true }, { answered: true }, { showing: false }]), ["wake", "wake", "reach"]);
 });
+
+test("a show played again holds every beat while its tour works the window", () => {
+  const beats = walk([
+    { answered: true },
+    { showing: true },
+    { sidebar: true, workspaces: 1, tasks: 1 },
+    { showing: false, sidebar: false, workspaces: 0, tasks: 0 },
+  ]);
+  assert.deepEqual(beats, ["reach", "reach", "reach", "reach"]);
+});

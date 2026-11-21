@@ -8,6 +8,8 @@ use tauri::{AppHandle, Manager, Wry};
 use ts_rs::TS;
 
 pub(crate) const COMMAND_EVENT: &str = "menu_command";
+/// The app menu's item that plays the first open's show again.
+const ONBOARDING: &str = "play_onboarding";
 
 /// A command of the UI under one of its keys, which the menu names back to it when chosen.
 #[derive(Debug, Clone, PartialEq, Deserialize, TS)]
@@ -44,6 +46,7 @@ pub fn set(app: &AppHandle, groups: &[MenuGroup]) -> tauri::Result<()> {
         true,
         &[
             &PredefinedMenuItem::about(app, None, None)?,
+            &MenuItem::with_id(app, ONBOARDING, "Play the Onboarding", true, None::<&str>)?,
             &separator()?,
             &PredefinedMenuItem::hide(app, None)?,
             &PredefinedMenuItem::hide_others(app, None)?,
@@ -145,9 +148,12 @@ pub(crate) struct MenuKey {
     pub in_page: bool,
 }
 
-/// Tells the UI each key chosen from the menu.
+/// Plays the onboarding when it is chosen from the menu, and tells the UI each key chosen.
 pub fn relay(app: &AppHandle) {
     app.on_menu_event(|app, event| {
+        if event.id() == ONBOARDING {
+            return crate::show::play(app);
+        }
         let in_page = app.get_window(crate::layers::BASE).is_some_and(|window| crate::browser::page_has_focus(&window));
         emit(app, COMMAND_EVENT, MenuKey { key: event.id().0.clone(), in_page });
     });

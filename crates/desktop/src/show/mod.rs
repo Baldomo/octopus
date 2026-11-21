@@ -1,7 +1,8 @@
-//! The first open's show: on the launch that installs this machine's first server, a transparent window above
-//! everything on every display plays show.html in sync to the song, then closes on octopus's own window beneath. It
-//! asks for no permission, so it sees no other app's pixels: each display's page gets the display's wallpaper, the
-//! pointer, and octopus's window, its frame and a snapshot of it, which the show dives into and then uncovers live.
+//! The first open's show: on the launch that installs this machine's first server, and again whenever the menu's Play
+//! the Onboarding asks, a transparent window above everything on every display plays show.html in sync to the song,
+//! then closes on octopus's own window beneath. It asks for no permission, so it sees no other app's pixels: each
+//! display's page gets the display's wallpaper, the pointer, and octopus's window, its frame and a snapshot of it,
+//! which the show dives into and then uncovers live.
 //!
 //! In the middle the show makes a first task in octopus's own window: it lists the blank tidepool, a demo computer that
 //! starts empty, in the account until the tour ends, and drives the window's UI a step at a time, each layer telling
@@ -30,14 +31,16 @@ use appkit as platform;
 #[cfg(target_os = "linux")]
 use gtk as platform;
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use base64::Engine;
 use octopus_client::demo::{self, Computer};
 use octopus_shell::hub::Hub;
+use octopus_shell::lock;
 use octopus_shell::ui::UiStore;
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
+use tauri::{AppHandle, Manager};
 use ts_rs::TS;
 
 pub(crate) use run::Show;
@@ -142,21 +145,48 @@ pub(crate) struct ShowSpot {
     pub rect: ShowRect,
 }
 
-/// Plays the show when `plays`, and first forgets a blank tidepool a show cut short left in the account. A playing show
-/// is the app's state until the launch ends; a show that cannot open its windows is reported and plays nothing, so the
-/// launch goes on without it.
+/// The show this launch played last, if any, which the show's pages and octopus's window ask after, and how many it
+/// has played, so each play's windows take labels of their own.
+#[derive(Default)]
+pub(crate) struct Shows {
+    current: Mutex<Option<Arc<Show>>>,
+    plays: AtomicU64,
+}
+
+impl Shows {
+    pub(crate) fn current(&self) -> Option<Arc<Show>> {
+        lock(&self.current).clone()
+    }
+
+    /// The show `page` belongs to, while it plays; a page of an ended show, or of one played before, asks after
+    /// nothing.
+    pub(crate) fn of(&self, page: &str) -> Result<Arc<Show>, String> {
+        self.current()
+            .filter(|show| show.playing() && show.covers(page))
+            .ok_or_else(|| format!("{page} is no page of the playing show"))
+    }
+}
+
+/// Forgets a blank tidepool a show cut short left in the account, and plays the show when `plays`.
 pub(crate) fn start(app: &tauri::App, plays: bool, ui: &Arc<UiStore>) {
+    app.manage(Shows::default());
     if let Err(error) = demo::forget(&app.state::<Arc<Hub>>().me, Computer::Blank) {
         ui.report(format!("forget the show's tidepool: {error:#}"));
     }
-    if !plays {
+    if plays {
+        play(app.handle());
+    }
+}
+
+/// Plays the show, unless one is playing. A show that cannot open its windows is reported and plays nothing, so the
+/// app goes on without it.
+pub(crate) fn play(app: &AppHandle) {
+    let shows = app.state::<Shows>();
+    if shows.current().is_some_and(|show| show.playing()) {
         return;
     }
-    match Show::start(app) {
-        Ok(Some(show)) => {
-            app.manage(show);
-        }
-        Ok(None) => {}
-        Err(error) => ui.report(format!("play the first open's show: {error:#}")),
+    match Show::start(app, shows.plays.fetch_add(1, Ordering::SeqCst)) {
+        Ok(show) => *lock(&shows.current) = show,
+        Err(error) => app.state::<Arc<UiStore>>().report(format!("play the onboarding: {error:#}")),
     }
 }
