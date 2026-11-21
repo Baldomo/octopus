@@ -11,9 +11,11 @@ use octopus_shell::lock;
 
 pub(crate) const SETUP_EVENT: &str = "setup";
 
-/// This machine's server to install: its name, its log, and the install, which runs again on every retry.
+/// This machine's server to install: its name, its log, whether no service ran it before this launch, and the
+/// install, which runs again on every retry.
 pub struct Install {
     pub server: String,
+    pub first: bool,
     pub log: PathBuf,
     pub run: Box<dyn Fn() -> anyhow::Result<()> + Send + Sync>,
 }

@@ -11,6 +11,7 @@ import { applyFilesChanged } from "@octopus/shared/taskFiles.ts";
 import { setWindowShown, windowFocused } from "@octopus/shared/terminalSession.ts";
 import { followSetup } from "./FirstOpen";
 import { bindKeys } from "./keys";
+import { followShow } from "./tour";
 import { layer } from "./layer";
 import { Docked, Floating } from "./layers";
 
@@ -28,6 +29,7 @@ async function start() {
     events.windowFocused(windowFocused),
     layer === "base" && events.fileDrag(fileDragged),
     followSetup(),
+    followShow(layer === "base"),
   ]);
   applyBoot(await backend.boot());
   mount(() => (layer === "float" ? <Floating /> : <Docked />), document.body);

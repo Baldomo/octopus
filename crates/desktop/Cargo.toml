@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+base64.workspace = true
 octopus-client.workspace = true
 octopus-proto.workspace = true
 octopus-shell.workspace = true
@@ -18,18 +19,23 @@ serde_json.workspace = true
 tauri = { workspace = true, features = ["devtools", "unstable"] }
 tauri-plugin-opener.workspace = true
 tauri-plugin-updater.workspace = true
+rodio = { version = "0.23", default-features = false, features = ["playback", "mp3"] }
 tokio = { workspace = true, features = ["full"] }
 ts-rs.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAlert", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSHapticFeedback", "NSResponder", "NSTrackingArea", "NSView", "NSWindow"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSAccessibility", "NSAlert", "NSApplication", "NSBitmapImageRep", "NSButton", "NSColor", "NSControl", "NSCursor", "NSEvent", "NSGraphics", "NSGraphicsContext", "NSHapticFeedback", "NSImage", "NSImageRep", "NSResponder", "NSScreen", "NSTrackingArea", "NSView", "NSWindow", "NSWorkspace"] }
+block2.workspace = true
 objc2-core-foundation.workspace = true
-objc2-foundation = { workspace = true, features = ["NSError", "NSFileManager", "NSString", "NSURL"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGEvent", "CGEventTypes"] }
+objc2-foundation = { workspace = true, features = ["NSData", "NSDictionary", "NSError", "NSFileManager", "NSGeometry", "NSPathUtilities", "NSString", "NSURL", "NSValue"] }
+rodio = { version = "0.23", default-features = false, features = ["symphonia-aiff", "symphonia-pcm"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 dirs.workspace = true
 gtk = "0.18.2"
+rodio = { version = "0.23", default-features = false, features = ["vorbis"] }
 webkit2gtk = "2.0.2"
 
 [build-dependencies]

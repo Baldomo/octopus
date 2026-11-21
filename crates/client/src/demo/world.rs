@@ -1,5 +1,6 @@
-//! What the demo computer holds, a workspace of invented tasks with their terminals, browser panels and files, and
-//! every op a client sends it, answered as a server answers it and pushed to every client attached.
+//! What a demo computer holds, a workspace of invented tasks with their terminals, browser panels and files, or on the
+//! blank one the project alone, and every op a client sends it, answered as a server answers it and pushed to every
+//! client attached.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -24,7 +25,7 @@ use tokio::sync::{broadcast, oneshot};
 use super::project::{Project, ROOT};
 use super::sessions::{self, Beat, PROMPT};
 use super::terminal::{Program, Term, Turn, Typed};
-use super::{KEY, NAME, RELAY, web};
+use super::{Computer, NAME, RELAY, web};
 
 const PUSH_BACKLOG: usize = 1024;
 const COLS: u16 = 80;
@@ -54,6 +55,7 @@ pub(super) enum Replay {
 }
 
 pub(super) struct World {
+    computer: Computer,
     rev: u64,
     next_id: u64,
     workspaces: Vec<Workspace>,
@@ -84,72 +86,82 @@ fn slug(title: &str) -> String {
 }
 
 impl World {
-    pub(super) fn new() -> (Self, Vec<Replay>) {
+    /// The computer's world and the sessions it replays from the start: the blank one holds the project alone.
+    pub(super) fn new(computer: Computer) -> (Self, Vec<Replay>) {
         let (pushes, _) = broadcast::channel(PUSH_BACKLOG);
-        let mut world = Self {
+        let world = Self {
+            computer,
             rev: 1,
             next_id: 1,
-            workspaces: vec![Workspace {
-                id: WorkspaceId("wsp_tide0001".into()),
-                name: "tidewatch".into(),
-                root: "/work".into(),
-                color: Color::parse("teal-vivid").expect("a swatch of the matrix"),
-            }],
+            workspaces: Vec::new(),
             tasks: BTreeMap::new(),
             terms: HashMap::new(),
             project: Project::new(),
             account: None,
             pushes,
         };
+        match computer {
+            Computer::Blank => (world, Vec::new()),
+            Computer::Tidepool => world.seeded(),
+        }
+    }
+
+    /// Tidepool's workspace of tasks at work, and the sessions its agents replay.
+    fn seeded(mut self) -> (Self, Vec<Replay>) {
+        self.workspaces.push(Workspace {
+            id: WorkspaceId("wsp_tide0001".into()),
+            name: super::PROJECT.into(),
+            root: "/work".into(),
+            color: Color::parse("teal-vivid").expect("a swatch of the matrix"),
+        });
         let laptop = LockHolder { name: LAPTOP.into(), key: Some(LAPTOP_KEY.parse().expect("a point on the curve")) };
         let working = Agent::Running { status: AgentStatus::Idle };
-        world.add_task("tsk_tide0001", "Add a weekly tide chart", TaskState::Pinned, None, Some("weekly-tide-chart"));
-        world.add_task("tsk_tide0002", "Pick the chart's colors", TaskState::Temporary, Some("tsk_tide0001"), None);
-        world.add_task(
+        self.add_task("tsk_tide0001", "Add a weekly tide chart", TaskState::Pinned, None, Some("weekly-tide-chart"));
+        self.add_task("tsk_tide0002", "Pick the chart's colors", TaskState::Temporary, Some("tsk_tide0001"), None);
+        self.add_task(
             "tsk_tide0003",
             "Fix the hour offset in harbor times",
             TaskState::Temporary,
             None,
             Some("harbor-time-offset"),
         );
-        world.add_task(
+        self.add_task(
             "tsk_tide0004",
             "Write tests for the forecast parser",
             TaskState::Temporary,
             None,
             Some("forecast-tests"),
         );
-        world.add_task("tsk_tide0005", "Tidy the README", TaskState::Completed, None, None);
-        world.edit("tsk_tide0001", |task| {
+        self.add_task("tsk_tide0005", "Tidy the README", TaskState::Completed, None, None);
+        self.edit("tsk_tide0001", |task| {
             task.agent = working.clone();
             task.panels = vec![panel("pty_tide0001", AGENT_PANEL, None)];
             task.browsers = vec![browser("brw_tide0001", &web::page("/"), "tidewatch · Saltmarsh Cove")];
         });
-        world.edit("tsk_tide0003", |task| {
+        self.edit("tsk_tide0003", |task| {
             task.agent = working.clone();
             task.panels = vec![panel("pty_tide0003", AGENT_PANEL, Some(laptop))];
         });
-        world.edit("tsk_tide0004", |task| {
+        self.edit("tsk_tide0004", |task| {
             task.agent = working.clone();
             task.panels = vec![panel("pty_tide0004", AGENT_PANEL, None), panel("pty_tide0005", "sh", None)];
             task.browsers = vec![browser("brw_tide0002", &web::page("/tests"), "tidewatch · tests")];
         });
-        world.edit("tsk_tide0005", |task| task.ended_at = Some(now() - 2 * DAY_MS));
+        self.edit("tsk_tide0005", |task| task.ended_at = Some(now() - 2 * DAY_MS));
         for (pty, task, program, output) in [
             ("pty_tide0001", "tsk_tide0001", Program::Agent(Turn::Playing), String::new()),
             ("pty_tide0003", "tsk_tide0003", Program::Agent(Turn::Playing), String::new()),
             ("pty_tide0004", "tsk_tide0004", Program::Agent(Turn::Ready), sessions::transcript(sessions::TESTS)),
         ] {
-            world.terms.insert(PtyId(pty.into()), Term::new(TaskId(task.into()), program, &output));
+            self.terms.insert(PtyId(pty.into()), Term::new(TaskId(task.into()), program, &output));
         }
-        world
-            .terms
+        self.terms
             .insert(PtyId("pty_tide0005".into()), Term::shell(TaskId("tsk_tide0004".into()), "forecast-tests".into()));
         let replays = vec![
             Replay::Cycle(PtyId("pty_tide0001".into()), sessions::CHART_TASK),
             Replay::Once(PtyId("pty_tide0003".into()), sessions::OFFSET),
         ];
-        (world, replays)
+        (self, replays)
     }
 
     fn add_task(&mut self, id: &str, title: &str, state: TaskState, parent: Option<&str>, branch: Option<&str>) {
@@ -245,8 +257,8 @@ impl World {
         Snapshot { rev: self.rev, workspaces: self.workspaces.clone(), tasks: self.tasks.values().cloned().collect() }
     }
 
-    pub(super) fn hosted() -> Hosted {
-        Hosted { key: *KEY, relay: RELAY.clone(), name: NAME.into() }
+    pub(super) fn hosted(&self) -> Hosted {
+        Hosted { key: self.computer.key(), relay: RELAY.clone(), name: NAME.into() }
     }
 
     pub(super) fn keep_account(&mut self, account: &Account) {
@@ -424,19 +436,21 @@ impl World {
         self.task_changed(&op.task, |task| task.archived_at = Some(now()))
     }
 
-    pub(super) fn task_focus(&mut self, op: TaskFocus) -> Result<Revised, Error> {
+    /// Wakes the task's agent on a fresh session; on the blank computer the agent goes on to take a request and work.
+    pub(super) fn task_focus(&mut self, op: TaskFocus) -> Result<(Revised, Option<Replay>), Error> {
         let task = self.task(&op.task)?;
         if !task.state.is_live() || matches!(task.agent, Agent::Running { .. }) {
-            return Ok(self.unchanged());
+            return Ok((self.unchanged(), None));
         }
         let pty = PtyId(self.id("pty_"));
         let fresh = format!("{}{PROMPT}", sessions::FRESH);
         self.terms.insert(pty.clone(), Term::new(op.task.clone(), Program::Agent(Turn::Ready), &fresh));
-        self.task_changed(&op.task, |task| {
+        let revised = self.task_changed(&op.task, |task| {
             task.agent = Agent::Running { status: AgentStatus::Idle };
             task.panels.retain(|panel| panel.name != AGENT_PANEL);
             task.panels.insert(0, panel(&pty.0, AGENT_PANEL, None));
-        })
+        })?;
+        Ok((revised, self.computer.waking().map(|beats| Replay::Once(pty, beats))))
     }
 
     pub(super) fn term_open(&mut self, op: TermOpen) -> Result<Opened, Error> {

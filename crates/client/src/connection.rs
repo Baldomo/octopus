@@ -277,8 +277,8 @@ impl Connection {
     pub async fn connect(address: &Address, me: &Identity) -> anyhow::Result<Self> {
         let link = match address {
             Address::Local { socket } => Link::Local(socket.clone()),
-            Address::Remote { key, relay } if crate::demo::reaches(key, relay) => {
-                Link::Demo(crate::demo::Line::dial(me.key.public()))
+            Address::Remote { key, relay } if let Some(computer) = crate::demo::reaches(key, relay) => {
+                Link::Demo(crate::demo::Line::dial(computer, me.key.public()))
             }
             Address::Remote { key, relay } => {
                 let dialer = me.dialer().await?;

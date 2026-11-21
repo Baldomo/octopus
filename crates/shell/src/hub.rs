@@ -15,7 +15,7 @@ use octopus_proto::settings::{AgentFlags, Current, Settings};
 use octopus_proto::types::{Color, Listening, LockHolder, Task, Workspace, WorkspaceId};
 use octopus_proto::{Event, Op, Push, now};
 use serde::Serialize;
-use tauri::{AppHandle, Url};
+use tauri::{AppHandle, Manager, Url};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
 use ts_rs::TS;
@@ -23,6 +23,7 @@ use ts_rs::TS;
 use crate::microphone::{AskAccess, Capture, Listener, MICROPHONE_DENIED_EVENT, Microphone};
 use crate::task_lists::{Lists, TaskRef, Waking, lists};
 use crate::task_view::{TaskView, task_views};
+use crate::ui::{UiAct, UiStore};
 use crate::{emit, lock, saturate};
 
 pub(crate) const MODEL_EVENT: &str = "model";
@@ -233,7 +234,8 @@ impl Hub {
         }
     }
 
-    /// Reaches each server this client reaches now and stops reaching the rest.
+    /// Reaches each server this client reaches now and stops reaching the rest, closing the tasks of each name that
+    /// leaves; a server whose address changes is reached afresh under its name.
     fn reconcile(self: &Arc<Self>) -> anyhow::Result<()> {
         let _reconciling = lock(&self.reconciling);
         let wanted = Servers::load(&self.config)?.reachable(&self.me);
@@ -245,6 +247,12 @@ impl Hub {
             .collect();
         for name in stale {
             self.unsupervise(&name);
+            if !wanted.iter().any(|server| server.name == name) {
+                let ui = self.app.state::<Arc<UiStore>>();
+                if let Err(error) = ui.act(UiAct::CloseServer { server: name.clone() }) {
+                    ui.report(format!("close {name}'s tasks: {error}"));
+                }
+            }
         }
         for server in wanted {
             if !lock(&self.state).links.contains_key(&server.name) {

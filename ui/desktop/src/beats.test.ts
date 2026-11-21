@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { nextBeat, type Beat, type Facts } from "./beats.ts";
 
-const fresh: Facts = { installs: true, answered: false, sidebar: false, workspaces: 0, tasks: 0 };
+const fresh: Facts = { installs: true, showing: false, answered: false, sidebar: false, workspaces: 0, tasks: 0 };
 
 /** The beats a run of facts walks through, from the launch. */
 function walk(run: Partial<Facts>[]): Beat[] {
@@ -35,4 +35,8 @@ test("no beat moves on before its event, and facts that arrive together land on 
   assert.deepEqual(walk([{ sidebar: true }, { workspaces: 1 }]), ["wake", "wake"]);
   assert.equal(nextBeat("wake", { ...fresh, answered: true, sidebar: true }), "offer");
   assert.equal(nextBeat("reach", { ...fresh, answered: true, workspaces: 1 }), "reach");
+});
+
+test("the first open waits on the show to end before it reaches", () => {
+  assert.deepEqual(walk([{ showing: true }, { answered: true }, { showing: false }]), ["wake", "wake", "reach"]);
 });

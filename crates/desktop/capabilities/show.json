@@ -1,0 +1,6 @@
+{
+  "identifier": "show",
+  "description": "The first open's show pages hear when to start and where the pointer is.",
+  "webviews": ["show-*"],
+  "permissions": ["core:event:default"]
+}

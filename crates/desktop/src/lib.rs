@@ -7,6 +7,7 @@ mod menu;
 #[cfg(target_os = "macos")]
 mod relocate;
 mod setup;
+mod show;
 pub mod types;
 mod update;
 
@@ -55,6 +56,15 @@ app_commands![
     haptic_alignment,
     setup,
     setup_retry,
+    show_playing,
+    show_scene,
+    show_app,
+    show_drive,
+    show_spot,
+    show_ready,
+    show_cursor,
+    show_alert,
+    show_skip,
     skill_install,
 ];
 
@@ -96,6 +106,10 @@ pub fn run(launch: Launch) -> anyhow::Result<()> {
         // macOS asks for the microphone itself, the first time a capture opens it.
         microphone_access: Box::new(|| Ok(Access::Granted)),
     };
+    // GTK runs on X11, XWayland under a Wayland session, as only X11 tells the app where its windows and the pointer
+    // sit, which the first open's show draws around.
+    #[cfg(target_os = "linux")]
+    gtk::gdk::set_allowed_backends("x11");
     tauri::Builder::default()
         .plugin(octopus_shell::plugin())
         .plugin(tauri_plugin_opener::init())
@@ -131,6 +145,7 @@ pub fn run(launch: Launch) -> anyhow::Result<()> {
                 ui.report(format!("write the octopus skill: {error:#}"));
             }
             app.manage(skill);
+            show::start(app, install.as_ref().is_some_and(|install| install.first), &ui);
             app.manage(Browsers::new(app.handle().clone(), Layers::open(app, ui)?));
             app.manage(Setup::start(app.handle().clone(), install));
             Ok(())

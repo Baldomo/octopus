@@ -322,6 +322,7 @@ button.path-field{width:100%;margin:0;cursor:pointer}
 .first-open .paper{position:absolute;inset:var(--title-h,var(--chrome-h)) 0 0;pointer-events:auto;background:var(--octo-paper)}
 .first-open .paper::before{content:"";position:absolute;inset:0;background:url("fibre.webp") var(--octo-paper);background-blend-mode:multiply;opacity:var(--printed,0)}
 .first-open.leaving .paper{pointer-events:none}
+.first-open.touring{opacity:0;transition:opacity var(--t-paper)}
 .first-open canvas{position:absolute;inset:0}
 .octo-line{position:absolute;left:0;right:0;display:grid;justify-items:center;color:var(--octo-navy);font-size:var(--fs-ui)}
 .octo-line > *{grid-area:1/1;opacity:0;visibility:hidden;transition:opacity var(--t-paper) var(--ease),visibility var(--t-paper)}

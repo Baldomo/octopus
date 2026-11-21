@@ -307,6 +307,7 @@ pub fn app() -> anyhow::Result<Option<octopus_desktop::Install>> {
     let log = octopus.log();
     Ok(Some(octopus_desktop::Install {
         server,
+        first: !machine.installed(),
         log,
         run: Box::new(move || {
             let _locked = octopus.lock()?;

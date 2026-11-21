@@ -14,6 +14,7 @@ import {
 import { desktop, desktopEvents } from "./backend";
 import { nextBeat, type Beat } from "./beats";
 import { titleHeight } from "./layer";
+import { showing, touring } from "./tour";
 import type { SetupView } from "./generated";
 import fibre from "../../design/desktop/fibre.webp?url";
 import { inOut } from "./octopus/ease";
@@ -45,6 +46,7 @@ export const beat = createRoot(() => {
     if (install === undefined) return;
     const facts = {
       installs: install !== null,
+      showing: showing(),
       answered: install !== null && answered(install.server),
       sidebar: ui.sidebar,
       workspaces: model.lists.workspaces.length,
@@ -64,11 +66,11 @@ const markShown = () => beat() === "off" || landed();
 /** The sidebar stays pinned from the reach until the first task is created. */
 export const holdsSidebar = () => ["reach", "offer", "hand_off"].includes(beat());
 /** While it offers, the sidebar holds "+ workspace" alone, in its place. */
-export const offering = () => ["wake", "reach", "offer"].includes(beat());
+export const offering = () => ["wake", "reach", "offer"].includes(beat()) && !touring();
 
 /**
  * The float layer tells the base layer where "+ workspace" rests, at the sidebar's right edge, when asked and whenever
- * it may have moved, and when the sidebar starts sliding out, so the tentacle draws it as it goes.
+ * it may have moved, and when the sidebar starts sliding out, so the octopus's arm draws it as it goes.
  */
 const OFFER = "first-open:offer";
 const ASK = "first-open:ask";
@@ -144,7 +146,7 @@ export function FirstOpen() {
 }
 
 /**
- * The paper window, the octopus at its middle with its one line, and the stage its tentacles draw on. A key or a
+ * The paper window, the octopus at its middle with its one line, and the stage its arms reach across. A key or a
  * click lands the motion under way where it ends; the window then stands where that motion ends.
  */
 function Scene() {
@@ -173,7 +175,7 @@ function Scene() {
     const [top, bottom] = [titleHeight(), size().height - css("--status-h")];
     return { x: size().width / 2, y: (top + bottom) / 2 - (lineGap() + css("--fs-ui") * css("--lh-ui")) / 2 };
   };
-  /** Clear of the sidebar's edge, the tentacle's tip rests beside "+ workspace". */
+  /** Clear of the sidebar's edge, the octopus's arm points at "+ workspace". */
   const gap = () => css("--s3");
 
   let finish = () => {};
@@ -201,7 +203,7 @@ function Scene() {
     if (at !== null) stage.release(at, gap()).finish();
   };
 
-  /** Lands once the float layer's sidebar starts sliding out, the tentacle holding its edge until then. */
+  /** Lands once the float layer's sidebar starts sliding out, the octopus's arm holding its edge until then. */
   let slid = () => {};
   const slide = (): Motion => {
     const done = new Promise<void>((resolve) => (slid = resolve));
@@ -250,12 +252,10 @@ function Scene() {
     stage.tween(fade, (t) => (paper.style.opacity = `${1 - inOut(t / fade)}`));
   };
 
-  /** The tentacle takes the new task from beside the octopus into the terminal pane, where its agent starts. */
+  /** The octopus's arm swings the new task from beside it into the terminal pane, where its agent starts. */
   const carry = () => {
     const pane = document.querySelector(".task-split > :last-child")!.getBoundingClientRect();
     const [width, height] = [card.offsetWidth, card.offsetHeight];
-    const [at, scale] = [middle(), span() / 960];
-    const from: Rect = { x: at.x + 380 * scale, y: at.y - 360 * scale, w: width, h: height };
     const to: Rect = {
       x: pane.x + (pane.width - width) / 2,
       y: pane.y + css("--tabs-h") + css("--s6"),
@@ -268,7 +268,7 @@ function Scene() {
       card.style.transform = `translate(${place.x}px, ${place.y}px) scale(${0.96 + 0.04 * seen})`;
       card.style.opacity = `${seen}`;
     };
-    void play([() => stage.carry(from, to, css("--r2"), show), contract], land);
+    void play([() => stage.carry(to, show), contract], land);
   };
 
   createEffect(
@@ -280,7 +280,7 @@ function Scene() {
       if (waking && now === "offer") rest();
       if (now === "hand_off" && !waking) {
         finish();
-        void play([() => stage.recoil("leftBottom")], () => {});
+        void play([() => stage.recoil()], () => {});
       }
       if (was === "hand_off" && now === "done") {
         finish();
@@ -289,11 +289,11 @@ function Scene() {
       if ((waking || was === "offer") && now === "done") {
         finish();
         leave();
-        void play([() => stage.recoil("leftBottom"), contract], land);
+        void play([() => stage.recoil(), contract], land);
       }
     }),
   );
-  /** A new window size or a new place for "+ workspace" moves the octopus at rest, and its tentacle with it. */
+  /** A new window size or a new place for "+ workspace" moves the octopus at rest, and its arm with it. */
   createEffect(
     on([size, offer], () => {
       stage.resize(size().width, size().height);
@@ -329,7 +329,7 @@ function Scene() {
     return progress?.state === "failed" ? progress.error : null;
   };
   return (
-    <div class="first-open" classList={{ leaving: leaving() }}>
+    <div class="first-open" classList={{ leaving: leaving(), touring: touring() }}>
       <div ref={paper} class="paper" />
       <div ref={card} class="carried" style={{ opacity: 0 }}>
         <span class="spin" />

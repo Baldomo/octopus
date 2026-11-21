@@ -10,6 +10,8 @@ import {
   type MenuKey,
   type Outside,
   type SetupView,
+  type ShowDrive,
+  type ShowSpot,
 } from "./generated";
 
 const invoke = <T>(command: (typeof COMMANDS)[number], args?: InvokeArgs) => invokeAny<T>(command, args);
@@ -32,6 +34,10 @@ export const desktop = {
   setup: () => invoke<SetupView | null>("setup"),
   /** Installs this machine's server again after a failed install. */
   setupRetry: () => invoke<void>("setup_retry"),
+  /** Tells the show where a target of its tour sits. */
+  showSpot: (spot: ShowSpot) => invoke<void>("show_spot", { spot }),
+  /** Whether the first open's show is yet to end on this launch. */
+  showPlaying: () => invoke<boolean>("show_playing"),
   /** Writes the octopus skill for the user's Claude Code. */
   skillInstall: () => invoke<void>("skill_install"),
   /** Opens an `http` or `https` URL in the system's browser. */
@@ -42,4 +48,6 @@ export const desktopEvents = {
   browserHovered: on<Hovered | null>(EVENTS.browserHovered),
   menuCommand: on<MenuKey>(EVENTS.menuCommand),
   setup: on<SetupView | null>(EVENTS.setup),
+  showDrive: on<ShowDrive>(EVENTS.showDrive),
+  showEnd: on<null>(EVENTS.showEnd),
 };

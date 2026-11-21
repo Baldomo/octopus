@@ -101,6 +101,44 @@ const SPRING: &[Beat] = &[
     Say(PROMPT),
 ];
 
+/// A task's first session on the blank computer: the weekly chart, taken at the pace of the first open's show.
+pub(super) const FIRST: &[Beat] = &[
+    Pause(300),
+    Type(super::FIRST_TASK),
+    Say("\n\n"),
+    Status(Working),
+    Pause(300),
+    Say("\x1b[36m●\x1b[0m Reading src/tides.js\n"),
+    Pause(250),
+    Say("\x1b[36m●\x1b[0m Reading src/forecast.js\n"),
+    Pause(350),
+    Say("  The whole week is parsed already, so the\n"),
+    Say("  chart only needs drawing.\n\n"),
+    Pause(400),
+    Say("\x1b[36m●\x1b[0m Writing src/chart.js\n"),
+    Pause(250),
+    Say("\x1b[32m  + export function weekChart(days) {\n"),
+    Pause(150),
+    Say("  +   const tides = days.flatMap(\n"),
+    Say("  +     (day) => day.tides);\n"),
+    Pause(150),
+    Say("  +   const step = WIDTH / tides.length;\n"),
+    Pause(150),
+    Say("  +   return line(tides, step);\n"),
+    Say("  + }\x1b[0m\n\n"),
+    Pause(600),
+    Say("\x1b[36m●\x1b[0m Running make test\n"),
+    Pause(800),
+    Say("  \x1b[32m✓\x1b[0m groups tides by day\n"),
+    Pause(150),
+    Say("  \x1b[32m✓\x1b[0m keeps each tide's offset\n"),
+    Say("  \x1b[2m2 passed\x1b[0m\n\n"),
+    Pause(600),
+    Say("Done. The harbor page draws the week's tides.\n\n"),
+    Status(Idle),
+    Say(PROMPT),
+];
+
 /// The weekly chart task's recordings, which it replays in turn, idle between them.
 pub(super) const CHART_TASK: &[&[Beat]] = &[CHART, SPRING];
 /// How long an agent rests idle between recordings.

@@ -197,6 +197,11 @@ pub enum UiAct {
     OpenTask {
         key: String,
     },
+    /// Takes every task of `server` out of the recent ones, as this client no longer reaches the server under that
+    /// name; closing the open task opens the most recent left, else none.
+    CloseServer {
+        server: String,
+    },
     ShowView {
         view: View,
     },
@@ -302,6 +307,14 @@ impl State {
                 ui.recent.truncate(RECENT);
                 ui.prefs.open = Some(key);
                 ui.prefs.view = View::Task;
+            }
+            UiAct::CloseServer { server } => {
+                let of_server =
+                    |key: &String| key.strip_prefix(server.as_str()).is_some_and(|rest| rest.starts_with('/'));
+                ui.recent.retain(|recent| !of_server(recent));
+                if ui.prefs.open.as_ref().is_some_and(of_server) {
+                    ui.prefs.open = ui.recent.first().cloned();
+                }
             }
             UiAct::ShowView { view } => ui.prefs.view = view,
             UiAct::ShowBoard { section } => {
@@ -573,5 +586,21 @@ mod tests {
         }
         assert_eq!(state.ui.recent, ["b", "i", "h", "g", "f", "e", "d", "c"]);
         assert_eq!(state.ui.prefs.open.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn closing_a_server_closes_its_tasks_and_opens_the_most_recent_left() {
+        let mut state = State::starting(Prefs::default());
+        for key in ["home/a", "tide/b", "tidepool/c"] {
+            state.apply(UiAct::OpenTask { key: key.into() });
+        }
+        state.apply(UiAct::CloseServer { server: "tidepool".into() });
+        assert_eq!(
+            (state.ui.recent.as_slice(), state.ui.prefs.open.as_deref()),
+            (["tide/b".to_string(), "home/a".to_string()].as_slice(), Some("tide/b"))
+        );
+        state.apply(UiAct::CloseServer { server: "tide".into() });
+        state.apply(UiAct::CloseServer { server: "home".into() });
+        assert_eq!(state.ui.prefs.open, None);
     }
 }

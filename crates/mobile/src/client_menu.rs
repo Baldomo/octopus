@@ -78,7 +78,7 @@ pub(crate) async fn phone_pair(
     name: Option<String>,
 ) -> Result<String, String> {
     if demo::is_code(&invite) {
-        return named(&hub, &phone, name, async || demo::pair(&hub.me)).await;
+        return named(&hub, &phone, name, async || demo::pair(&hub.me, demo::Computer::Tidepool)).await;
     }
     let invite: Invite = invite.trim().parse()?;
     if let Some(listed) = hub.listed_as(&invite.server) {

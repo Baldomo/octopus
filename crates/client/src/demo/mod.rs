@@ -3,6 +3,10 @@
 //! connection to its key and relay then opens in-memory streams this module answers with the protocol a server
 //! speaks, so nothing else can tell it from one. It runs nothing and reaches no network: its agents replay recorded
 //! sessions, its shells answer a few commands from a script, and its files are an invented project held in memory.
+//!
+//! There are two demo computers, both named tidepool. The one `CODE` lists holds a workspace of tasks at work. The
+//! blank one, which the desktop's first open lists while its show tours the window, holds the project alone, and the
+//! agent of each task made on it takes the request the show types and works on it.
 
 mod project;
 mod sessions;
@@ -39,10 +43,45 @@ use world::{Caller, Replay, World};
 /// What a person types, pastes or scans where an invite goes to open the demo; no invite is spelled this way.
 pub const CODE: &str = "octopus://demo";
 pub const NAME: &str = "tidepool";
+/// The project folder both demo computers hold.
+pub const PROJECT: &str = "tidewatch";
+/// The request the agent of a task made on the blank computer takes, which the desktop's show types as the task's title.
+pub const FIRST_TASK: &str = "Add a weekly tide chart";
 
-static KEY: LazyLock<PublicKey> = LazyLock::new(|| {
-    "ed25519:89d59ce09b75a51895943d11c5b478187ddd3c1b777797cd94cb12786f8a3634".parse().expect("a point on the curve")
-});
+/// A demo computer: the one `CODE` pairs, or the blank one the first open's show tours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Computer {
+    Tidepool,
+    Blank,
+}
+
+impl Computer {
+    const ALL: [Self; 2] = [Self::Tidepool, Self::Blank];
+
+    /// The session a task's agent replays when it wakes on a fresh session, on the computer whose agents take a
+    /// request.
+    fn waking(self) -> Option<&'static [sessions::Beat]> {
+        (self == Self::Blank).then_some(sessions::FIRST)
+    }
+
+    fn key(self) -> PublicKey {
+        static TIDEPOOL: LazyLock<PublicKey> = LazyLock::new(|| {
+            "ed25519:89d59ce09b75a51895943d11c5b478187ddd3c1b777797cd94cb12786f8a3634"
+                .parse()
+                .expect("a point on the curve")
+        });
+        static BLANK: LazyLock<PublicKey> = LazyLock::new(|| {
+            "ed25519:a8a1598d1effa517da42e2d8a84f4f4eb6f2643b4b9f439701593d9a253b3bd2"
+                .parse()
+                .expect("a point on the curve")
+        });
+        match self {
+            Self::Tidepool => *TIDEPOOL,
+            Self::Blank => *BLANK,
+        }
+    }
+}
+
 /// A relay under `.invalid`, a name no resolver answers, so nothing ever dials it.
 static RELAY: LazyLock<RelayUrl> = LazyLock::new(|| remote::relay("https://demo.invalid./").expect("an https URL"));
 
@@ -55,24 +94,36 @@ pub fn is_code(text: &str) -> bool {
 
 /// The key the pairing sheet shows for `text`, when it is the demo code.
 pub fn key_of(text: &str) -> Option<PublicKey> {
-    is_code(text).then(|| *KEY)
+    is_code(text).then(|| Computer::Tidepool.key())
 }
 
-/// Lists the demo computer in `me`'s account, as pairing lists a server, and resolves to its name.
-pub fn pair(me: &Identity) -> anyhow::Result<String> {
-    if let Some(listed) = me.account.state().servers.into_iter().find(|listed| listed.key == *KEY) {
+/// Lists `computer` in `me`'s account, as pairing lists a server, and resolves to its name.
+pub fn pair(me: &Identity, computer: Computer) -> anyhow::Result<String> {
+    let key = computer.key();
+    if let Some(listed) = me.account.state().servers.into_iter().find(|listed| listed.key == key) {
         bail!("Already paired as {}.", listed.name);
     }
     me.account
-        .append(&me.key, Change::ListServer { server: *KEY, relay: RELAY.clone(), name: NAME.into(), host: None })?;
+        .append(&me.key, Change::ListServer { server: key, relay: RELAY.clone(), name: NAME.into(), host: None })?;
     Ok(NAME.into())
 }
 
-pub(crate) fn reaches(key: &PublicKey, relay: &RelayUrl) -> bool {
-    key == &*KEY && relay == &*RELAY
+/// Takes `computer` out of `me`'s account, when it lists it, as forgetting a server does.
+pub fn forget(me: &Identity, computer: Computer) -> anyhow::Result<()> {
+    let key = computer.key();
+    if me.account.state().servers.iter().any(|listed| listed.key == key) {
+        me.account.append(&me.key, Change::ForgetServer { server: key })?;
+    }
+    Ok(())
 }
 
-/// One client's way into the demo computer, which knows the client by the device key it dials from, as a server knows
+/// The demo computer at `key` and `relay`, if one is.
+pub(crate) fn reaches(key: &PublicKey, relay: &RelayUrl) -> Option<Computer> {
+    let computer = Computer::ALL.into_iter().find(|computer| computer.key() == *key)?;
+    (relay == &*RELAY).then_some(computer)
+}
+
+/// One client's way into a demo computer, which knows the client by the device key it dials from, as a server knows
 /// a client by the key its handshake proves.
 pub(crate) struct Line {
     demo: Arc<Demo>,
@@ -80,8 +131,8 @@ pub(crate) struct Line {
 }
 
 impl Line {
-    pub(crate) fn dial(client: PublicKey) -> Self {
-        Self { demo: Demo::running(), client }
+    pub(crate) fn dial(computer: Computer, client: PublicKey) -> Self {
+        Self { demo: Demo::running(computer), client }
     }
 
     /// A fresh stream to the demo computer, which reads its first line as a request or a data stream's header.
@@ -97,23 +148,25 @@ pub(crate) struct Demo {
 }
 
 impl Demo {
-    /// The one demo computer of this process, started on its first dial and kept until the process ends.
-    fn running() -> Arc<Self> {
-        static RUNNING: OnceLock<Arc<Demo>> = OnceLock::new();
-        let demo = RUNNING.get_or_init(|| {
-            let (world, replays) = World::new();
+    /// The demo computer `computer` of this process, started on its first dial and kept until the process ends.
+    fn running(computer: Computer) -> Arc<Self> {
+        static RUNNING: [OnceLock<Arc<Demo>>; Computer::ALL.len()] = [const { OnceLock::new() }; Computer::ALL.len()];
+        let demo = RUNNING[computer as usize].get_or_init(|| {
+            let (world, replays) = World::new(computer);
             let demo = Arc::new(Self { world: Mutex::new(world) });
             for replay in replays {
-                match replay {
-                    Replay::Once(pty, beats) => drop(tokio::spawn(sessions::replay(Arc::clone(&demo), pty, beats))),
-                    Replay::Cycle(pty, recordings) => {
-                        drop(tokio::spawn(sessions::cycle(Arc::clone(&demo), pty, recordings)));
-                    }
-                }
+                demo.play(replay);
             }
             demo
         });
         Arc::clone(demo)
+    }
+
+    fn play(self: &Arc<Self>, replay: Replay) {
+        match replay {
+            Replay::Once(pty, beats) => drop(tokio::spawn(sessions::replay(Arc::clone(self), pty, beats))),
+            Replay::Cycle(pty, recordings) => drop(tokio::spawn(sessions::cycle(Arc::clone(self), pty, recordings))),
+        }
     }
 
     fn world(&self) -> MutexGuard<'_, World> {
@@ -152,7 +205,7 @@ impl Demo {
             ServerVersion => |_| Ok(Version { version: env!("CARGO_PKG_VERSION").into() });
             AccountSync => |op| {
                 world.keep_account(&op.account);
-                Ok(Synced { account: op.account, settings: op.settings, server: World::hosted() })
+                Ok(Synced { account: op.account, settings: op.settings, server: world.hosted() })
             };
             PairingOffer => |_| Err::<Offer, Error>(Error::conflict("the demo pairs nothing"));
             PairingList => |_| Ok(world.accounts(caller));
@@ -172,7 +225,12 @@ impl Demo {
             TaskSetWorkspace => |op| world.task_set_workspace(op);
             TaskRename => |op| world.task_rename(op);
             TaskArchive => |op| world.task_archive(op);
-            TaskFocus => |op| world.task_focus(op);
+            TaskFocus => |op| world.task_focus(op).map(|(revised, replay)| {
+                if let Some(replay) = replay {
+                    self.play(replay);
+                }
+                revised
+            });
             TaskGet => |op| world.task_get(op);
             TermOpen => |op| world.term_open(op);
             TermClose => |op| world.term_close(op);
@@ -378,11 +436,14 @@ mod tests {
     use std::time::Duration;
 
     use octopus_proto::device::DeviceKey;
-    use octopus_proto::ops::{SessionSync, TaskFocus, TaskGet, TermClaim, TermOpen};
+    use octopus_proto::ops::{
+        FolderGet, Inside, SessionSync, TaskCreate, TaskFocus, TaskGet, TermClaim, TermOpen, WorkspaceAdd,
+    };
     use octopus_proto::term::Piece;
-    use octopus_proto::types::{AGENT_PANEL, PtyId, Stream, TaskId};
+    use octopus_proto::types::{AGENT_PANEL, Color, Mode, PtyId, SessionStart, Stream, TaskId, TaskState};
     use tokio::io::{AsyncWriteExt, BufReader};
 
+    use super::Computer;
     use crate::account::Book;
     use crate::servers::Address;
     use crate::{Connection, Identity};
@@ -409,8 +470,8 @@ mod tests {
         let book = Book::memory(&key);
         let me = Identity::new("phone".into(), key, book).expect("an identity");
         assert!(super::is_code(" OCTOPUS://demo\n"));
-        assert_eq!(super::pair(&me).expect("listed"), super::NAME);
-        assert!(super::pair(&me).is_err(), "a second pairing pairs nothing");
+        assert_eq!(super::pair(&me, Computer::Tidepool).expect("listed"), super::NAME);
+        assert!(super::pair(&me, Computer::Tidepool).is_err(), "a second pairing pairs nothing");
         let listed = me.account.state().servers.into_iter().next().expect("the demo is listed");
         let connection =
             Connection::connect(&Address::Remote { key: listed.key, relay: listed.relay }, &me).await.expect("connect");
@@ -423,5 +484,41 @@ mod tests {
         let focused = connection.call(&TaskGet { task: task.clone() }).await.expect("the task");
         let agent = focused.panels.into_iter().find(|panel| panel.name == AGENT_PANEL).expect("a fresh agent").id;
         type_and_see(&connection, task, agent, b"ship it\r", "the demo computer").await;
+    }
+
+    #[tokio::test]
+    async fn the_blank_demo_starts_empty_and_its_first_task_takes_a_request() {
+        let key = DeviceKey::generate();
+        let book = Book::memory(&key);
+        let me = Identity::new("laptop".into(), key, book).expect("an identity");
+        super::pair(&me, Computer::Blank).expect("listed");
+        let listed = me.account.state().servers.into_iter().next().expect("the blank demo is listed");
+        let connection =
+            Connection::connect(&Address::Remote { key: listed.key, relay: listed.relay }, &me).await.expect("connect");
+        let snapshot = connection.call(&SessionSync { since_rev: None }).await.expect("sync");
+        assert!(snapshot.workspaces.is_empty() && snapshot.tasks.is_empty(), "the blank demo holds nothing");
+        let home = connection.call(&FolderGet { folder: "~".into() }).await.expect("home");
+        let Inside::Listed { folders } = home.inside else { panic!("the blank demo lists its home") };
+        assert_eq!(folders.iter().map(|folder| folder.name.as_str()).collect::<Vec<_>>(), [super::PROJECT]);
+        let color = Color::parse("auto").expect("auto");
+        let added = WorkspaceAdd { name: "tidewatch".into(), root: "/work/tidewatch".into(), color };
+        let workspace = connection.call(&added).await.expect("a workspace").workspace;
+        let create = TaskCreate {
+            workspace,
+            folder: "/work/tidewatch".into(),
+            mode: Mode::InPlace,
+            title: super::FIRST_TASK.into(),
+            parent: None,
+            state: TaskState::Temporary,
+            harness: "claude-code".into(),
+            session: SessionStart::Fresh,
+        };
+        let task = connection.call(&create).await.expect("a task").task;
+        connection.call(&TaskFocus { task: task.clone(), args: Vec::new() }).await.expect("focus");
+        let focused = connection.call(&TaskGet { task: task.clone() }).await.expect("the task");
+        let agent = focused.panels.into_iter().find(|panel| panel.name == AGENT_PANEL).expect("a fresh agent").id;
+        type_and_see(&connection, task, agent, b"", "Writing src/chart.js").await;
+        super::forget(&me, Computer::Blank).expect("forgotten");
+        assert!(me.account.state().servers.is_empty());
     }
 }

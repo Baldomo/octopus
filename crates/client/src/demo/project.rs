@@ -182,13 +182,14 @@ impl Project {
         matches
     }
 
-    /// A folder of the demo computer, for a new task to pick: `/`, `/work`, or the project and its directories.
+    /// A folder of the demo computer, for a new task to pick: `/`, `/work`, which is home (`~`), or the project and its
+    /// directories.
     pub(super) fn folder(&self, folder: &str) -> Result<Folder, Error> {
-        let trimmed = folder.trim_end_matches('/');
+        let trimmed = if folder == "~" { PARENT } else { folder.trim_end_matches('/') };
         let unknown = || Error::not_found(format!("{folder} on the demo computer"));
         let (names, repo): (Vec<String>, _) = match trimmed {
             "" => (vec!["work".to_string()], None),
-            PARENT => (vec!["tidewatch".to_string()], None),
+            PARENT => (vec![super::PROJECT.to_string()], None),
             _ => {
                 let dir = trimmed.strip_prefix(ROOT).ok_or_else(unknown)?;
                 let dir = dir.strip_prefix('/').unwrap_or(dir);
