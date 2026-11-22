@@ -20,3 +20,15 @@ pub(crate) fn claude_code() -> Harness {
         install: "npm install -g @anthropic-ai/claude-code".into(),
     }
 }
+
+/// The other harness a fresh store knows: OpenCode's TUI, which continues a session or starts it if absent.
+pub(crate) const OPENCODE: &str = "opencode";
+
+pub(crate) fn opencode() -> Harness {
+    Harness {
+        argv: vec!["opencode".into()],
+        start: vec!["--session".into(), SESSION.into()],
+        resume: vec!["--session".into(), SESSION.into()],
+        install: "npm install -g @opencode/cli".into(),
+    }
+}

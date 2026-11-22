@@ -251,9 +251,10 @@ impl Store {
         let unfit = |error| Error::internal(format!("{}: this server cannot open it: {error}", path.display()));
         lay_out(&tx).map_err(unfit)?;
         tx.prepare(INSERT_TASK).map(drop).map_err(|error| unfit(Error::internal(error)))?;
-        // A stored `claude-code` harness stands as `harness.set` left it.
+        // A stored `claude-code` or `opencode` harness stands as `harness.set` left it.
         let seed = format!("{INSERT_HARNESS} ON CONFLICT(id) DO NOTHING");
         tx.execute(&seed, harness_values(harness::CLAUDE_CODE, &harness::claude_code())).map_err(Error::internal)?;
+        tx.execute(&seed, harness_values(harness::OPENCODE, &harness::opencode())).map_err(Error::internal)?;
         tx.commit().map_err(Error::internal)?;
         Ok(Self { db })
     }
@@ -743,6 +744,25 @@ mod tests {
         drop(store);
         let store = Store::open(&path).expect("reopen");
         assert_eq!(store.harness("claude-code").expect("harness"), Some(set));
+    }
+
+    #[test]
+    fn a_fresh_store_also_runs_opencode_until_the_user_sets_it_otherwise() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("store.db");
+        let mut store = Store::open(&path).expect("a fresh store");
+        let opencode = Harness {
+            argv: vec!["opencode".into()],
+            start: vec!["--session".into(), "{session}".into()],
+            resume: vec!["--session".into(), "{session}".into()],
+            install: "npm install -g @opencode/cli".into(),
+        };
+        assert_eq!(store.harness("opencode").expect("harness"), Some(opencode.clone()));
+        let set = Harness { argv: vec!["opencode".into(), "--auto".into()], ..opencode };
+        store.set_harness("opencode", &set).expect("harness.set");
+        drop(store);
+        let store = Store::open(&path).expect("reopen");
+        assert_eq!(store.harness("opencode").expect("harness"), Some(set));
     }
 
     #[test]
