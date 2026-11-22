@@ -20,7 +20,7 @@ Open the same task on your laptop and your phone. A visible lock shows which dev
 
 ### Agents in parallel
 
-Every task runs its own Claude Code agent in its own terminal. Tasks nest into subtasks and group by workspace, and a glance at the sidebar or the Tasks board shows which agents are working and which wait on you.
+Every task runs its own Claude Code or OpenCode agent in its own terminal. Tasks nest into subtasks and group by workspace, and a glance at the sidebar or the Tasks board shows which agents are working and which wait on you.
 
 <img src="docs/readme/parallel.webp" alt="An agent's terminal on the laptop, the phone's list of every computer's tasks, and an agent waiting on a permission prompt" width="100%">
 

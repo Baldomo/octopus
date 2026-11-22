@@ -123,7 +123,7 @@ fn uninstall() -> anyhow::Result<PathBuf> {
 
 #[derive(Subcommand)]
 pub enum SkillVerb {
-    /// Write the octopus skill, rendered from this octopus's commands, to ~/.claude/skills/octopus/SKILL.md for Claude Code.
+    /// Write the octopus skill, rendered from this octopus's commands, to ~/.claude/skills/octopus/SKILL.md, where Claude Code and OpenCode find it.
     Install,
     /// Remove the octopus skill from ~/.claude/skills.
     Uninstall,

@@ -358,7 +358,7 @@ op!(
         parent: Option<TaskId>,
         /// The task's state.
         state: TaskState,
-        /// The harness that runs the task's agent.
+        /// The harness that runs the task's agent: `claude-code` (the default) and `opencode` are built in.
         harness: String,
         /// An existing session's id for the agent to resume.
         session: SessionStart,
@@ -422,7 +422,8 @@ op!(
         /// The task's id.
         task: TaskId,
         /// The args an agent this focus starts runs after its harness's argv, before its start or resume
-        /// args, e.g. ["--model","opus"]; a running agent keeps the args it started with.
+        /// args, e.g. ["--model","opus"] for Claude Code; they are the harness's own flags (OpenCode's TUI takes
+        /// `--auto` but no `--model`). A running agent keeps the args it started with.
         args: Vec<String>,
     }
 );

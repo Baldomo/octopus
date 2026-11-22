@@ -363,7 +363,7 @@ function Scene() {
       <label class="check octo-check" classList={{ shown: offering() }}>
         <input type="checkbox" checked={drive()} onChange={(event) => setDrive(event.currentTarget.checked)} />
         <span>
-          Let Claude Code drive octopus
+          Let Claude Code and OpenCode drive octopus
           <small>adds the octopus skill to ~/.claude</small>
         </span>
       </label>

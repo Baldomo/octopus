@@ -93,7 +93,7 @@ Create a task, which works in its folder for life.
 - `--title <title>`: The task's title.
 - `--parent <parent>`: The parent task's id, a task of the same workspace; none for a root task.
 - `--state pinned|temporary|completed|cancelled`: The task's state.
-- `--harness <harness>`: The harness that runs the task's agent.
+- `--harness <harness>`: The harness that runs the task's agent: `claude-code` (the default) and `opencode` are built in.
 - `--session <session>`: An existing session's id for the agent to resume; fresh for a fresh session.
 
 ## `octopus task move`
@@ -149,7 +149,7 @@ Focus a task, starting its agent if it has none.
 
 - `--server <server>`: The paired server's name.
 - `--task <task>`: The task's id.
-- `--args <args>`: The args an agent this focus starts runs after its harness's argv, before its start or resume args, e.g. ["--model","opus"]; a running agent keeps the args it started with.
+- `--args <args>`: The args an agent this focus starts runs after its harness's argv, before its start or resume args, e.g. ["--model","opus"] for Claude Code; they are the harness's own flags (OpenCode's TUI takes `--auto` but no `--model`). A running agent keeps the args it started with.
 
 ## `octopus task get`
 
@@ -430,7 +430,7 @@ Start a fresh account with no servers, as a device its account removed does.
 
 ## `octopus skill install`
 
-Write the octopus skill, rendered from this octopus's commands, to ~/.claude/skills/octopus/SKILL.md for Claude Code.
+Write the octopus skill, rendered from this octopus's commands, to ~/.claude/skills/octopus/SKILL.md, where Claude Code and OpenCode find it.
 
 ## `octopus skill uninstall`
 
