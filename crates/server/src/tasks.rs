@@ -11,11 +11,13 @@ use octopus_proto::types::{Agent, FRESH_SESSION, Mode, Session, SessionId, Sessi
 
 use crate::agents::AgentSlot;
 use crate::store::TaskRow;
-use crate::{Server, State, folders, lock, nonempty, now, report, worktrees};
+use crate::{Server, State, folders, harness, lock, nonempty, now, report, worktrees};
 
-/// A session no agent has run in yet, named by a UUID v4.
-fn fresh_session() -> Session {
-    Session { id: SessionId(uuid::Uuid::new_v4().to_string()), started: false }
+/// A session no agent has run in yet, named by a UUID v4, prefixed `ses_` for OpenCode, which accepts no other ids.
+fn fresh_session(harness: &str) -> Session {
+    let uuid = uuid::Uuid::new_v4();
+    let id = if harness == harness::OPENCODE { format!("ses_{uuid}") } else { uuid.to_string() };
+    Session { id: SessionId(id), started: false }
 }
 
 pub fn ended_at(state: TaskState, now: i64) -> Option<i64> {
@@ -60,7 +62,7 @@ impl Server {
     pub(crate) fn task_create(&self, op: TaskCreate) -> Result<TaskCreated, Error> {
         nonempty("a task title", &op.title)?;
         let session = match op.session {
-            SessionStart::Fresh => fresh_session(),
+            SessionStart::Fresh => fresh_session(&op.harness),
             SessionStart::Resume(id) => {
                 nonempty("a session id", &id.0)?;
                 Session { id, started: true }
@@ -205,5 +207,19 @@ impl Server {
         }
         row.archived_at = Some(now());
         self.save_and_publish(&mut state, &mut row)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_fresh_session_is_named_the_way_its_harness_accepts() {
+        let opencode = fresh_session("opencode");
+        let rest = opencode.id.0.strip_prefix("ses_").expect("an opencode id starts with ses_");
+        assert!(uuid::Uuid::parse_str(rest).is_ok());
+        assert!(!opencode.started);
+        assert!(uuid::Uuid::parse_str(&fresh_session("claude-code").id.0).is_ok());
     }
 }
