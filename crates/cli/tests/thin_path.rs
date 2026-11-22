@@ -407,6 +407,29 @@ async fn a_launched_server_finds_and_runs_agents_in_the_login_environment() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_opencode_agent_starts_its_own_session_with_the_tab_strip_off() {
+    let (dir, running) = server().await;
+    let laptop = connect(&running.socket, "laptop").await;
+    let workspace = workspace(&laptop, dir.path()).await;
+    let script = "echo \"cfg:$OPENCODE_CLI_CONFIG_CONTENT session:$2\"; exec cat";
+    let session = ["--session", "{session}"].map(String::from).to_vec();
+    let opencode = HarnessSet {
+        id: "opencode".into(),
+        argv: ["sh", "-c", script, "opencode"].map(String::from).to_vec(),
+        start: session.clone(),
+        resume: session,
+        install: "true".into(),
+    };
+    laptop.call(&opencode).await.expect("harness.set");
+    let id = create(&laptop, &workspace, Mode::InPlace, "opencode").await;
+    let named = task(&laptop, &id).await.session.id.0;
+    assert!(named.starts_with("ses_"));
+    focus(&laptop, &id).await;
+    let mut stream = laptop.open_data_stream(&agent(&laptop, &id).await).await.expect("attach");
+    read_until(&mut stream, &format!("cfg:{{\"tabs\":{{\"mode\":\"off\"}}}} session:{named}")).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn the_server_stops_an_agent_idle_silent_and_unshown_for_the_reclaim_time() {
     let (dir, running) = server().await;
     let laptop = connect(&running.socket, "laptop").await;

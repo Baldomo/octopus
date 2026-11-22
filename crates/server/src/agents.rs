@@ -188,6 +188,7 @@ impl Server {
         let Ok(program) = which::which_in(program, Some(login::search_path(&env)?), &directory) else {
             return Ok(AgentSlot::HarnessNotInstalled { install: harness.install });
         };
+        let env = harness::agent_env(&row.harness, env);
         let session_args = if row.session.started { &harness.resume } else { &harness.start };
         let plugin = (row.harness == harness::CLAUDE_CODE)
             .then(|| ["--plugin-dir".to_string(), self.plugin.to_string_lossy().into_owned()]);
