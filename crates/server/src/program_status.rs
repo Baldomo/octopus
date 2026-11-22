@@ -23,7 +23,7 @@ pub(crate) enum ProgramStatus {
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct Said {
     pub probed: bool,
-    /// The last status it reported.
+    /// The last status its root record reported.
     pub status: Option<ProgramStatus>,
 }
 
@@ -48,7 +48,11 @@ impl Perform for Said {
             self.probed = true;
             return;
         }
-        let state = body.split(|byte| *byte == b':').find_map(|field| field.strip_prefix(b"state="));
+        let mut fields = body.split(|byte| *byte == b':');
+        if fields.clone().any(|field| field.starts_with(b"id=")) {
+            return;
+        }
+        let state = fields.find_map(|field| field.strip_prefix(b"state="));
         let reported = match state {
             Some(b"working") => ProgramStatus::Working,
             Some(b"blocked") => ProgramStatus::Blocked,
@@ -84,5 +88,17 @@ mod tests {
         assert_eq!(said, Said { probed: false, status: Some(ProgramStatus::Blocked) });
         assert_eq!(listener.read(b"\x1b]7501;state=idle:app=x\x07").status, Some(ProgramStatus::Idle));
         assert_eq!(listener.read(b"\x1b]7501;state=asleep\x07\x1b]0;title\x07"), Said::default());
+    }
+
+    #[test]
+    fn a_listener_reads_only_root_records() {
+        let mut listener = Listener::default();
+        let said = listener.read(
+            b"\x1b]7501;state=working:app=opencode\x07\
+              \x1b]7501;state=blocked:app=opencode:id=ses_a:kind=permission\x07\
+              \x1b]7501;state=clear:id=ses_a\x1b\\",
+        );
+        assert_eq!(said.status, Some(ProgramStatus::Working));
+        assert_eq!(listener.read(b"\x1b]7501;id=ses_b:state=idle\x07"), Said::default());
     }
 }
